@@ -46,9 +46,7 @@ def test_stage_environment_keeps_model_and_publish_credentials_apart() -> None:
             {"OPENAI_API_KEY": "model", "TOUCHSTONE_APP_PRIVATE_KEY": "pem"},
         )
     with pytest.raises(CandidateIntegrityError, match="model credential"):
-        validate_stage_environment(
-            "publish", {"GH_TOKEN": "app-token", "OPENAI_API_KEY": "model"}
-        )
+        validate_stage_environment("publish", {"GH_TOKEN": "app-token", "OPENAI_API_KEY": "model"})
     with pytest.raises(CandidateIntegrityError, match="credential"):
         validate_stage_environment("snapshot", {"GH_TOKEN": "app-token"})
 
@@ -165,6 +163,4 @@ def test_no_due_analysis_and_snapshot_complete_without_model_or_publish_credenti
     assert analysis.outcome == "no_change"
     assert analysis.reason_code == "not-due"
     assert snapshot.outcome == "completed"
-    assert (
-        tmp_path / ".touchstone" / "hosted" / "snapshot" / "state.bundle.json"
-    ).is_file()
+    assert (tmp_path / ".touchstone" / "hosted" / "snapshot" / "state.bundle.json").is_file()

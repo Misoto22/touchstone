@@ -83,9 +83,7 @@ class GitHubCLI:
     def environment(self, name: str) -> dict[str, Any] | None:
         if not re.fullmatch(r"[A-Za-z0-9_.-]{1,255}", name):
             raise ValueError("GitHub Environment name is invalid")
-        payload = self._json(
-            ["gh", "api", f"repos/{self.repository}/environments/{name}"]
-        )
+        payload = self._json(["gh", "api", f"repos/{self.repository}/environments/{name}"])
         return payload if isinstance(payload, dict) else None
 
     def _json(self, argv: list[str]) -> Any:

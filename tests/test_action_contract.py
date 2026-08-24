@@ -21,4 +21,4 @@ def test_action_installs_an_exact_package_version_in_isolation() -> None:
     entrypoint = (ROOT / "scripts/action-entrypoint.sh").read_text(encoding="utf-8")
 
     assert "python -m venv" in entrypoint
-    assert 'touchstone-agent==${version}' in entrypoint
+    assert "touchstone-agent==${version}" in entrypoint

@@ -123,9 +123,7 @@ def test_success_pipes_required_secrets_and_confirms_installation(tmp_path: Path
     }
     assert github.secrets["TOUCHSTONE_APP_ID"] == b"42"
     assert github.opened == ["https://github.com/apps/acme-touchstone/installations/new"]
-    state = (
-        tmp_path / ".touchstone" / "state" / "actions-setup.json"
-    ).read_text(encoding="utf-8")
+    state = (tmp_path / ".touchstone" / "state" / "actions-setup.json").read_text(encoding="utf-8")
     assert "PRIVATE KEY" not in state
     assert "private" not in state.lower()
 

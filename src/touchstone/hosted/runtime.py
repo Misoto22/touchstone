@@ -139,8 +139,7 @@ class CandidateMetadata:
         if self.verdict not in {"approve", "reject", "skipped"}:
             raise CandidateIntegrityError("candidate verdict is invalid")
         if not isinstance(self.finding, dict) or not all(
-            isinstance(key, str) and isinstance(value, str)
-            for key, value in self.finding.items()
+            isinstance(key, str) and isinstance(value, str) for key, value in self.finding.items()
         ):
             raise CandidateIntegrityError("candidate finding is invalid")
         if not self.finding.get("title") or not self.finding.get("commit_subject"):
@@ -359,9 +358,7 @@ def _prepare_stage(
                 lineage=resume.candidate_id,
             )
             if reason:
-                raise CandidateIntegrityError(
-                    f"resume candidate artifact is unavailable: {reason}"
-                )
+                raise CandidateIntegrityError(f"resume candidate artifact is unavailable: {reason}")
 
     output = HostedOutputs(
         stage="prepare",
@@ -427,9 +424,7 @@ def _analysis_stage(
     if resume.candidate_id and resume.decision == "reanalyze":
         from touchstone.ledger import Ledger
 
-        projection = Ledger(Path(config.state_dir) / "ledger.jsonl").projection(
-            resume.candidate_id
-        )
+        projection = Ledger(Path(config.state_dir) / "ledger.jsonl").projection(resume.candidate_id)
         if projection is None:
             raise CandidateIntegrityError("resume candidate is absent from restored state")
         due = (
@@ -635,8 +630,7 @@ def _analyze_loop(
         finding = {
             key: str(value)
             for key, value in state.get("finding", {}).items()
-            if key in {"title", "summary", "rationale", "commit_subject"}
-            and isinstance(value, str)
+            if key in {"title", "summary", "rationale", "commit_subject"} and isinstance(value, str)
         }
         identifier = finding_id(loop, finding.get("title", "Touchstone finding"))
         branch = f"touchstone/{identifier}-{run_id[:8]}"
@@ -650,9 +644,7 @@ def _analyze_loop(
                 candidate_id=identifier,
                 run_id=run_id,
                 base_sha=base_sha,
-                patch_digest=(
-                    f"sha256:{hashlib.sha256(patch_path.read_bytes()).hexdigest()}"
-                ),
+                patch_digest=(f"sha256:{hashlib.sha256(patch_path.read_bytes()).hexdigest()}"),
                 branch=branch,
                 finding=finding,
                 risk=str(state.get("risk") or "high"),
@@ -1094,9 +1086,7 @@ def _remove_worktree(
         shutil.rmtree(worktree)
     executor.run(["git", "-C", config.execution_repo, "worktree", "prune"], timeout=60)
     if delete_branch and branch:
-        executor.run(
-            ["git", "-C", config.execution_repo, "branch", "-D", branch], timeout=60
-        )
+        executor.run(["git", "-C", config.execution_repo, "branch", "-D", branch], timeout=60)
 
 
 def _merge_node_state(state: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:

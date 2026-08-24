@@ -192,9 +192,7 @@ class ActionsSetup:
         payload = self._exchange(code)
         app_id, app_slug, pem = _conversion_fields(payload)
         self._write_state(
-            PartialSetup(
-                self.config.forge.slug, "partial", "app-created", app_id, app_slug
-            )
+            PartialSetup(self.config.forge.slug, "partial", "app-created", app_id, app_slug)
         )
 
         if not self.github.set_actions_secret("TOUCHSTONE_APP_ID", str(app_id).encode()):
@@ -209,9 +207,7 @@ class ActionsSetup:
 
         private_key = bytearray(pem.encode("utf-8"))
         try:
-            if not self.github.set_actions_secret(
-                "TOUCHSTONE_APP_PRIVATE_KEY", bytes(private_key)
-            ):
+            if not self.github.set_actions_secret("TOUCHSTONE_APP_PRIVATE_KEY", bytes(private_key)):
                 report = self._partial(
                     "private-key-repair-required",
                     app_id=app_id,
@@ -320,9 +316,7 @@ class ActionsSetup:
             app_slug=app_slug,
             repair="rerun setup to repair missing Actions secrets",
         )
-        self._write_state(
-            PartialSetup(self.config.forge.slug, "partial", step, app_id, app_slug)
-        )
+        self._write_state(PartialSetup(self.config.forge.slug, "partial", step, app_id, app_slug))
         return report
 
     def _partial(
@@ -366,7 +360,9 @@ class ActionsSetup:
     def _browser_manifest_code(self, manifest: AppManifest, state: str) -> str:
         owner = self.config.forge.slug.split("/", 1)[0]
         if self._options.owner_type == "organization":
-            action = f"https://github.com/organizations/{urllib.parse.quote(owner)}/settings/apps/new"
+            action = (
+                f"https://github.com/organizations/{urllib.parse.quote(owner)}/settings/apps/new"
+            )
         else:
             action = "https://github.com/settings/apps/new"
         callback = _ManifestCallback(
@@ -415,9 +411,7 @@ class _ManifestCallback:
                     return
                 if parsed.path == "/callback":
                     try:
-                        callback.code = parse_callback(
-                            parsed.query, expected_state=callback.state
-                        )
+                        callback.code = parse_callback(parsed.query, expected_state=callback.state)
                         self._reply(200, "Touchstone GitHub App created. Return to the terminal.")
                     except ValueError as exc:
                         callback.error = str(exc)
