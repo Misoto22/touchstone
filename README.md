@@ -15,7 +15,7 @@ Codex or Claude findings become reviewable GitHub pull requests.
 
 <br />
 
-[Loop graph](docs/graph.md) · [Example config](touchstone.example.toml) · [Report issue](https://github.com/Misoto22/touchstone/issues)
+[Install](#getting-started) · [Loop graph](docs/graph.md) · [Example config](touchstone.example.toml) · [Report issue](https://github.com/Misoto22/touchstone/issues)
 
 <br />
 
@@ -85,21 +85,20 @@ touchstone.example.toml     Generic version-1 configuration
 
 ### Getting Started
 
-Run these commands inside a GitHub repository that Touchstone may audit:
+Install the current public release candidate, then run the first audited rehearsal inside a GitHub repository that Touchstone may audit:
 
 ```bash
-pipx install touchstone-agent
+pipx install git+https://github.com/Misoto22/touchstone.git
 cd /path/to/your/repository
 touchstone init
 touchstone doctor
 touchstone setup --dry-run
 touchstone setup
+touchstone doctor
 touchstone run code --dry-run
-touchstone install-scheduler --dry-run
-touchstone install-scheduler
 ```
 
-`touchstone init` asks for the engine, model, required default-branch workflow, and schedule. It discovers the repository values and writes `touchstone.toml`; relative paths in that file resolve from the file itself. The first `doctor` run may report missing labels; `setup` creates them, and a second `doctor` run should clear that failure.
+`touchstone init` asks for the engine, model, required default-branch workflow, and schedule. It discovers the repository values and writes `touchstone.toml`; relative paths in that file resolve from the file itself. The first `doctor` run may report missing labels; `setup` creates them, and the second `doctor` verifies the configured repository before any model work starts.
 
 **Prerequisites** — Python 3.12+ · pipx · Git · authenticated GitHub CLI (`gh`) · authenticated Codex CLI or Claude CLI · macOS or Linux for native scheduling
 
@@ -195,6 +194,8 @@ Render scheduler files for review without enabling them:
 
 ```bash
 touchstone install-scheduler --output ./scheduler-preview
+touchstone install-scheduler --dry-run
+touchstone install-scheduler
 touchstone scheduler-status
 ```
 
@@ -240,6 +241,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the TDD and pull-request workflow. Us
 ### Release
 
 GitHub Actions verifies Python 3.12 and 3.13, builds the wheel and source distribution, checks package metadata, and smoke-tests the installed wheel. Publishing is triggered by a GitHub Release and uses PyPI trusted publishing through the protected `pypi` environment; the repository stores no PyPI API token.
+
+Before the first PyPI release, Getting Started installs the same verified package directly from public `main`. Once `v0.1.0` is published, the stable install becomes `pipx install touchstone-agent`.
 
 ---
 
