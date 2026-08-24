@@ -173,7 +173,9 @@ def run(state: dict[str, Any]) -> dict[str, Any]:
         brief += "\n".join(f"- {title}" for title in handled)
     brief += _attachment(context, loop, worktree)
 
-    session = context.engine.author(brief, worktree=worktree, denied=loop.protected_paths)
+    session = context.engine.author(
+        brief, worktree=worktree, denied=loop.protected_paths, model=loop.model
+    )
     if session.blocked:
         # Not clean. The engine was present and thinking and could not act, and
         # recording that as "found nothing" is how six hours of real work and

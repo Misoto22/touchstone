@@ -21,10 +21,11 @@ class CodexEngine:
         self._config = config
         self._exec = executor
 
-    def _argv(self, *, worktree: str, effort: str, sandbox: str) -> list[str]:
+    def _argv(self, *, worktree: str, effort: str, sandbox: str, model: str = "") -> list[str]:
         argv = ["codex", "exec", "-C", worktree]
-        if self._config.engine.model:
-            argv += ["-m", self._config.engine.model]
+        chosen = model or self._config.engine.model
+        if chosen:
+            argv += ["-m", chosen]
         argv += [
             "-c",
             f"model_reasoning_effort={effort}",
@@ -62,7 +63,9 @@ class CodexEngine:
             return None
         return engine_environment(self.name)
 
-    def author(self, brief: str, *, worktree: str, denied: tuple[str, ...]) -> Session:
+    def author(
+        self, brief: str, *, worktree: str, denied: tuple[str, ...], model: str = ""
+    ) -> Session:
         # `denied` is accepted and not used, deliberately. Codex has no
         # per-path deny list, and pretending otherwise by filtering the brief
         # would imply an enforcement that does not exist. `enforces_paths` is
@@ -70,6 +73,7 @@ class CodexEngine:
         argv = self._argv(
             worktree=worktree,
             effort=self._config.engine.audit_effort,
+            model=model,
             sandbox=self._config.engine.sandbox,
         )
         argv.append(brief)
@@ -82,7 +86,7 @@ class CodexEngine:
         keep(self._config.state_dir, "engine-author.log", transcript)
         return self._session(result, transcript)
 
-    def review(self, brief: str, *, worktree: str, schema: dict) -> Session:
+    def review(self, brief: str, *, worktree: str, schema: dict, model: str = "") -> Session:
         schema_path = str(PurePosixPath(worktree) / ".harness-review-schema.json")
         answer_path = str(PurePosixPath(worktree) / ".harness-review-answer.json")
         self._exec.write_text(schema_path, json.dumps(schema))
@@ -90,6 +94,7 @@ class CodexEngine:
         argv = self._argv(
             worktree=worktree,
             effort=self._config.engine.review_effort,
+            model=model,
             sandbox="read-only",
         )
         argv += ["--output-schema", schema_path, "--output-last-message", answer_path, brief]

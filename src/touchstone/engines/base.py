@@ -182,14 +182,16 @@ class Engine(Protocol):
     #: know which of the two they have.
     enforces_paths: bool
 
-    def author(self, brief: str, *, worktree: str, denied: tuple[str, ...]) -> Session:
+    def author(
+        self, brief: str, *, worktree: str, denied: tuple[str, ...], model: str = ""
+    ) -> Session:
         """Run a session that may edit `worktree`.
 
         Its contract is the files it leaves behind, never its stdout, so a
         chatty model cannot corrupt the result.
         """
 
-    def review(self, brief: str, *, worktree: str, schema: dict) -> Session:
+    def review(self, brief: str, *, worktree: str, schema: dict, model: str = "") -> Session:
         """Run a read-only session that returns an object matching `schema`.
 
         Read-only is enforced by the engine, not asked for politely: a reviewer

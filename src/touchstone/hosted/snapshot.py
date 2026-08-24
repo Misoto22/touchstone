@@ -166,6 +166,9 @@ def _loop_config(loop: Any) -> dict[str, Any]:
         "confine_to": getattr(loop, "confine_to", ()),
         "targets": getattr(loop, "targets", ()),
         "context": getattr(loop, "context", ()),
+        # A different model is a different Analysis, so a snapshot taken under
+        # one is not compatible with a run under another.
+        "model": getattr(loop, "model", ""),
         # An attachment lands in the audit prompt, so a changed heading or command
         # is a changed Analysis input. Left out, the digest would keep naming
         # the same state artifact and a snapshot taken under the old attachments
