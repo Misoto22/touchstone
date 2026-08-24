@@ -14,37 +14,53 @@ from typing import Protocol, runtime_checkable
 
 from touchstone.execution import Executor
 
-#: Things an engine says when it was present and thinking but could not act.
+#: How an engine says it was present and thinking but could not act.
 #:
 #: A session that cannot write is not a session that found nothing, and telling
 #: them apart cannot be left to the exit code: `codex exec` exits 0 after every
 #: one of its file writes was refused. On a host that forbids unprivileged uid
 #: mapping, bubblewrap cannot bring up loopback inside its namespace, so the
-#: sandbox never starts and every write fails — for six hours the loop spent
-#: seven minutes and 122k tokens per run, found a real defect each time, wrote
-#: nothing, and recorded `clean`. Six identical entries saying all is well.
+#: sandbox never starts and every write fails.
 #:
-#: Matched against the transcript rather than the exit status, because the
-#: transcript is where the engine is honest: "Blocked by workspace
-#: infrastructure. Every shell and file-write attempt failed."
-BLOCKED_MARKERS: tuple[tuple[str, str], ...] = (
+#: Matched against the transcript, which is where the engine is honest. But the
+#: transcript is also where the engine *quotes the repository*, and an audit of
+#: permission-handling code discusses these phrases as its subject matter — the
+#: first version matched a bare "Operation not permitted" and would have called
+#: a perfectly good review of an auth module blocked. So each marker is either
+#: a diagnostic no ordinary prose produces, or a pair that has to appear
+#: together.
+_SPECIFIC: tuple[tuple[str, str], ...] = (
     ("bwrap:", "the sandbox could not start"),
     ("Failed to write file", "a file write was refused"),
     ("Blocked by workspace infrastructure", "the engine reported it could not act"),
-    ("Operation not permitted", "an operation was refused by the host"),
+    ("sandbox_error", "the engine reported a sandbox error"),
+)
+
+#: Phrases that mean nothing alone and something together. "Operation not
+#: permitted" is ordinary text in a diff about permissions; alongside a
+#: namespace or seccomp failure it is a machine refusing the engine.
+_CORROBORATING: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("Operation not permitted", "namespace"), "a namespace operation was refused"),
+    (("Operation not permitted", "uid_map"), "uid mapping was refused"),
+    (("Operation not permitted", "seccomp"), "a seccomp restriction refused the engine"),
+    (("Permission denied", "sandbox"), "the sandbox was denied access"),
 )
 
 
 def blocked_reason(transcript: str) -> str | None:
     """Why this session could not act, or `None` if nothing says it could not.
 
-    Deliberately generous about what counts. A false positive costs one run
-    recorded as `held` when it was merely clean; a false negative costs an
-    unbounded number of runs recorded as clean when the engine was mute — and
-    the second is what actually happened.
+    Returns a category of this function's own devising, never a slice of the
+    transcript: the answer travels into notes, the event log and the ledger,
+    and those are packaged into the hosted state snapshot. The transcript
+    itself stays in `state_dir`, on the machine, for whoever has to explain the
+    run.
     """
-    for marker, reason in BLOCKED_MARKERS:
+    for marker, reason in _SPECIFIC:
         if marker in transcript:
+            return reason
+    for markers, reason in _CORROBORATING:
+        if all(marker in transcript for marker in markers):
             return reason
     return None
 

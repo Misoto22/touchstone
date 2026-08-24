@@ -44,17 +44,44 @@ def test_an_ordinary_clean_run_is_not_mistaken_for_a_blocked_one() -> None:
     assert blocked_reason(ordinary) is None
 
 
-def test_each_marker_stands_on_its_own() -> None:
-    """The engine may report any one of these without the others: a refused
-    write need not mention bwrap, and a sandbox that never starts need not
-    reach the point of attempting a write."""
+def test_a_diagnostic_no_ordinary_prose_produces_stands_alone() -> None:
+    """These name the machinery, not the subject matter."""
     for fragment in (
         "bwrap: loopback: Failed RTM_NEWADDR",
         "Failed to write file /tmp/x",
         "Blocked by workspace infrastructure",
-        "mkdir: Operation not permitted",
     ):
         assert blocked_reason(fragment) is not None, fragment
+
+
+def test_a_phrase_the_repository_might_contain_needs_corroboration() -> None:
+    """`Operation not permitted` is ordinary text in a diff about permissions.
+
+    The first version matched it alone, which would have called a perfectly
+    good review of an auth module blocked — and kioku's own queue has exactly
+    such a row waiting. Alone it means nothing; beside a namespace or uid_map
+    failure it is a machine refusing the engine.
+    """
+    assert blocked_reason("returns 403 with 'Operation not permitted' as the detail") is None
+    assert blocked_reason("the test asserts EPERM / Operation not permitted") is None
+
+    assert blocked_reason("write /proc/self/uid_map: Operation not permitted") is not None
+    assert blocked_reason("unshare namespace: Operation not permitted") is not None
+
+
+def test_the_reason_is_never_a_slice_of_the_transcript() -> None:
+    """It travels into notes, the event log and the ledger, and those are
+    packaged into the hosted state snapshot. The transcript stays on disk."""
+    import inspect
+
+    from touchstone.engines import base
+
+    reason = blocked_reason("bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted")
+    assert reason is not None
+    assert "bwrap" not in reason and "RTM_NEWADDR" not in reason
+
+    catalogue = inspect.getsource(base)
+    assert reason in catalogue, "the reason should be one of this module's own phrases"
 
 
 def test_a_blocked_session_is_not_ok_whatever_the_exit_code_said() -> None:
@@ -104,3 +131,16 @@ def test_the_sandbox_is_a_setting_with_the_safe_default() -> None:
     # answering — a test that asserted on it was testing the wrong surface.
     default = {f.name: f.default for f in dataclasses.fields(EngineConfig)}["sandbox"]
     assert default == "workspace-write"
+
+
+def test_the_sandbox_key_is_accepted_by_the_validator() -> None:
+    """The setting this change advertises has to be settable.
+
+    `_validate()` runs before the value is read, so a key missing from the
+    engine allowlist raises `unknown configuration key engine.sandbox` — the
+    documented workaround would have failed on exactly the hosts it was written
+    for, leaving an undocumented environment variable as the only way in.
+    """
+    from touchstone.config import _ENGINE
+
+    assert "sandbox" in _ENGINE

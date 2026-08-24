@@ -207,6 +207,7 @@ _FORGE = {
 }
 _ENGINE = {
     "name",
+    "sandbox",
     "model",
     "audit_effort",
     "review_effort",
