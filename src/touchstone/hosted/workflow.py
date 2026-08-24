@@ -8,13 +8,18 @@ import os
 import re
 import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from touchstone.config import Config, ConfigError
+from touchstone.hosted.snapshot import config_digest
 
 _SHA = re.compile(r"^[0-9a-f]{40}$")
+_RELEASE_VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
+_ACTION_API = "https://api.github.com/repos/Misoto22/touchstone"
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,18 +95,24 @@ def render_workflow(config: Config, pins: ActionPins, *, action_sha: str) -> str
     sha = _require_sha(action_sha, "first-party Action reference")
     cron = _cron(config)
     branch = config.forge.default_branch
+    branch_expression = branch.replace("'", "''")
     retention = config.actions.artifact_retention_days
     model_secret = "OPENAI_API_KEY" if config.engine.name == "codex" else "ANTHROPIC_API_KEY"
     model_input = "openai-api-key" if config.engine.name == "codex" else "anthropic-api-key"
+    analysis_candidate_artifact = (
+        "touchstone-candidate-${{ steps.touchstone.outputs.candidate_id || github.run_id }}"
+    )
+    downstream_candidate_artifact = (
+        "touchstone-candidate-${{ needs.analysis.outputs.candidate_id || github.run_id }}"
+    )
+    state_artifact = f"touchstone-state-{config_digest(config).removeprefix('sha256:')}"
     approval = config.actions.approval_environment
     if len(approval) > 255 or any(ord(character) < 32 for character in approval):
         raise ConfigError("actions.approval_environment contains unsupported characters")
     environment_block = (
         f"    environment:\n      name: {json.dumps(approval)}\n" if approval else ""
     )
-    published_candidate = (
-        "${{ steps.touchstone.outputs.candidate_id || steps.verify.outputs.candidate_id }}"
-    )
+    published_candidate = "${{ steps.touchstone.outputs.candidate_id }}"
     final_candidate = (
         "${{ needs.publish.outputs.candidate_id || needs.analysis.outputs.candidate_id }}"
     )
@@ -146,7 +157,7 @@ concurrency:
 
 jobs:
   prepare:
-    if: github.ref == 'refs/heads/{branch}'
+    if: github.ref == 'refs/heads/{branch_expression}'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -215,21 +226,67 @@ jobs:
       - uses: actions/upload-artifact@{pins.upload_artifact}
         if: always()
         with:
-          name: touchstone-candidate-${{{{ github.run_id }}}}
+          name: {analysis_candidate_artifact}
           path: .touchstone/hosted/candidate
           if-no-files-found: error
           retention-days: {retention}
 
-  publish:
+  verify:
     needs: analysis
     if: needs.analysis.outputs.outcome == 'proposed'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      outcome: ${{{{ steps.touchstone.outputs.outcome }}}}
+      candidate_id: ${{{{ steps.touchstone.outputs.candidate_id }}}}
+    steps:
+      - uses: actions/checkout@{pins.checkout}
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@{pins.setup_python}
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@{pins.download_artifact}
+        with:
+          name: {downstream_candidate_artifact}
+          path: .touchstone/hosted/candidate
+      - name: Verify candidate without publishing credentials
+        id: touchstone
+        uses: Misoto22/touchstone@{sha}
+        with:
+          stage: verify
+          github-token: ${{{{ github.token }}}}
+          state-key: ${{{{ secrets.TOUCHSTONE_STATE_KEY }}}}
+          candidate-id: ${{{{ inputs.candidate_id }}}}
+          expected-candidate-id: ${{{{ needs.analysis.outputs.candidate_id }}}}
+          expected-loop: ${{{{ needs.analysis.outputs.loop }}}}
+          decision: ${{{{ inputs.decision }}}}
+      - uses: actions/upload-artifact@{pins.upload_artifact}
+        if: always()
+        with:
+          name: touchstone-verified-${{{{ github.run_id }}}}
+          path: .touchstone/hosted/verified
+          if-no-files-found: error
+          retention-days: {retention}
+
+  publish:
+    needs:
+      - analysis
+      - verify
+    if: >-
+      always() &&
+      needs.analysis.result != 'cancelled' &&
+      (needs.analysis.outputs.outcome == 'proposed' || inputs.decision == 'reanalyze') &&
+      (needs.analysis.outputs.outcome != 'proposed' || needs.verify.result == 'success')
     runs-on: ubuntu-latest
 {environment_block}    permissions:
       contents: read
       actions: read
     outputs:
       change_state: ${{{{ steps.touchstone.outputs.change_state }}}}
-      outcome: ${{{{ steps.touchstone.outputs.outcome || steps.verify.outputs.outcome }}}}
+      outcome: ${{{{ steps.touchstone.outputs.outcome }}}}
       partial: ${{{{ steps.touchstone.outputs.partial }}}}
       candidate_id: {published_candidate}
       reason_code: ${{{{ steps.touchstone.outputs.reason_code }}}}
@@ -242,35 +299,21 @@ jobs:
           python-version: '3.12'
       - uses: actions/download-artifact@{pins.download_artifact}
         with:
-          name: touchstone-candidate-${{{{ github.run_id }}}}
+          name: {downstream_candidate_artifact}
           path: .touchstone/hosted/candidate
-      - name: Verify candidate without publishing credentials
-        id: verify
-        uses: Misoto22/touchstone@{sha}
+      - uses: actions/download-artifact@{pins.download_artifact}
+        if: needs.verify.result == 'success'
         with:
-          stage: verify
-          github-token: ${{{{ github.token }}}}
-          state-key: ${{{{ secrets.TOUCHSTONE_STATE_KEY }}}}
-          candidate-id: ${{{{ inputs.candidate_id }}}}
-          expected-candidate-id: ${{{{ needs.analysis.outputs.candidate_id }}}}
-          expected-loop: ${{{{ needs.analysis.outputs.loop }}}}
-          decision: ${{{{ inputs.decision }}}}
+          name: touchstone-verified-${{{{ github.run_id }}}}
+          path: .touchstone/hosted/verified
       - id: app-token
-        if: steps.verify.outputs.outcome == 'completed'
         uses: actions/create-github-app-token@{pins.app_token}
         with:
           app-id: ${{{{ secrets.TOUCHSTONE_APP_ID }}}}
           private-key: ${{{{ secrets.TOUCHSTONE_APP_PRIVATE_KEY }}}}
           owner: ${{{{ github.repository_owner }}}}
           repositories: ${{{{ github.event.repository.name }}}}
-      - name: Configure mutation-only Git credentials
-        if: steps.verify.outputs.outcome == 'completed'
-        shell: bash
-        env:
-          GH_TOKEN: ${{{{ steps.app-token.outputs.token }}}}
-        run: gh auth setup-git
       - id: touchstone
-        if: steps.verify.outputs.outcome == 'completed'
         uses: Misoto22/touchstone@{sha}
         with:
           stage: publish
@@ -292,6 +335,7 @@ jobs:
     needs:
       - prepare
       - analysis
+      - verify
       - publish
     if: always() && needs.prepare.result != 'skipped'
     runs-on: ubuntu-latest
@@ -310,6 +354,11 @@ jobs:
           pattern: touchstone-*-${{{{ github.run_id }}}}
           path: .touchstone/hosted/inputs
           merge-multiple: true
+      - uses: actions/download-artifact@{pins.download_artifact}
+        if: needs.analysis.outputs.candidate_id != ''
+        with:
+          name: {downstream_candidate_artifact}
+          path: .touchstone/hosted/inputs/candidate
       - id: touchstone
         uses: Misoto22/touchstone@{sha}
         with:
@@ -317,13 +366,14 @@ jobs:
           state-key: ${{{{ secrets.TOUCHSTONE_STATE_KEY }}}}
           final-outcome: ${{{{ needs.publish.outputs.outcome || needs.analysis.outputs.outcome }}}}
           final-candidate-id: {final_candidate}
+          final-loop: ${{{{ needs.analysis.outputs.loop }}}}
           final-change-state: {final_change}
           final-reason-code: {final_reason}
           final-partial: ${{{{ needs.publish.outputs.partial || needs.analysis.outputs.partial }}}}
           publish-job-result: ${{{{ needs.publish.result }}}}
       - uses: actions/upload-artifact@{pins.upload_artifact}
         with:
-          name: touchstone-state-${{{{ github.run_id }}}}
+          name: {state_artifact}
           path: .touchstone/hosted/snapshot
           if-no-files-found: error
           retention-days: {retention}
@@ -345,24 +395,46 @@ def actions_diff(repo: Path, rendered: str) -> ActionsDiff:
     return ActionsDiff(path=path, rendered=rendered, diff=diff, changed=changed)
 
 
+def installed_release_tag() -> str:
+    """Name the release tag that matches the installed Touchstone distribution."""
+
+    try:
+        installed = version("touchstone-agent")
+    except PackageNotFoundError as exc:
+        raise ConfigError(
+            "the installed Touchstone version is unknown; pass --action-sha with a "
+            "40-character commit SHA or set actions.action_sha"
+        ) from exc
+    if not _RELEASE_VERSION.fullmatch(installed):
+        raise ConfigError(
+            f"the installed Touchstone version {installed!r} is not a published release; "
+            "pass --action-sha with a 40-character commit SHA or set actions.action_sha"
+        )
+    return f"v{installed}"
+
+
 def resolve_action_sha(config: Config, *, timeout: float = 10.0) -> str:
-    """Resolve the public Action's default branch to an immutable commit."""
+    """Resolve the installed release tag to an immutable Action commit.
+
+    The default deliberately follows the installed distribution rather than the
+    Action repository's moving default branch, so a generated workflow pins the
+    revision whose behavior this CLI already documents.
+    """
 
     if config.actions.action_sha:
         return _require_sha(config.actions.action_sha, "actions.action_sha")
+    tag = installed_release_tag()
     request = urllib.request.Request(
-        "https://api.github.com/repos/Misoto22/touchstone/commits/main",
+        f"{_ACTION_API}/commits/{urllib.parse.quote(tag, safe='')}",
         headers={"Accept": "application/vnd.github+json", "User-Agent": "touchstone-agent"},
     )
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
-            import json
-
             payload = json.load(response)
     except (OSError, urllib.error.HTTPError, urllib.error.URLError, ValueError) as exc:
         raise ConfigError(
-            "could not resolve the Touchstone Action commit; pass --action-sha with a "
-            "40-character commit SHA or set actions.action_sha"
+            f"could not resolve the Touchstone Action commit for {tag}; pass --action-sha "
+            "with a 40-character commit SHA or set actions.action_sha"
         ) from exc
     return _require_sha(str(payload.get("sha", "")), "resolved Action reference")
 
@@ -371,6 +443,7 @@ __all__ = [
     "ActionPins",
     "ActionsDiff",
     "actions_diff",
+    "installed_release_tag",
     "render_workflow",
     "resolve_action_sha",
 ]

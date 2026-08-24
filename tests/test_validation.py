@@ -171,7 +171,7 @@ def test_preparation_uses_each_targets_confirmed_package_manager(monkeypatch) ->
     assert report.outcome == "completed"
     assert commands == [
         ("web", ("npm", "ci", "--ignore-scripts")),
-        ("api", ("uv", "sync", "--frozen", "--no-install-project")),
+        ("api", ("uv", "sync", "--frozen", "--no-install-workspace", "--no-build")),
     ]
 
 
@@ -207,5 +207,154 @@ def test_polyglot_target_runs_one_locked_preparation_per_ecosystem(monkeypatch) 
     assert report.outcome == "completed"
     assert commands == [
         ("npm", "ci", "--ignore-scripts"),
-        ("uv", "sync", "--frozen", "--no-install-project"),
+        ("uv", "sync", "--frozen", "--no-install-workspace", "--no-build"),
     ]
+
+
+def _prepared(
+    monkeypatch,  # type: ignore[no-untyped-def]
+    repository: Path,
+    manager: str,
+    *,
+    target_path: Path = Path("."),
+    allow_scripts: bool = False,
+    allow_build_hooks: bool = False,
+):  # type: ignore[no-untyped-def]
+    """Capture the locked preparation Touchstone would run for one manager."""
+    from types import SimpleNamespace
+
+    captured: list[ValidationCommand] = []
+
+    def capture(_root, _path, command, _executor):  # type: ignore[no-untyped-def]
+        captured.append(command)
+        return SimpleNamespace(ok=True, reason="passed", argv=command.argv)
+
+    gate = SimpleNamespace(
+        enabled=True,
+        preparation="locked-install",
+        allow_scripts=allow_scripts,
+        allow_build_hooks=allow_build_hooks,
+    )
+    config = SimpleNamespace(
+        repo_path=repository,
+        targets={
+            "app": SimpleNamespace(
+                path=target_path,
+                validation=(gate,),
+                package_managers=(manager,),
+            )
+        },
+    )
+    monkeypatch.setattr("touchstone.validation.run_gate", capture)
+    report = prepare(config, ("app",), object())  # type: ignore[arg-type]
+    return report, captured
+
+
+def test_bun_preparation_is_frozen_and_hook_free(monkeypatch, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+    _report, commands = _prepared(monkeypatch, tmp_path, "bun")
+
+    assert commands[0].argv == ("bun", "install", "--frozen-lockfile", "--ignore-scripts")
+    assert commands[0].extra_env == ()
+
+
+def test_yarn_classic_preparation_uses_frozen_lockfile(monkeypatch, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+    (tmp_path / "yarn.lock").write_text("", encoding="utf-8")
+
+    _report, commands = _prepared(monkeypatch, tmp_path, "yarn")
+
+    assert commands[0].argv == ("yarn", "install", "--frozen-lockfile", "--ignore-scripts")
+
+
+def test_yarn_modern_is_detected_from_yarnrc(monkeypatch, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+    (tmp_path / ".yarnrc.yml").write_text("nodeLinker: node-modules\n", encoding="utf-8")
+
+    _report, commands = _prepared(monkeypatch, tmp_path, "yarn")
+
+    assert commands[0].argv == ("yarn", "install", "--immutable", "--mode=skip-build")
+
+
+def test_yarn_modern_is_detected_from_declared_package_manager(  # type: ignore[no-untyped-def]
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "apps" / "web"
+    target.mkdir(parents=True)
+    (target / "package.json").write_text('{"packageManager": "yarn@4.5.0"}', encoding="utf-8")
+
+    _report, commands = _prepared(
+        monkeypatch,
+        tmp_path,
+        "yarn",
+        target_path=Path("apps/web"),
+    )
+
+    assert commands[0].argv == ("yarn", "install", "--immutable", "--mode=skip-build")
+
+
+def test_uv_preparation_installs_no_workspace_member_and_builds_nothing(  # type: ignore[no-untyped-def]
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    _report, commands = _prepared(monkeypatch, tmp_path, "uv")
+
+    assert commands[0].argv == (
+        "uv",
+        "sync",
+        "--frozen",
+        "--no-install-workspace",
+        "--no-build",
+    )
+
+
+def test_pdm_preparation_forces_binary_only_resolution(monkeypatch, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+    _report, commands = _prepared(monkeypatch, tmp_path, "pdm")
+
+    assert commands[0].argv == ("pdm", "sync", "--frozen-lockfile", "--no-self")
+    assert commands[0].extra_env == (("PDM_ONLY_BINARY", ":all:"),)
+
+
+def test_pdm_preparation_environment_reaches_the_subprocess(git_repo: Path) -> None:
+    command = ValidationCommand(
+        target="root",
+        argv=(sys.executable, "-c", "import os; print(os.environ.get('PDM_ONLY_BINARY', ''))"),
+        enabled=True,
+        extra_env=(("PDM_ONLY_BINARY", ":all:"),),
+    )
+
+    result = run_gate(
+        git_repo, Path("."), command, LocalExecutor(), env={"PATH": os.environ["PATH"]}
+    )
+
+    assert result.ok
+    assert result.stdout.strip() == ":all:"
+
+
+def test_hook_free_poetry_preparation_is_structured_not_a_crash(
+    monkeypatch, tmp_path: Path
+) -> None:  # type: ignore[no-untyped-def]
+    report, commands = _prepared(monkeypatch, tmp_path, "poetry")
+
+    assert commands == []
+    assert report.outcome == "blocked"
+    assert report.results[0].reason == "policy-unsupported"
+    assert report.results[0].argv == ("poetry", "install")
+
+
+def test_poetry_preparation_is_permitted_once_build_hooks_are_accepted(  # type: ignore[no-untyped-def]
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    report, commands = _prepared(monkeypatch, tmp_path, "poetry", allow_build_hooks=True)
+
+    assert report.outcome == "completed"
+    assert commands[0].argv == ("poetry", "install")
+
+
+def test_missing_package_manager_evidence_blocks_without_raising(
+    monkeypatch, tmp_path: Path
+) -> None:  # type: ignore[no-untyped-def]
+    report, commands = _prepared(monkeypatch, tmp_path, "")
+
+    assert commands == []
+    assert report.outcome == "blocked"
+    assert report.results[0].reason == "policy-unsupported"

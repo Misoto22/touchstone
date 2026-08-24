@@ -38,6 +38,11 @@ Changelog = "https://github.com/Misoto22/touchstone/blob/main/CHANGELOG.md"
 touchstone = "touchstone.cli:main"
 
 [project.optional-dependencies]
+action-build = [
+    # The composite Action disables build isolation after installing its
+    # hash-locked runtime, so the backend itself must be part of that lock.
+    "hatchling==1.28.0",
+]
 dev = [
     "build>=1.3",
     "pytest>=8.0",

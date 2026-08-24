@@ -62,3 +62,25 @@ jobs:
           tests/test_distribution.py
           tests/test_stack_actions_acceptance.py
           -q
+
+  agent-runtime:
+    name: Locked Agent runtimes
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.3.0
+        with:
+          node-version: "24"
+      - name: Smoke-test locked Codex CLI
+        working-directory: agent-runtime/codex
+        run: |
+          npm ci --ignore-scripts --include=optional --no-audit --no-fund
+          node_modules/.bin/codex --version
+      - name: Smoke-test locked Claude Code CLI
+        working-directory: agent-runtime/claude
+        run: |
+          npm ci --ignore-scripts --include=optional --no-audit --no-fund
+          node node_modules/@anthropic-ai/claude-code/install.cjs
+          node_modules/.bin/claude --version

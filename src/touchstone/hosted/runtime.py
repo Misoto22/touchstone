@@ -9,12 +9,13 @@ import re
 import shutil
 import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 import zipfile
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
 from touchstone.config import Config, ConfigError
@@ -31,7 +32,7 @@ from touchstone.outcomes import ChangeState, RunOutcome, RunResult
 HostedStage = Literal["prepare", "analysis", "verify", "publish", "snapshot"]
 ResumeDecision = Literal["approve", "close", "reanalyze"]
 
-_STAGES = {"prepare", "analysis", "verify", "publish", "snapshot"}
+_STAGES = {"install", "prepare", "analysis", "verify", "publish", "snapshot"}
 _DECISIONS = {"approve", "close", "reanalyze"}
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _BRANCH = re.compile(r"^touchstone/[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
@@ -46,6 +47,11 @@ _PUBLISH_CREDENTIALS = {
     "TOUCHSTONE_APP_PRIVATE_KEY",
 }
 _WRITE_TOKENS = {"GH_TOKEN", "GITHUB_TOKEN"}
+_PREPARED_STAGES = {"analysis", "verify"}
+_AGENT_PACKAGES = {
+    "codex": "@openai/codex",
+    "claude": "@anthropic-ai/claude-code",
+}
 
 
 class CandidateIntegrityError(ValueError):
@@ -167,11 +173,10 @@ class VerificationAttestation:
     base_sha: str
     patch_digest: str
     config_digest: str
-    worktree: str
-    version: int = 1
+    version: int = 2
 
     def validate(self) -> None:
-        if self.version != 1:
+        if self.version != 2:
             raise CandidateIntegrityError("verification attestation version is unsupported")
         if not _IDENTIFIER.fullmatch(self.candidate_id) or not _IDENTIFIER.fullmatch(self.run_id):
             raise CandidateIntegrityError("verification attestation identity is invalid")
@@ -181,9 +186,6 @@ class VerificationAttestation:
             raise CandidateIntegrityError("verification attestation patch digest is invalid")
         if not re.fullmatch(r"sha256:[0-9a-f]{64}", self.config_digest):
             raise CandidateIntegrityError("verification attestation config digest is invalid")
-        path = Path(self.worktree)
-        if not path.is_absolute() or ".." in path.parts:
-            raise CandidateIntegrityError("verification attestation worktree is invalid")
 
     def write(self, path: Path) -> None:
         self.validate()
@@ -275,7 +277,13 @@ def validate_stage_environment(stage: str, env: Mapping[str, str]) -> None:
     if stage not in _STAGES:
         raise CandidateIntegrityError("hosted stage is invalid")
     present = {name for name, value in env.items() if value}
-    if stage == "prepare":
+    if stage == "install":
+        prohibited = present & (
+            _MODEL_CREDENTIALS | _PUBLISH_CREDENTIALS | _WRITE_TOKENS | {"TOUCHSTONE_STATE_KEY"}
+        )
+        if prohibited:
+            raise CandidateIntegrityError("install stage received a prohibited credential")
+    elif stage == "prepare":
         prohibited = present & (
             _MODEL_CREDENTIALS | _PUBLISH_CREDENTIALS | {"TOUCHSTONE_STATE_KEY"}
         )
@@ -349,6 +357,214 @@ def verify_candidate(
     return metadata
 
 
+@dataclass(frozen=True, slots=True)
+class PreparationAttestation:
+    """A non-secret record of the dependency environment a stage may reuse."""
+
+    head_sha: str
+    config_digest: str
+    targets: tuple[str, ...]
+    lockfiles: tuple[tuple[str, str], ...]
+    directories: tuple[str, ...]
+    outcome: str
+    version: int = 1
+
+    def validate(self) -> None:
+        if self.version != 1:
+            raise CandidateIntegrityError("preparation attestation version is unsupported")
+        if not re.fullmatch(r"[0-9a-f]{40}", self.head_sha):
+            raise CandidateIntegrityError("preparation attestation HEAD is invalid")
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", self.config_digest):
+            raise CandidateIntegrityError("preparation attestation config digest is invalid")
+        if self.outcome not in {"completed", "blocked"}:
+            raise CandidateIntegrityError("preparation attestation outcome is invalid")
+        if any(not isinstance(value, str) or not value for value in self.targets):
+            raise CandidateIntegrityError("preparation attestation Targets are invalid")
+        for value in self.directories:
+            if PurePosixPath(value).is_absolute() or ".." in PurePosixPath(value).parts:
+                raise CandidateIntegrityError("preparation attestation directory escapes the repo")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "version": self.version,
+            "head_sha": self.head_sha,
+            "config_digest": self.config_digest,
+            "targets": list(self.targets),
+            "lockfiles": dict(self.lockfiles),
+            "directories": list(self.directories),
+            "outcome": self.outcome,
+        }
+
+    def write(self, path: Path) -> None:
+        self.validate()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+
+    @classmethod
+    def read(cls, path: Path) -> PreparationAttestation:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                raise TypeError
+            attestation = cls(
+                head_sha=str(payload["head_sha"]),
+                config_digest=str(payload["config_digest"]),
+                targets=tuple(str(value) for value in payload["targets"]),
+                lockfiles=tuple(
+                    sorted((str(key), str(value)) for key, value in payload["lockfiles"].items())
+                ),
+                directories=tuple(str(value) for value in payload["directories"]),
+                outcome=str(payload["outcome"]),
+                version=int(payload.get("version", 0)),
+            )
+        except (
+            AttributeError,
+            OSError,
+            json.JSONDecodeError,
+            KeyError,
+            TypeError,
+            ValueError,
+        ) as exc:
+            raise CandidateIntegrityError("preparation attestation is invalid") from exc
+        attestation.validate()
+        return attestation
+
+
+def _build_preparation_attestation(config: Config, *, outcome: str) -> PreparationAttestation:
+    from touchstone.validation import preparation_directories, preparation_lockfiles
+
+    root = config.repo_path.expanduser().resolve()
+    directories = tuple(
+        value for value in preparation_directories(config) if (root / value).is_dir()
+    )
+    return PreparationAttestation(
+        head_sha=_git_head(root),
+        config_digest=config_digest(config),
+        targets=tuple(sorted(config.targets)),
+        lockfiles=_lockfile_digests(root, preparation_lockfiles(config)),
+        directories=directories,
+        outcome=outcome,
+    )
+
+
+def _lockfile_digests(root: Path, names: tuple[str, ...]) -> tuple[tuple[str, str], ...]:
+    """Digest every candidate lockfile, recording absence explicitly."""
+
+    digests: list[tuple[str, str]] = []
+    for name in names:
+        path = (root / name).resolve()
+        if not path.is_relative_to(root) or not path.is_file():
+            digests.append((name, "absent"))
+            continue
+        digests.append((name, f"sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}"))
+    return tuple(sorted(digests))
+
+
+def _may_prepare_inline(stage: str, env: Mapping[str, str]) -> bool:
+    """Allow inline preparation only where no model or publishing credential exists."""
+
+    if stage == "publish":
+        return False
+    return not any(env.get(name) for name in _MODEL_CREDENTIALS)
+
+
+def _reuse_prepared_dependencies(
+    config: Config,
+    worktree: Path,
+    *,
+    stage: str,
+    targets: tuple[str, ...],
+    env: Mapping[str, str],
+) -> str:
+    """Verify the Preparation Stage attestation and reuse its exact environment.
+
+    Returns an empty string when the worktree is ready. Any mismatch fails
+    closed unless this process still runs without a model credential, in which
+    case preparation is repeated here — which keeps the documented invariant
+    that dependencies are only ever installed before credentials exist.
+    """
+
+    root = config.repo_path.expanduser().resolve()
+    path = root / ".touchstone" / "hosted" / "install" / "preparation.json"
+    reason = ""
+    attestation: PreparationAttestation | None = None
+    if not path.is_file():
+        reason = "preparation-attestation-missing"
+    else:
+        try:
+            attestation = PreparationAttestation.read(path)
+        except CandidateIntegrityError:
+            # An unreadable attestation is a mismatch, not a crash: a stage that
+            # still holds no model credential can recover by preparing itself.
+            reason = "preparation-attestation-invalid"
+        else:
+            reason = _preparation_mismatch(config, attestation, worktree, targets=targets)
+    if not reason and attestation is not None:
+        reason = _link_prepared_directories(root, worktree, attestation.directories)
+    if not reason:
+        return ""
+    if not _may_prepare_inline(stage, env):
+        return reason
+    from touchstone.nodes.context import configure
+    from touchstone.validation import prepare
+
+    report = prepare(config, targets, configure(config).executor, repository=worktree)
+    return "" if report.outcome == "completed" else "preparation-gate"
+
+
+def _preparation_mismatch(
+    config: Config,
+    attestation: PreparationAttestation,
+    worktree: Path,
+    *,
+    targets: tuple[str, ...],
+) -> str:
+    root = config.repo_path.expanduser().resolve()
+    if attestation.outcome != "completed":
+        return "preparation-blocked"
+    if attestation.head_sha != _git_head(root):
+        return "preparation-head-mismatch"
+    if attestation.config_digest != config_digest(config):
+        return "preparation-config-mismatch"
+    covered = set(attestation.targets)
+    if not set(targets or tuple(config.targets)).issubset(covered):
+        return "preparation-target-mismatch"
+    expected = dict(attestation.lockfiles)
+    if _lockfile_digests(worktree.expanduser().resolve(), tuple(expected)) != tuple(
+        sorted(expected.items())
+    ):
+        return "preparation-lockfile-mismatch"
+    return ""
+
+
+def _link_prepared_directories(
+    root: Path,
+    worktree: Path,
+    directories: tuple[str, ...],
+) -> str:
+    """Point a fresh worktree at the already-prepared dependency directories."""
+
+    destination_root = worktree.expanduser().resolve()
+    for value in directories:
+        source = (root / value).resolve()
+        destination = (destination_root / value).resolve()
+        if not source.is_relative_to(root) or not destination.is_relative_to(destination_root):
+            return "preparation-path-escape"
+        if not source.is_dir():
+            return "preparation-directory-missing"
+        if destination.exists() or destination.is_symlink():
+            continue
+        try:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.symlink_to(source, target_is_directory=True)
+        except OSError:
+            return "preparation-link-failed"
+    return ""
+
+
 def run_stage(
     config: Config,
     stage: HostedStage | str,
@@ -375,6 +591,59 @@ def run_stage(
     return handler(config, root, run_id, environment)
 
 
+def install_stage(
+    config: Config,
+    *,
+    for_stage: str = "analysis",
+    env: Mapping[str, str] | None = None,
+) -> PreparationAttestation | None:
+    """Run every credential-free setup step the named stage will later depend on.
+
+    This is the Preparation Stage. It runs in the composite Action's own install
+    step, which maps no model, state, or publishing credential at all, so the
+    locked Agent CLI and the locked project dependency environment both exist
+    before any secret does. The attestation it returns binds that environment to
+    the exact repository HEAD, configuration, Target set, and lockfiles a later
+    stage must match.
+    """
+
+    environment = dict(os.environ if env is None else env)
+    validate_stage_environment("install", environment)
+    if for_stage not in _STAGES or for_stage == "install":
+        raise CandidateIntegrityError("hosted stage is invalid")
+    if config.execution.target != "local":
+        raise ConfigError("GitHub-hosted execution requires execution.target = 'local'")
+    if for_stage == "analysis":
+        _ensure_engine(config, environment, allow_install=True)
+    if for_stage not in _PREPARED_STAGES:
+        return None
+    from touchstone.execution.local import LocalExecutor
+    from touchstone.validation import prepare
+
+    directory = _fresh_directory(config.repo_path / ".touchstone" / "hosted", "install")
+    report = prepare(config, (), LocalExecutor(), repository=config.repo_path)
+    attestation = _build_preparation_attestation(config, outcome=report.outcome)
+    attestation.write(directory / "preparation.json")
+    if report.outcome == "blocked":
+        detail = "; ".join(
+            f"{' '.join(result.argv)}: {result.reason}"
+            for result in report.results
+            if not result.ok
+        )
+        raise ConfigError(f"locked project preparation failed before credentials: {detail}")
+    return attestation
+
+
+def install_agent_runtime(
+    config: Config,
+    *,
+    env: Mapping[str, str] | None = None,
+) -> None:
+    """Compatibility entry point for the analysis install step."""
+
+    install_stage(config, for_stage="analysis", env=env)
+
+
 def _prepare_stage(
     config: Config,
     root: Path,
@@ -394,8 +663,10 @@ def _prepare_stage(
             config,
             env,
             artifact_prefix="touchstone-state-",
+            artifact_name=_state_artifact_name(config),
             member="state.bundle.json",
             destination=directory / "state.bundle.json",
+            require_compatible_state=True,
         )
 
     if resume.candidate_id:
@@ -412,6 +683,7 @@ def _prepare_stage(
                 config,
                 env,
                 artifact_prefix="touchstone-candidate-",
+                artifact_name=f"touchstone-candidate-{resume.candidate_id}",
                 member="candidate.bundle.json",
                 destination=directory / "candidate.bundle.json",
                 lineage=resume.candidate_id,
@@ -564,6 +836,7 @@ def _analysis_stage(
             key=key,
             destination=directory / "candidate.bundle.json",
             resume=resume,
+            env=env,
         )
     except Exception as exc:
         result = RunResult(
@@ -611,11 +884,12 @@ def _analyze_loop(
     key: bytes,
     destination: Path,
     resume: ResumeInput,
+    env: Mapping[str, str],
 ) -> tuple[RunResult, CandidateMetadata | None]:
     from touchstone.ledger import candidate_id, finding_id
     from touchstone.nodes import audit, classify, review
     from touchstone.nodes.context import configure
-    from touchstone.validation import prepare, validate
+    from touchstone.validation import validate_affected
 
     context = configure(config)
     worktree = Path(config.execution_worktree)
@@ -635,14 +909,21 @@ def _analyze_loop(
         )
     try:
         loop_config = config.loop(loop)
-        preparation = prepare(
+        # Dependencies were installed by the credential-free Preparation Stage.
+        # Analysis only verifies that attestation and reuses its exact result.
+        preparation = _reuse_prepared_dependencies(
             config,
-            loop_config.targets,
-            context.executor,
-            repository=worktree,
+            worktree,
+            stage="analysis",
+            targets=loop_config.targets,
+            env=env,
         )
-        if preparation.outcome == "blocked":
-            return RunResult(RunOutcome.BLOCKED, reason_code="preparation-gate"), None
+        if preparation:
+            return RunResult(
+                RunOutcome.BLOCKED,
+                reason_code="preparation-gate",
+                detail=preparation,
+            ), None
         state: dict[str, Any] = {
             "loop": loop,
             "worktree": str(worktree),
@@ -676,7 +957,7 @@ def _analyze_loop(
         else:
             state.setdefault("verdict", "skipped")
             state.setdefault("verdict_reason", "risk requires operator review")
-        validation = validate(
+        validation = validate_affected(
             config,
             loop_config.targets,
             context.executor,
@@ -763,7 +1044,6 @@ def _verify_stage(
     run_id: str,
     env: Mapping[str, str],
 ) -> HostedOutputs:
-    from touchstone import runner
     from touchstone.nodes.context import configure
 
     directory = _fresh_directory(root, "verified")
@@ -785,13 +1065,13 @@ def _verify_stage(
         if projection is None or projection.pr is None or not projection.head_sha:
             raise CandidateIntegrityError("resume candidate is not a parked publication")
         if resume.decision == "approve":
-            runner._health_gate(config)
-            runner._publication_gate(config, config.loop(projection.loop))
+            _validate_resume_candidate(config, projection, context, env)
         (directory / "resume.json").write_text(
             json.dumps(
                 {
                     "candidate_id": resume.candidate_id,
                     "decision": resume.decision,
+                    "head_sha": projection.head_sha,
                     "config_digest": config_digest(config),
                     "run_id": run_id,
                 },
@@ -826,15 +1106,27 @@ def _verify_stage(
             expected_loop=expected_loop,
             expected_lineage=expected_lineage,
         )
-        worktree = _prepare_verified_worktree(config, metadata, restored / "candidate.patch")
-    VerificationAttestation(
-        candidate_id=metadata.candidate_id,
-        run_id=metadata.run_id,
-        base_sha=metadata.base_sha,
-        patch_digest=metadata.patch_digest,
-        config_digest=config_digest(config),
-        worktree=str(worktree),
-    ).write(directory / "verified.json")
+        worktree = _prepare_verified_worktree(
+            config,
+            metadata,
+            restored / "candidate.patch",
+            env=env,
+        )
+        try:
+            VerificationAttestation(
+                candidate_id=metadata.candidate_id,
+                run_id=metadata.run_id,
+                base_sha=metadata.base_sha,
+                patch_digest=metadata.patch_digest,
+                config_digest=config_digest(config),
+            ).write(directory / "verified.json")
+        finally:
+            _remove_worktree(
+                config,
+                worktree,
+                delete_branch=True,
+                branch=metadata.branch,
+            )
     output = HostedOutputs(
         stage="verify",
         run_id=run_id,
@@ -868,24 +1160,53 @@ def _publish_stage(
         )
     resume = ResumeInput.from_environment(env)
     context = configure(config)
+    expected_candidate = env.get("TOUCHSTONE_EXPECTED_CANDIDATE_ID", "").strip()
 
-    if resume.candidate_id and resume.decision in {"approve", "close"}:
+    if resume.candidate_id and resume.decision == "reanalyze" and not expected_candidate:
+        projection = context.ledger.projection(resume.candidate_id)
+        if projection is None or projection.pr is None or not projection.head_sha:
+            raise CandidateIntegrityError("reanalysis source is not a parked candidate")
+        lifecycle = RepositoryLifecycle(
+            context.forge,
+            context.ledger,
+            reap_after_hours=config.forge.reap_after_hours,
+            executor=context.executor,
+        )
+        resumed = lifecycle.resume(
+            ResumeRequest(
+                finding_id=resume.candidate_id,
+                pr=projection.pr,
+                decision="reanalyze",
+                reviewed_head_sha=projection.head_sha,
+                lineage=resume.candidate_id,
+            )
+        )
+        if resumed.outcome != "reanalyze":
+            result = RunResult(
+                RunOutcome.BLOCKED if resumed.outcome == "held" else RunOutcome.FAILED,
+                reason_code="resume-verification",
+                detail=resumed.detail,
+            )
+        else:
+            result = RunResult(
+                RunOutcome.COMPLETED,
+                lifecycle=ChangeState.CLOSED,
+                candidate_id=resume.candidate_id,
+                pr_number=resumed.pr,
+            )
+    elif resume.candidate_id and resume.decision in {"approve", "close"}:
+        projection = context.ledger.projection(resume.candidate_id)
+        if projection is None or projection.pr is None or not projection.head_sha:
+            raise CandidateIntegrityError("resume candidate is not a parked publication")
         verified_resume = _read_json_object(root / "verified" / "resume.json")
         if verified_resume != {
             "candidate_id": resume.candidate_id,
             "decision": resume.decision,
+            "head_sha": projection.head_sha,
             "config_digest": config_digest(config),
             "run_id": run_id,
         }:
             raise CandidateIntegrityError("resume decision lacks an exact verification attestation")
-        projection = context.ledger.projection(resume.candidate_id)
-        if projection is None or projection.pr is None or not projection.head_sha:
-            raise CandidateIntegrityError("resume candidate is not a parked publication")
-        if resume.decision == "approve":
-            from touchstone import runner
-
-            runner._health_gate(config)
-            runner._publication_gate(config, config.loop(projection.loop))
         lifecycle = RepositoryLifecycle(
             context.forge,
             context.ledger,
@@ -935,45 +1256,56 @@ def _publish_stage(
                 expected_lineage=expected_lineage,
             )
             attestation = VerificationAttestation.read(root / "verified" / "verified.json")
-            expected_worktree = (Path(config.state_dir) / "publish-worktree").resolve()
             if (
                 attestation.candidate_id != metadata.candidate_id
                 or attestation.run_id != metadata.run_id
                 or attestation.base_sha != metadata.base_sha
                 or attestation.patch_digest != metadata.patch_digest
                 or attestation.config_digest != config_digest(config)
-                or Path(attestation.worktree).resolve() != expected_worktree
             ):
                 raise CandidateIntegrityError(
                     "verification attestation does not match the candidate"
                 )
-            _verify_staged_worktree(config, metadata, expected_worktree)
+            publication_worktree = _materialize_publication_worktree(
+                config,
+                metadata,
+                restored / "candidate.patch",
+            )
             if metadata.resume_candidate_id and metadata.resume_decision == "reanalyze":
-                previous = Ledger(Path(config.state_dir) / "ledger.jsonl").projection(
-                    metadata.resume_candidate_id
-                )
-                if previous is None or previous.pr is None or not previous.head_sha:
-                    raise CandidateIntegrityError("reanalysis source is not a parked candidate")
-                lifecycle = RepositoryLifecycle(
-                    context.forge,
-                    context.ledger,
-                    reap_after_hours=config.forge.reap_after_hours,
-                    executor=context.executor,
-                )
-                closed = lifecycle.resume(
-                    ResumeRequest(
-                        finding_id=previous.finding_id,
-                        pr=previous.pr,
-                        decision="reanalyze",
-                        reviewed_head_sha=previous.head_sha,
-                        lineage=previous.finding_id,
+                try:
+                    previous = Ledger(Path(config.state_dir) / "ledger.jsonl").projection(
+                        metadata.resume_candidate_id
                     )
-                )
-                if closed.outcome != "reanalyze":
-                    raise CandidateIntegrityError(
-                        "could not close the prior candidate for reanalysis"
+                    if previous is None or previous.pr is None or not previous.head_sha:
+                        raise CandidateIntegrityError("reanalysis source is not a parked candidate")
+                    lifecycle = RepositoryLifecycle(
+                        context.forge,
+                        context.ledger,
+                        reap_after_hours=config.forge.reap_after_hours,
+                        executor=context.executor,
                     )
-            result = _publish_verified_candidate(config, metadata, expected_worktree)
+                    closed = lifecycle.resume(
+                        ResumeRequest(
+                            finding_id=previous.finding_id,
+                            pr=previous.pr,
+                            decision="reanalyze",
+                            reviewed_head_sha=previous.head_sha,
+                            lineage=previous.finding_id,
+                        )
+                    )
+                    if closed.outcome != "reanalyze":
+                        raise CandidateIntegrityError(
+                            "could not close the prior candidate for reanalysis"
+                        )
+                except Exception:
+                    _remove_worktree(
+                        config,
+                        publication_worktree,
+                        delete_branch=True,
+                        branch=metadata.branch,
+                    )
+                    raise
+            result = _publish_verified_candidate(config, metadata, publication_worktree)
 
     _write_state_bundle(
         config,
@@ -1001,10 +1333,152 @@ def _prepare_verified_worktree(
     config: Config,
     metadata: CandidateMetadata,
     patch: Path,
+    *,
+    env: Mapping[str, str],
 ) -> Path:
     from touchstone import runner
     from touchstone.nodes.context import configure
+    from touchstone.validation import validate_affected
+
+    context = configure(config)
+    worktree = _materialize_publication_worktree(config, metadata, patch)
+    try:
+        runner._health_gate(config)
+        runner._publication_gate(config, config.loop(metadata.loop))
+        preparation = _reuse_prepared_dependencies(
+            config,
+            worktree,
+            stage="verify",
+            targets=config.loop(metadata.loop).targets,
+            env=env,
+        )
+        if preparation:
+            raise CandidateIntegrityError(
+                f"candidate cannot reuse the credential-free preparation: {preparation}"
+            )
+        validation = validate_affected(
+            config,
+            config.loop(metadata.loop).targets,
+            context.executor,
+            repository=worktree,
+        )
+        if validation.blocked:
+            raise CandidateIntegrityError("candidate failed credential-free publication validation")
+        _verify_staged_worktree(config, metadata, worktree)
+        return worktree
+    except Exception:
+        _remove_worktree(
+            config,
+            worktree,
+            delete_branch=True,
+            branch=metadata.branch,
+        )
+        raise
+
+
+def _validate_resume_candidate(
+    config: Config,
+    projection: Any,
+    context: Any,
+    env: Mapping[str, str],
+) -> None:
+    from touchstone import runner
     from touchstone.validation import validate
+
+    pull = context.forge.pull(projection.pr)
+    if (
+        pull is None
+        or pull.closed
+        or pull.merged_at
+        or pull.head_sha != projection.head_sha
+        or pull.branch != projection.branch
+    ):
+        raise CandidateIntegrityError("parked candidate head changed before approval")
+    worktree = _checkout_resume_worktree(config, projection, context, env)
+    try:
+        runner._health_gate(config)
+        runner._publication_gate(config, config.loop(projection.loop))
+        # A checked-out parked head carries no worktree modification to
+        # attribute, so approval revalidates every configured Loop Target.
+        report = validate(
+            config,
+            config.loop(projection.loop).targets,
+            context.executor,
+            repository=worktree,
+        )
+        if report.blocked:
+            raise CandidateIntegrityError("parked candidate failed approval validation")
+    finally:
+        _remove_worktree(config, worktree)
+
+
+def _checkout_resume_worktree(
+    config: Config,
+    projection: Any,
+    context: Any,
+    env: Mapping[str, str],
+) -> Path:
+    if not _BRANCH.fullmatch(projection.branch) or not re.fullmatch(
+        r"[0-9a-f]{40}", projection.head_sha
+    ):
+        raise CandidateIntegrityError("parked candidate Git identity is invalid")
+    worktree = (Path(config.state_dir) / "resume-verify-worktree").resolve()
+    _remove_worktree(config, worktree)
+    git_environment = _trusted_git_environment(env)
+    fetched = context.executor.run(
+        [
+            "git",
+            "-C",
+            config.execution_repo,
+            "-c",
+            "protocol.ext.allow=never",
+            "-c",
+            "credential.helper=",
+            "-c",
+            "credential.helper=!gh auth git-credential",
+            "fetch",
+            "--no-tags",
+            "--depth=1",
+            f"https://github.com/{config.forge.slug}.git",
+            f"refs/heads/{projection.branch}",
+        ],
+        timeout=180,
+        env=git_environment,
+    )
+    if not fetched.ok:
+        raise CandidateIntegrityError("could not fetch the exact parked candidate head")
+    fetched_head = context.executor.run(
+        ["git", "-C", config.execution_repo, "rev-parse", "FETCH_HEAD"],
+        timeout=60,
+        env=git_environment,
+    )
+    if not fetched_head.ok or fetched_head.stdout.strip() != projection.head_sha:
+        raise CandidateIntegrityError("fetched parked candidate head does not match the ledger")
+    added = context.executor.run(
+        [
+            "git",
+            "-C",
+            config.execution_repo,
+            "worktree",
+            "add",
+            "--detach",
+            str(worktree),
+            projection.head_sha,
+        ],
+        timeout=180,
+        env=git_environment,
+    )
+    if not added.ok:
+        raise CandidateIntegrityError("could not check out the parked candidate head")
+    return worktree
+
+
+def _materialize_publication_worktree(
+    config: Config,
+    metadata: CandidateMetadata,
+    patch: Path,
+) -> Path:
+    from touchstone.nodes.context import configure
 
     context = configure(config)
     worktree = (Path(config.state_dir) / "publish-worktree").resolve()
@@ -1032,16 +1506,6 @@ def _prepare_verified_worktree(
         )
         if not applied.ok:
             raise CandidateIntegrityError("could not apply and stage the candidate patch")
-        runner._health_gate(config)
-        runner._publication_gate(config, config.loop(metadata.loop))
-        validation = validate(
-            config,
-            config.loop(metadata.loop).targets,
-            context.executor,
-            repository=worktree,
-        )
-        if validation.blocked:
-            raise CandidateIntegrityError("candidate failed credential-free publication validation")
         _verify_staged_worktree(config, metadata, worktree)
         return worktree
     except Exception:
@@ -1098,6 +1562,7 @@ def _publish_verified_candidate(
             "verdict_reason": metadata.verdict_reason,
             "escalation": metadata.escalation,
             "pre_staged": True,
+            "isolated_push": True,
         }
         payload = publish._publish_verified(state)
         legacy = str(payload.get("outcome") or "failed")
@@ -1142,17 +1607,14 @@ def _snapshot_stage(
         + sorted(inputs.rglob("analysis-state.bundle.json"), reverse=True)
         + [root / "publish" / "publish-state.bundle.json"]
         + [root / "candidate" / "analysis-state.bundle.json"]
+        + sorted(inputs.rglob("state.bundle.json"), reverse=True)
+        + [root / "prepare" / "state.bundle.json"]
     )
     source = next((path for path in candidates if path.is_file()), None)
+    claim: Any | None = None
+    analyzed_at: Any | None = None
     if source is None:
         final_result = RunResult(RunOutcome.NO_CHANGE, reason_code="clean-start")
-        _write_state_bundle(
-            config,
-            directory / "state.bundle.json",
-            key=key,
-            run_id=run_id,
-            result=final_result,
-        )
         clean_start = "no-stage-state"
     else:
         reason = _restore_state_bundle(config, source, key)
@@ -1166,36 +1628,158 @@ def _snapshot_stage(
         if pending_path is not None:
             claim, analysis_result, analyzed_at = _read_pending_finalization(pending_path)
             final_result = _hosted_final_result(env, analysis_result)
-            from touchstone.scheduling.store import DueStore
-
-            DueStore(Path(config.state_dir) / "due.sqlite").finish(
-                claim,
-                final_result,
-                now=analyzed_at,
-                snapshot=f"github:{run_id}",
-            )
         else:
             final_result = _hosted_final_result(
                 env,
                 RunResult(RunOutcome.NO_CHANGE, reason_code="no-pending-slot"),
             )
-        _write_state_bundle(
-            config,
-            directory / "state.bundle.json",
-            key=key,
-            run_id=run_id,
-            result=final_result,
-        )
         clean_start = ""
+    # Reconstruct the partial marker before anything durable records this run,
+    # so the Due Slot and the encrypted snapshot agree that publication is
+    # unresolved rather than merely failed.
+    unrecorded = _record_abrupt_publish_failure(config, root, key=key, env=env)
+    final_result = unrecorded or final_result
+    if claim is not None and analyzed_at is not None:
+        from touchstone.scheduling.store import DueStore
+
+        DueStore(Path(config.state_dir) / "due.sqlite").finish(
+            claim,
+            final_result,
+            now=analyzed_at,
+            snapshot=f"github:{run_id}",
+        )
+    _write_state_bundle(
+        config,
+        directory / "state.bundle.json",
+        key=key,
+        run_id=run_id,
+        result=final_result,
+    )
     output = HostedOutputs(
         stage="snapshot",
         run_id=run_id,
         outcome="completed",
+        loop=env.get("TOUCHSTONE_FINAL_LOOP", "").strip(),
+        candidate_id=final_result.candidate_id,
+        change_state=final_result.lifecycle.value if final_result.lifecycle else "",
+        reason_code=final_result.reason_code,
         clean_start_reason=clean_start,
         should_run=True,
+        partial=final_result.partial,
     )
     output.write(directory / "result.json", env=env)
     return output
+
+
+def _record_abrupt_publish_failure(
+    config: Config,
+    root: Path,
+    *,
+    key: bytes,
+    env: Mapping[str, str],
+) -> RunResult | None:
+    """Keep a partial publication visible when Publish never recorded its own outcome.
+
+    Publish can push a branch or open a pull request and then die before writing
+    its state bundle. Snapshot then restores the older Analysis state, which
+    knows nothing about that remote write. Reconstructing the marker here from
+    the authenticated candidate artifact keeps the next run blocked and gives
+    `touchstone reconcile` the exact branch to inspect.
+    """
+
+    if env.get("TOUCHSTONE_PUBLISH_JOB_RESULT", "").strip() not in {"failure", "cancelled"}:
+        return None
+    metadata = _authenticated_partial_candidate(config, root, key=key, env=env)
+    if metadata is None:
+        return None
+    from touchstone.ledger import Ledger, LifecycleEvent
+
+    ledger = Ledger(Path(config.state_dir) / "ledger.jsonl")
+    if ledger.projection(metadata.candidate_id) is not None:
+        # Publish recorded its own outcome before dying; that row is the truth.
+        return None
+    ledger.append(
+        LifecycleEvent(
+            finding_id=metadata.candidate_id,
+            state=ChangeState.FAILED,
+            title=metadata.finding.get("title") or "Touchstone finding",
+            loop=metadata.loop,
+            risk=metadata.risk,
+            branch=metadata.branch,
+            detail=(
+                "the Publish stage ended without recording an outcome; "
+                f"reconcile branch {metadata.branch} at base {metadata.base_sha}"
+            ),
+            partial=True,
+        )
+    )
+    return RunResult(
+        RunOutcome.FAILED,
+        lifecycle=ChangeState.FAILED,
+        reason_code="hosted-publish-unrecorded",
+        detail=f"partial publication on {metadata.branch}",
+        candidate_id=metadata.candidate_id,
+        partial=True,
+        retryable=True,
+    )
+
+
+def _authenticated_partial_candidate(
+    config: Config,
+    root: Path,
+    *,
+    key: bytes,
+    env: Mapping[str, str],
+) -> CandidateMetadata | None:
+    """Decrypt the exact candidate this run published, or return nothing."""
+
+    identifier = env.get("TOUCHSTONE_FINAL_CANDIDATE_ID", "").strip()
+    loop = env.get("TOUCHSTONE_FINAL_LOOP", "").strip()
+    if not _IDENTIFIER.fullmatch(identifier) or not _IDENTIFIER.fullmatch(loop):
+        return None
+    source = next(
+        (path for path in _candidate_bundle_paths(root) if path.is_file()),
+        None,
+    )
+    if source is None:
+        return None
+    try:
+        bundle = EncryptedBundle.from_json(source.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not compatibility(bundle.manifest, config, loop=loop, lineage=identifier).ok:
+        return None
+    if set(bundle.manifest.files) != {"candidate.json", "candidate.patch"}:
+        return None
+    with tempfile.TemporaryDirectory(prefix="touchstone-partial-") as temporary:
+        destination = Path(temporary)
+        try:
+            decrypt_bundle(bundle, key, destination)
+            metadata = CandidateMetadata.from_json(
+                (destination / "candidate.json").read_text(encoding="utf-8")
+            )
+            patch = destination / "candidate.patch"
+            digest = f"sha256:{hashlib.sha256(patch.read_bytes()).hexdigest()}"
+        except (CandidateIntegrityError, OSError, ValueError):
+            return None
+    if (
+        metadata.candidate_id != identifier
+        or metadata.loop != loop
+        or metadata.repository != config.forge.slug
+        or metadata.run_id != bundle.manifest.run_id
+        or digest != metadata.patch_digest
+    ):
+        return None
+    return metadata
+
+
+def _candidate_bundle_paths(root: Path) -> tuple[Path, ...]:
+    inputs = root / "inputs"
+    return (
+        inputs / "candidate" / "candidate.bundle.json",
+        *sorted(inputs.rglob("candidate.bundle.json")),
+        root / "candidate" / "candidate.bundle.json",
+    )
 
 
 def _write_pending_finalization(
@@ -1398,9 +1982,11 @@ def _download_artifact_file(
     env: Mapping[str, str],
     *,
     artifact_prefix: str,
+    artifact_name: str = "",
     member: str,
     destination: Path,
     lineage: str = "",
+    require_compatible_state: bool = False,
 ) -> str:
     token = env.get("GH_TOKEN", "") or env.get("GITHUB_TOKEN", "")
     repository = env.get("GITHUB_REPOSITORY", config.forge.slug)
@@ -1414,8 +2000,12 @@ def _download_artifact_file(
         "User-Agent": "touchstone-agent",
         "X-GitHub-Api-Version": "2022-11-28",
     }
+    query = {"per_page": "100"}
+    if artifact_name:
+        query["name"] = artifact_name
     request = urllib.request.Request(
-        f"https://api.github.com/repos/{repository}/actions/artifacts?per_page=100",
+        f"https://api.github.com/repos/{repository}/actions/artifacts?"
+        f"{urllib.parse.urlencode(query)}",
         headers=headers,
     )
     try:
@@ -1428,7 +2018,11 @@ def _download_artifact_file(
         artifact
         for artifact in artifacts
         if isinstance(artifact, dict)
-        and str(artifact.get("name", "")).startswith(artifact_prefix)
+        and (
+            artifact.get("name") == artifact_name
+            if artifact_name
+            else str(artifact.get("name", "")).startswith(artifact_prefix)
+        )
         and not artifact.get("expired", False)
         and isinstance(artifact.get("archive_download_url"), str)
     ]
@@ -1455,12 +2049,26 @@ def _download_artifact_file(
                     bundle = EncryptedBundle.from_json(raw)
                     if lineage and bundle.manifest.lineage != lineage:
                         continue
+                    if (
+                        require_compatible_state
+                        and not compatibility(
+                            bundle.manifest,
+                            config,
+                            loop="__repository__",
+                            lineage=None,
+                        ).ok
+                    ):
+                        continue
                     destination.parent.mkdir(parents=True, exist_ok=True)
                     destination.write_text(raw, encoding="utf-8")
                     return ""
         except (UnicodeDecodeError, ValueError, zipfile.BadZipFile):
             continue
     return "artifact-not-found"
+
+
+def _state_artifact_name(config: Config) -> str:
+    return f"touchstone-state-{config_digest(config).removeprefix('sha256:')}"
 
 
 def _remove_worktree(
@@ -1515,45 +2123,58 @@ def _state_key(env: Mapping[str, str]) -> bytes:
         raise CandidateIntegrityError(str(exc)) from exc
 
 
-def _ensure_engine(config: Config, env: Mapping[str, str]) -> None:
+def _ensure_engine(
+    config: Config,
+    env: Mapping[str, str],
+    *,
+    allow_install: bool = False,
+) -> None:
     engine = config.engine.name
-    if shutil.which(engine):
+    github_actions = env.get("GITHUB_ACTIONS", "").lower() == "true"
+    if not github_actions and shutil.which(engine):
         return
-    if env.get("GITHUB_ACTIONS", "").lower() != "true":
+    if not github_actions:
         raise ConfigError(
             f"{engine} CLI is unavailable; install it or run this stage in GitHub Actions"
         )
     npm = shutil.which("npm")
     if npm is None:
         raise ConfigError("npm is required to install the configured hosted agent runtime")
-    if engine == "codex":
-        package = "@openai/codex"
-        version = config.actions.codex_cli_version
-        version_key = "codex_cli_version"
-    else:
-        package = "@anthropic-ai/claude-code"
-        version = config.actions.claude_code_version
-        version_key = "claude_code_version"
-    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?", version):
-        raise ConfigError(f"actions.{version_key} must be an exact semantic version")
+    package = _AGENT_PACKAGES[engine]
+    action_path_raw = env.get("GITHUB_ACTION_PATH", "").strip()
+    if not action_path_raw:
+        raise ConfigError("GITHUB_ACTION_PATH is required to load the locked agent runtime")
+    action_path = Path(action_path_raw).expanduser().resolve()
+    runtime_source = action_path / "agent-runtime" / engine
+    manifest_source = runtime_source / "package.json"
+    lock_source = runtime_source / "package-lock.json"
+    version = _locked_agent_version(engine, package, manifest_source, lock_source)
     runner_temp = Path(env.get("RUNNER_TEMP", tempfile.gettempdir())).expanduser().resolve()
     prefix = runner_temp / "touchstone-agent-runtime" / f"{engine}-{version}"
-    binary = prefix / "bin" / engine
-    if not binary.is_file():
-        import subprocess
+    binary = prefix / "node_modules" / ".bin" / engine
+    import subprocess
 
+    if not binary.is_file():
+        if not allow_install:
+            raise ConfigError(
+                f"{engine} CLI {version} was not prepared by the secret-free install step"
+            )
+        if prefix.exists():
+            shutil.rmtree(prefix)
+        prefix.mkdir(parents=True)
+        shutil.copy2(manifest_source, prefix / "package.json")
+        shutil.copy2(lock_source, prefix / "package-lock.json")
         installation_environment = _agent_install_environment(env, prefix)
         completed = subprocess.run(
             [
                 npm,
-                "install",
-                "--global",
-                "--prefix",
-                str(prefix),
+                "ci",
+                "--ignore-scripts",
+                "--include=optional",
                 "--no-audit",
                 "--no-fund",
-                f"{package}@{version}",
             ],
+            cwd=prefix,
             capture_output=True,
             text=True,
             timeout=300,
@@ -1562,7 +2183,61 @@ def _ensure_engine(config: Config, env: Mapping[str, str]) -> None:
         )
         if completed.returncode != 0 or not binary.is_file():
             raise ConfigError(f"could not install {engine} CLI {version}")
+        if engine == "claude":
+            node = shutil.which("node")
+            postinstall = prefix / "node_modules" / package / "install.cjs"
+            if node is None or not postinstall.is_file():
+                raise ConfigError("the locked Claude Code postinstall is unavailable")
+            prepared = subprocess.run(
+                [node, str(postinstall)],
+                cwd=postinstall.parent,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+                env=installation_environment,
+            )
+            if prepared.returncode != 0:
+                raise ConfigError("could not prepare the locked Claude Code native binary")
+    probe_environment = _agent_install_environment(env, prefix)
+    probe = subprocess.run(
+        [str(binary), "--version"],
+        cwd=prefix,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+        env=probe_environment,
+    )
+    if probe.returncode != 0 or version not in f"{probe.stdout}\n{probe.stderr}":
+        raise ConfigError(f"could not execute {engine} CLI {version} from its Action lock")
     os.environ["PATH"] = f"{binary.parent}{os.pathsep}{os.environ.get('PATH', '')}"
+
+
+def _locked_agent_version(
+    engine: str,
+    package: str,
+    manifest_source: Path,
+    lock_source: Path,
+) -> str:
+    """Derive the exact Agent CLI version the Action itself committed."""
+
+    try:
+        manifest = json.loads(manifest_source.read_text(encoding="utf-8"))
+        lock = json.loads(lock_source.read_text(encoding="utf-8"))
+        declared = str(manifest["dependencies"][package])
+        requested = str(lock["packages"][""]["dependencies"][package])
+        resolved = str(lock["packages"][f"node_modules/{package}"]["version"])
+    except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise ConfigError(f"the pinned {engine} runtime lock is missing or invalid") from exc
+    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?", declared):
+        raise ConfigError(f"the pinned {engine} runtime manifest must name an exact version")
+    if declared != requested or declared != resolved:
+        raise ConfigError(
+            f"the pinned {engine} runtime manifest ({declared}) and lock "
+            f"({requested}/{resolved}) disagree for {package}"
+        )
+    return declared
 
 
 def _agent_install_environment(env: Mapping[str, str], prefix: Path) -> dict[str, str]:
@@ -1578,6 +2253,31 @@ def _agent_install_environment(env: Mapping[str, str], prefix: Path) -> dict[str
     allowed["HOME"] = str(home)
     allowed["npm_config_cache"] = str(cache)
     allowed["npm_config_userconfig"] = os.devnull
+    return allowed
+
+
+def _trusted_git_environment(env: Mapping[str, str]) -> dict[str, str]:
+    allowed = {
+        key: value
+        for key, value in env.items()
+        if key
+        in {
+            "GH_TOKEN",
+            "HOME",
+            "LANG",
+            "LC_ALL",
+            "LC_CTYPE",
+            "PATH",
+            "SYSTEMROOT",
+            "TEMP",
+            "TMP",
+            "TMPDIR",
+            "TZ",
+        }
+        and value
+    }
+    allowed["GIT_CONFIG_NOSYSTEM"] = "1"
+    allowed["GIT_TERMINAL_PROMPT"] = "0"
     return allowed
 
 
@@ -1637,7 +2337,10 @@ __all__ = [
     "CandidateIntegrityError",
     "CandidateMetadata",
     "HostedOutputs",
+    "PreparationAttestation",
     "ResumeInput",
+    "install_agent_runtime",
+    "install_stage",
     "run_stage",
     "validate_stage_environment",
     "verify_candidate",

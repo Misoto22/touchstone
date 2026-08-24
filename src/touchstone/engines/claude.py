@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from touchstone.engines.base import Session
+from touchstone.engines.base import Session, engine_environment
 from touchstone.execution import Executor
 
 
@@ -67,7 +67,12 @@ class ClaudeEngine:
             *self._config.engine.extra_args,
             brief,
         ]
-        result = self._exec.run(argv, cwd=worktree, timeout=self._config.engine.timeout_seconds)
+        result = self._exec.run(
+            argv,
+            cwd=worktree,
+            timeout=self._config.engine.timeout_seconds,
+            env=engine_environment(self.name),
+        )
         self._exec.run(["rm", "-f", settings_path], timeout=30)
         cost, _ = _payload(result.stdout)
         return Session(
@@ -99,7 +104,12 @@ class ClaudeEngine:
             *self._config.engine.extra_args,
             brief,
         ]
-        result = self._exec.run(argv, cwd=worktree, timeout=self._config.engine.timeout_seconds)
+        result = self._exec.run(
+            argv,
+            cwd=worktree,
+            timeout=self._config.engine.timeout_seconds,
+            env=engine_environment(self.name),
+        )
         cost, text = _payload(result.stdout)
         return Session(
             ok=result.ok and bool(text.strip()),

@@ -549,30 +549,44 @@ def _actions_checks(config: Config, context: DoctorContext) -> list[CheckResult]
             else "Run 'touchstone actions setup' and add the model key.",
         )
     )
-    installation = context.actions.installation()
-    permissions = installation.get("permissions") if isinstance(installation, dict) else None
-    required_permissions = {
-        "actions": "read",
-        "contents": "write",
-        "issues": "write",
-        "pull_requests": "write",
-    }
+    installation = _actions_setup_attestation(config)
+    attested_only = installation is not None
+    if installation is None:
+        legacy_reader = getattr(context.actions, "installation", None)
+        if callable(legacy_reader):
+            try:
+                installation = legacy_reader()
+            except TypeError:
+                installation = None
+    from touchstone.hosted.app_setup import permissions_are_exact
+
     app_ok = (
         isinstance(installation, dict)
         and installation.get("repository_selection") == "selected"
-        and isinstance(permissions, dict)
-        and all(permissions.get(name) == access for name, access in required_permissions.items())
+        and permissions_are_exact(installation.get("permissions"))
     )
-    checks.append(
-        CheckResult(
-            "actions.app",
-            "PASS" if app_ok else "FAIL",
-            "publishing App is selected-repository scoped with the expected permissions"
-            if app_ok
-            else "publishing App installation or permissions are incomplete",
-            None if app_ok else "Rerun 'touchstone actions setup --check' and repair the App.",
+    if app_ok and attested_only:
+        checked_at = str(installation.get("_attested_at") or "setup time")
+        checks.append(
+            CheckResult(
+                "actions.app",
+                "WARN",
+                f"publishing App matched the exact required scope at {checked_at}; "
+                "live state was not reverified",
+                "Run the hosted workflow to prove the current App installation can mint a token.",
+            )
         )
-    )
+    else:
+        checks.append(
+            CheckResult(
+                "actions.app",
+                "PASS" if app_ok else "FAIL",
+                "publishing App is selected-repository scoped with the exact permissions"
+                if app_ok
+                else "publishing App installation scope or permissions do not match exactly",
+                None if app_ok else "Rerun 'touchstone actions setup --check' and repair the App.",
+            )
+        )
     if config.actions.approval_environment:
         environment = context.actions.environment(config.actions.approval_environment)
         checks.append(
@@ -588,6 +602,29 @@ def _actions_checks(config: Config, context: DoctorContext) -> list[CheckResult]
             )
         )
     return checks
+
+
+def _actions_setup_attestation(config: Config) -> dict[str, object] | None:
+    path = Path(config.state_dir).expanduser().resolve() / "actions-setup.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        return None
+    if (
+        not isinstance(payload, dict)
+        or payload.get("repository") != config.forge.slug
+        or payload.get("state") != "complete"
+        or not isinstance(payload.get("installation_id"), int)
+        or not isinstance(payload.get("permissions"), dict)
+    ):
+        return None
+    return {
+        "id": payload["installation_id"],
+        "app_id": payload.get("app_id"),
+        "repository_selection": payload.get("repository_selection"),
+        "permissions": payload["permissions"],
+        "_attested_at": payload.get("updated_at", ""),
+    }
 
 
 def _actions_schedule_inactivity_check(

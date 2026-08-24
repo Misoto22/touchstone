@@ -109,8 +109,6 @@ class ActionsConfig:
     wake_minutes: int = 15
     artifact_retention_days: int = 90
     node_version: str = "24"
-    codex_cli_version: str = "0.149.1"
-    claude_code_version: str = "2.1.241"
     action_sha: str = ""
     approval_environment: str = ""
     auto_merge: bool = False
@@ -249,12 +247,28 @@ _ACTIONS = {
     "wake_minutes",
     "artifact_retention_days",
     "node_version",
-    "codex_cli_version",
-    "claude_code_version",
     "action_sha",
     "approval_environment",
     "auto_merge",
 }
+
+
+_RETIRED_ACTIONS = ("codex_cli_version", "claude_code_version")
+
+
+def _retired_actions_keys(actions: dict[str, Any]) -> None:
+    """Name the exact removed keys instead of reporting a bare unknown key.
+
+    A repository initialized before these were retired still carries them, and
+    "unknown configuration key" alone does not tell the operator that the Agent
+    CLI version now comes from the Action's own committed lockfile.
+    """
+    present = [key for key in _RETIRED_ACTIONS if key in actions]
+    if present:
+        raise ConfigError(
+            f"actions.{present[0]} was removed; the hosted Agent CLI version now comes from "
+            "the Action's committed npm lockfile. Delete this key from [actions]."
+        )
 
 
 def _unknown(table: dict[str, Any], known: set[str], where: str) -> None:
@@ -332,6 +346,7 @@ def _validate(raw: dict[str, Any]) -> None:
     _unknown(execution, _EXECUTION, "execution")
     _unknown(_table(execution, "ssh"), _SSH, "execution.ssh")
     _unknown(git, _GIT, "git")
+    _retired_actions_keys(actions)
     _unknown(actions, _ACTIONS, "actions")
     _string(project, "path", "project", required=True)
     if "state_dir" in raw and not isinstance(raw["state_dir"], str):
@@ -362,8 +377,6 @@ def _validate(raw: dict[str, Any]) -> None:
     for key in (
         "visibility",
         "node_version",
-        "codex_cli_version",
-        "claude_code_version",
         "action_sha",
         "approval_environment",
     ):
@@ -381,12 +394,6 @@ def _validate(raw: dict[str, Any]) -> None:
     node_version = actions.get("node_version", "24")
     if not re.fullmatch(r"[0-9]+(?:\.[0-9]+(?:\.[0-9]+)?)?", node_version):
         raise ConfigError("actions.node_version must be a numeric Node.js release")
-    for key in ("codex_cli_version", "claude_code_version"):
-        value = actions.get(key)
-        if value is not None and not re.fullmatch(
-            r"[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?", value
-        ):
-            raise ConfigError(f"actions.{key} must be an exact semantic version")
     for name, value in loops.items():
         if not isinstance(value, dict):
             raise ConfigError(f"[loop.{name}] must be a table")
@@ -552,8 +559,6 @@ def _build_config(
             ),
             artifact_retention_days=int(actions_raw.get("artifact_retention_days", 90)),
             node_version=str(actions_raw.get("node_version", "24")),
-            codex_cli_version=str(actions_raw.get("codex_cli_version", "0.149.1")),
-            claude_code_version=str(actions_raw.get("claude_code_version", "2.1.241")),
             action_sha=str(actions_raw.get("action_sha", "")),
             approval_environment=str(actions_raw.get("approval_environment", "")),
             auto_merge=bool(actions_raw.get("auto_merge", False)),

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import PurePosixPath
 
-from touchstone.engines.base import Session
+from touchstone.engines.base import Session, engine_environment
 from touchstone.execution import Executor
 
 
@@ -47,7 +47,11 @@ class CodexEngine:
             sandbox="workspace-write",
         )
         argv.append(brief)
-        result = self._exec.run(argv, timeout=self._config.engine.timeout_seconds)
+        result = self._exec.run(
+            argv,
+            timeout=self._config.engine.timeout_seconds,
+            env=engine_environment(self.name),
+        )
         return Session(
             ok=result.ok,
             text=result.stdout,
@@ -67,7 +71,11 @@ class CodexEngine:
             sandbox="read-only",
         )
         argv += ["--output-schema", schema_path, "--output-last-message", answer_path, brief]
-        result = self._exec.run(argv, timeout=self._config.engine.timeout_seconds)
+        result = self._exec.run(
+            argv,
+            timeout=self._config.engine.timeout_seconds,
+            env=engine_environment(self.name),
+        )
         answer = self._exec.read_text(answer_path) or ""
         # Same reason: these are how this engine is asked and answered, not
         # anything the repository should carry.

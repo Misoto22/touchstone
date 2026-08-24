@@ -34,6 +34,9 @@ inputs:
   final-candidate-id:
     description: Final candidate identity used only by Snapshot
     required: false
+  final-loop:
+    description: Loop identity exported by Analysis and used only by Snapshot
+    required: false
   final-change-state:
     description: Final lifecycle state used only by Snapshot
     required: false
@@ -70,7 +73,7 @@ runs:
   steps:
     - name: Install pinned Touchstone source
       shell: bash
-      run: '$GITHUB_ACTION_PATH/scripts/action-entrypoint.sh install'
+      run: '$GITHUB_ACTION_PATH/scripts/action-entrypoint.sh install "${{ inputs.stage }}"'
     - name: Run Touchstone stage
       id: runtime
       shell: bash
@@ -85,6 +88,7 @@ runs:
         TOUCHSTONE_DECISION: ${{ inputs.decision }}
         TOUCHSTONE_FINAL_OUTCOME: ${{ inputs.final-outcome }}
         TOUCHSTONE_FINAL_CANDIDATE_ID: ${{ inputs.final-candidate-id }}
+        TOUCHSTONE_FINAL_LOOP: ${{ inputs.final-loop }}
         TOUCHSTONE_FINAL_CHANGE_STATE: ${{ inputs.final-change-state }}
         TOUCHSTONE_FINAL_REASON_CODE: ${{ inputs.final-reason-code }}
         TOUCHSTONE_FINAL_PARTIAL: ${{ inputs.final-partial }}

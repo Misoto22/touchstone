@@ -5,6 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
+from touchstone.execution.base import Result
 from touchstone.execution.local import LocalExecutor
 from touchstone.forge import ForgeUnavailable, OperationResult, PullState
 from touchstone.ledger import Ledger, finding_id
@@ -197,7 +198,7 @@ def test_dry_run_rehearsal_runs_preparation_and_validation_before_diff(
         ),
     )
     monkeypatch.setattr(
-        "touchstone.validation.validate",
+        "touchstone.validation.validate_affected",
         lambda *_args, **_kwargs: (
             calls.append("validate") or SimpleNamespace(blocked=True, results=())
         ),
@@ -241,10 +242,51 @@ def test_verified_publication_runs_no_repository_hooks_or_staging_with_write_tok
     assert "--no-verify" in push
 
 
+def test_isolated_publication_ignores_persisted_remote_and_scrubs_state_key(
+    tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    class RecordingExecutor:
+        where = "local"
+
+        def __init__(self) -> None:
+            self.calls: list[tuple[list[str], dict[str, str] | None]] = []
+
+        def run(self, argv, **kwargs):  # type: ignore[no-untyped-def]
+            self.calls.append((argv, kwargs.get("env")))
+            code = 1 if "--quiet" in argv and "diff" in argv else 0
+            return Result(code, "", "")
+
+    monkeypatch.setenv("GH_TOKEN", "publish-token")
+    monkeypatch.setenv("TOUCHSTONE_STATE_KEY", "state-secret")
+    executor = RecordingExecutor()
+    lifecycle = RepositoryLifecycle(
+        MemoryForge(), Ledger(tmp_path / "events.jsonl"), reap_after_hours=6, executor=executor
+    )
+    request = replace(
+        _request(tmp_path),
+        pre_staged=True,
+        repository="acme/widgets",
+        isolated_push=True,
+    )
+
+    assert lifecycle._commit_and_push(request) == ""
+
+    push, environment = next(call for call in executor.calls if "push" in call[0])
+    assert "origin" not in push
+    assert "https://github.com/acme/widgets.git" in push
+    assert "protocol.ext.allow=never" in push
+    assert environment is not None and environment["GH_TOKEN"] == "publish-token"
+    assert "TOUCHSTONE_STATE_KEY" not in environment
+
+
 def test_node_builds_publication_from_project_configuration() -> None:
     context = SimpleNamespace(
         config=SimpleNamespace(
-            forge=SimpleNamespace(default_branch="trunk", escalation_label="ops:review"),
+            forge=SimpleNamespace(
+                slug="acme/widgets",
+                default_branch="trunk",
+                escalation_label="ops:review",
+            ),
             git=SimpleNamespace(author_name="Touchstone Bot", author_email="bot@example.com"),
         ),
         loop=lambda name: SimpleNamespace(name=name, label="automation:audit"),

@@ -15,6 +15,7 @@ from touchstone.profiles.targets import (
     ProjectTarget,
     TargetDiscovery,
     affected_targets,
+    changed_target_scope,
     discover_targets,
 )
 
@@ -29,6 +30,7 @@ __all__ = [
     "TargetDiscovery",
     "ValidationCandidate",
     "affected_targets",
+    "changed_target_scope",
     "detect_profiles",
     "discover_targets",
     "load_catalog",

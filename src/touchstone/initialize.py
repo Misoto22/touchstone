@@ -64,8 +64,12 @@ def initialize(options: InitOptions, executor: Executor) -> InitReport:
         names = ", ".join(str(path) for path in existing)
         raise ConfigError(f"configuration already exists at {names}; pass --force to replace it")
 
-    managers = select_package_managers(found.root, options.package_manager)
     discovery, matches, catalog = detect_repository(found.root, explicit_profiles=options.profiles)
+    managers = select_package_managers(
+        found.root,
+        options.package_manager,
+        target_paths=tuple(target.path for target in discovery.targets),
+    )
     candidates = [
         match
         for target_matches in matches.values()
@@ -89,6 +93,14 @@ def initialize(options: InitOptions, executor: Executor) -> InitReport:
         options,
         found,
         target_ids=tuple(target.id for target in discovery.targets),
+        explicit_profiles_by_target={
+            target.id: tuple(
+                match.profile
+                for match in matches[target.id]
+                if any(evidence.kind == "explicit" for evidence in match.evidence)
+            )
+            for target in discovery.targets
+        },
         wake_minutes=wake_minutes,
     )
     _replace_pair(target, root_text, generated_path, generated.text)
@@ -100,6 +112,7 @@ def render_config(
     discovery: ProjectDiscovery,
     *,
     target_ids: tuple[str, ...] = (),
+    explicit_profiles_by_target: dict[str, tuple[str, ...]] | None = None,
     wake_minutes: int | None = None,
 ) -> str:
     root: dict[str, object] = {
@@ -128,8 +141,6 @@ def render_config(
             "wake_minutes": wake_minutes or (15 if options.visibility == "public" else 60),
             "artifact_retention_days": 90,
             "node_version": "24",
-            "codex_cli_version": "0.149.1",
-            "claude_code_version": "2.1.241",
             "auto_merge": False,
         },
         "loop": {
@@ -141,9 +152,12 @@ def render_config(
             }
         },
     }
-    if options.profiles:
+    selected = explicit_profiles_by_target or {}
+    if any(selected.values()):
         root["target"] = {
-            target_id: {"profiles": list(options.profiles)} for target_id in target_ids
+            target_id: {"profiles": list(profiles)}
+            for target_id, profiles in selected.items()
+            if profiles
         }
     return (
         "# Project-owned Touchstone configuration. Generated stack evidence lives in\n"

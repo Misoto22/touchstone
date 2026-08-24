@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,6 +11,8 @@ from touchstone.hosted.app_setup import (
     SetupOptions,
     build_manifest,
     parse_callback,
+    permissions_are_exact,
+    required_permissions,
 )
 
 
@@ -18,6 +21,7 @@ class FakeGitHub:
         self.fail_secret = fail_secret
         self.secrets: dict[str, bytes] = {}
         self.opened: list[str] = []
+        self.installation_credentials: list[tuple[int, bytes]] = []
 
     def set_actions_secret(self, name: str, value: bytes) -> bool:
         if name == self.fail_secret:
@@ -28,8 +32,10 @@ class FakeGitHub:
     def actions_secret_names(self) -> set[str]:
         return set(self.secrets)
 
-    def installation(self):  # type: ignore[no-untyped-def]
+    def installation(self, app_id: int, private_key: bytes):  # type: ignore[no-untyped-def]
+        self.installation_credentials.append((app_id, private_key))
         return {
+            "id": 7,
             "app_id": 42,
             "repository_selection": "selected",
             "permissions": {
@@ -90,7 +96,7 @@ def test_interrupted_secret_write_never_persists_the_private_key(tmp_path: Path)
         code_provider=lambda _manifest, _state: "manifest-code",
         exchange=lambda _code: _conversion(),
         open_browser=github.opened.append,
-        confirm_installation=lambda _url: False,
+        confirm_installation=lambda _url: True,
     )
 
     report = setup.run(SetupOptions())
@@ -123,9 +129,17 @@ def test_success_pipes_required_secrets_and_confirms_installation(tmp_path: Path
     }
     assert github.secrets["TOUCHSTONE_APP_ID"] == b"42"
     assert github.opened == ["https://github.com/apps/acme-touchstone/installations/new"]
+    assert github.installation_credentials == [(42, _conversion()["pem"].encode())]
     state = (tmp_path / ".touchstone" / "state" / "actions-setup.json").read_text(encoding="utf-8")
     assert "PRIVATE KEY" not in state
     assert "private" not in state.lower()
+    assert '"installation_id": 7' in state
+
+    checked = setup.run(SetupOptions(check=True))
+    assert checked.state == "complete"
+    assert checked.step == "configured-attested"
+    assert "cached" in checked.repair
+    assert len(github.installation_credentials) == 1
 
 
 def test_check_mode_is_read_only(tmp_path: Path) -> None:
@@ -168,8 +182,8 @@ def test_partial_setup_rerun_repairs_recoverable_secret_writes(tmp_path: Path) -
 
 def test_setup_rejects_an_all_repositories_installation(tmp_path: Path) -> None:
     class AllRepositoriesGitHub(FakeGitHub):
-        def installation(self):  # type: ignore[no-untyped-def]
-            installation = super().installation()
+        def installation(self, app_id: int, private_key: bytes):  # type: ignore[no-untyped-def]
+            installation = super().installation(app_id, private_key)
             installation["repository_selection"] = "all"
             return installation
 
@@ -188,3 +202,108 @@ def test_setup_rejects_an_all_repositories_installation(tmp_path: Path) -> None:
     assert report.state == "partial"
     assert report.step == "repository-scope-mismatch"
     assert "selected" in report.repair
+
+
+@pytest.mark.parametrize(
+    "permissions",
+    [
+        pytest.param(
+            {
+                "actions": "read",
+                "administration": "write",
+                "contents": "write",
+                "issues": "write",
+                "pull_requests": "write",
+            },
+            id="extra-administration-write",
+        ),
+        pytest.param(
+            {
+                "actions": "write",
+                "contents": "write",
+                "issues": "write",
+                "pull_requests": "write",
+            },
+            id="stronger-actions-access",
+        ),
+        pytest.param(
+            {
+                "actions": "read",
+                "contents": "write",
+                "issues": "write",
+                "metadata": "write",
+                "pull_requests": "write",
+            },
+            id="stronger-metadata-access",
+        ),
+        pytest.param(
+            {"actions": "read", "contents": "write", "pull_requests": "write"},
+            id="missing-issues",
+        ),
+    ],
+)
+def test_exact_permissions_reject_anything_broader_than_required(
+    permissions: dict[str, str],
+) -> None:
+    assert permissions_are_exact(permissions) is False
+
+
+@pytest.mark.parametrize(
+    "permissions",
+    [
+        pytest.param(required_permissions(), id="exact"),
+        pytest.param({**required_permissions(), "metadata": "read"}, id="implicit-metadata-read"),
+    ],
+)
+def test_exact_permissions_accept_the_required_map(permissions: dict[str, str]) -> None:
+    assert permissions_are_exact(permissions) is True
+
+
+def test_setup_refuses_an_over_permissive_installation(tmp_path: Path) -> None:
+    github = FakeGitHub()
+    github.installation = lambda _app_id, _key: {  # type: ignore[assignment]
+        "id": 7,
+        "app_id": 42,
+        "repository_selection": "selected",
+        "permissions": {**required_permissions(), "administration": "write"},
+    }
+    setup = ActionsSetup(
+        _config(tmp_path),
+        github=github,
+        exchange=lambda _code: _conversion(),
+        code_provider=lambda _manifest, _state: "manifest-code",
+        open_browser=lambda _url: None,
+        confirm_installation=lambda _url: True,
+    )
+
+    report = setup.run(SetupOptions())
+
+    assert report.state == "partial"
+    assert report.step == "permissions-mismatch"
+    assert "exactly" in report.repair
+    assert "TOUCHSTONE_APP_PRIVATE_KEY" not in github.secrets
+
+
+def test_setup_persists_only_the_required_permission_map(tmp_path: Path) -> None:
+    github = FakeGitHub()
+    github.installation = lambda _app_id, _key: {  # type: ignore[assignment]
+        "id": 7,
+        "app_id": 42,
+        "repository_selection": "selected",
+        "permissions": {**required_permissions(), "metadata": "read"},
+    }
+    config = _config(tmp_path)
+    setup = ActionsSetup(
+        config,
+        github=github,
+        exchange=lambda _code: _conversion(),
+        code_provider=lambda _manifest, _state: "manifest-code",
+        open_browser=lambda _url: None,
+        confirm_installation=lambda _url: True,
+    )
+
+    report = setup.run(SetupOptions())
+    persisted = json.loads((config.state_dir / "actions-setup.json").read_text(encoding="utf-8"))
+
+    assert report.state == "complete"
+    assert persisted["permissions"] == required_permissions()

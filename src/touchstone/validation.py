@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import time
@@ -12,8 +13,14 @@ from typing import Literal
 
 from touchstone.config import Config
 from touchstone.execution import Executor
+from touchstone.profiles.targets import (
+    ProjectTarget,
+    TargetDiscovery,
+    changed_target_scope,
+)
 
 ValidationOutcome = Literal["completed", "blocked"]
+_YARN_MODERN_MARKER = ".yarnrc.yml"
 _SECRET_MARKERS = (
     "TOKEN",
     "SECRET",
@@ -54,6 +61,7 @@ class ValidationCommand:
     risk_acknowledged: bool = False
     allow_scripts: bool = False
     allow_build_hooks: bool = False
+    extra_env: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
         if (
@@ -71,6 +79,14 @@ class ValidationCommand:
                 "shell Validation Gates require an explicit shell executable "
                 "and risk acknowledgement"
             )
+        if any(
+            not isinstance(name, str)
+            or not name
+            or not isinstance(value, str)
+            or any(marker in name.upper() for marker in _SECRET_MARKERS)
+            for name, value in self.extra_env
+        ):
+            raise ValueError("Validation Gate extra_env must hold non-secret string pairs")
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,7 +161,7 @@ def run_gate(
             list(command.argv),
             cwd=str(cwd),
             timeout=command.timeout_seconds,
-            env=_sanitized_environment(env or os.environ),
+            env=_sanitized_environment(env or os.environ, extra=command.extra_env),
         )
     except OSError as exc:
         return ValidationResult(
@@ -246,6 +262,135 @@ def validate(
     return ValidationReport(outcome, tuple(results))
 
 
+_MANAGER_LOCKFILES = {
+    "npm": ("package-lock.json", "npm-shrinkwrap.json"),
+    "pnpm": ("pnpm-lock.yaml",),
+    "yarn": ("yarn.lock",),
+    "bun": ("bun.lock", "bun.lockb"),
+    "uv": ("uv.lock",),
+    "poetry": ("poetry.lock",),
+    "pdm": ("pdm.lock",),
+}
+_MANAGER_DIRECTORIES = {
+    "npm": ("node_modules",),
+    "pnpm": ("node_modules",),
+    "yarn": ("node_modules",),
+    "bun": ("node_modules",),
+    "uv": (".venv",),
+    "poetry": (".venv",),
+    "pdm": (".venv", "__pypackages__"),
+}
+
+
+def preparation_lockfiles(config: Config, targets: tuple[str, ...] = ()) -> tuple[str, ...]:
+    """Name every repository-relative lockfile a locked preparation depends on."""
+
+    return _manager_paths(config, targets, _MANAGER_LOCKFILES)
+
+
+def preparation_directories(config: Config, targets: tuple[str, ...] = ()) -> tuple[str, ...]:
+    """Name the repository-relative directories a locked preparation populates."""
+
+    return _manager_paths(config, targets, _MANAGER_DIRECTORIES)
+
+
+def _manager_paths(
+    config: Config,
+    targets: tuple[str, ...],
+    names_by_manager: Mapping[str, tuple[str, ...]],
+) -> tuple[str, ...]:
+    selected = targets or tuple(config.targets)
+    found: list[str] = []
+    for target_id in selected:
+        target = config.targets.get(target_id)
+        if target is None:
+            continue
+        for manager in target.package_managers:
+            for name in names_by_manager.get(manager, ()):
+                value = (target.path / name).as_posix()
+                if value not in found:
+                    found.append(value)
+    return tuple(sorted(found))
+
+
+def affected_validation_targets(
+    config: Config,
+    targets: tuple[str, ...],
+    executor: Executor,
+    *,
+    repository: Path,
+) -> tuple[str, ...]:
+    """Choose which of a Loop's Targets one worktree change actually needs.
+
+    Direct owners and their reverse dependents are validated. A change that
+    cannot be attributed to a narrow Target — a repository-root or otherwise
+    shared edit — widens back to every Target the Loop configures.
+    """
+
+    configured = tuple(targets) or tuple(config.targets)
+    payload = _status(executor, repository.expanduser().resolve())
+    if payload is None:
+        return configured
+    changed = _changed_paths(payload)
+    if not changed:
+        return ()
+    scope, conservative = changed_target_scope(changed, _configured_discovery(config))
+    if conservative:
+        return configured
+    return tuple(target for target in configured if target in scope)
+
+
+def validate_affected(
+    config: Config,
+    targets: tuple[str, ...],
+    executor: Executor,
+    *,
+    repository: Path | None = None,
+) -> ValidationReport:
+    """Run Validation Gates for only the Targets a change can reach."""
+
+    root = (repository or config.repo_path).expanduser().resolve()
+    selected = affected_validation_targets(config, targets, executor, repository=root)
+    if not selected:
+        return ValidationReport("completed", ())
+    return validate(config, selected, executor, repository=root)
+
+
+def _configured_discovery(config: Config) -> TargetDiscovery:
+    """Describe the reviewed Target graph without re-walking the repository."""
+
+    targets = tuple(
+        ProjectTarget(
+            id=target.id,
+            path=target.path,
+            dependencies=tuple(target.dependencies),
+        )
+        for target in config.targets.values()
+    )
+    return TargetDiscovery(targets=targets, candidates=(), excluded=(), warnings=())
+
+
+def _changed_paths(payload: str) -> tuple[str, ...]:
+    """Read repository-relative paths from `git status --porcelain=v1 -z`."""
+
+    entries = payload.split("\0")
+    paths: list[str] = []
+    index = 0
+    while index < len(entries):
+        entry = entries[index]
+        index += 1
+        if len(entry) < 4 or entry[2] != " ":
+            continue
+        status = entry[:2]
+        paths.append(entry[3:])
+        if ("R" in status or "C" in status) and index < len(entries):
+            original = entries[index]
+            index += 1
+            if original:
+                paths.append(original)
+    return tuple(dict.fromkeys(paths))
+
+
 def prepare(
     config: Config,
     targets: tuple[str, ...],
@@ -267,14 +412,33 @@ def prepare(
         ]
         if not requirements:
             continue
+        allow_scripts = any(gate.allow_scripts for gate in requirements)
+        allow_build_hooks = any(gate.allow_build_hooks for gate in requirements)
         managers = target.package_managers or ("",)
         for manager in managers:
-            command = _preparation_command(
-                (manager,) if manager else (),
-                target_id,
-                allow_scripts=any(gate.allow_scripts for gate in requirements),
-                allow_build_hooks=any(gate.allow_build_hooks for gate in requirements),
-            )
+            try:
+                command = _preparation_command(
+                    manager,
+                    target_id,
+                    root=root,
+                    target_path=target.path,
+                    allow_scripts=allow_scripts,
+                    allow_build_hooks=allow_build_hooks,
+                )
+            except ValueError as exc:
+                # A preparation policy that cannot be satisfied is a structured,
+                # fail-closed result rather than a crash inside a hosted stage.
+                results.append(
+                    ValidationResult(
+                        target_id,
+                        getattr(exc, "argv", ()) or (manager or "unknown",),
+                        None,
+                        "",
+                        str(exc),
+                        getattr(exc, "reason", "policy-unsupported"),
+                    )
+                )
+                continue
             results.append(run_gate(root, target.path, command, executor))
     outcome: ValidationOutcome = (
         "blocked" if any(not result.ok for result in results) else "completed"
@@ -282,38 +446,116 @@ def prepare(
     return PreparationReport(outcome, tuple(results))
 
 
+class PreparationPolicyError(ValueError):
+    """A locked preparation policy that this package manager cannot satisfy."""
+
+    def __init__(self, message: str, *, reason: str, argv: tuple[str, ...] = ()) -> None:
+        super().__init__(message)
+        self.reason = reason
+        self.argv = argv
+
+
 def _preparation_command(
-    managers: tuple[str, ...],
+    manager: str,
     target: str,
     *,
+    root: Path,
+    target_path: Path,
     allow_scripts: bool,
     allow_build_hooks: bool,
 ) -> ValidationCommand:
-    if "npm" in managers:
+    """Build one hook-free locked install for a confirmed package manager."""
+
+    extra_env: tuple[tuple[str, str], ...] = ()
+    if manager == "npm":
         argv = ("npm", "ci") + (() if allow_scripts else ("--ignore-scripts",))
-    elif "pnpm" in managers:
+    elif manager == "pnpm":
         argv = ("pnpm", "install", "--frozen-lockfile") + (
             () if allow_scripts else ("--ignore-scripts",)
         )
-    elif "yarn" in managers:
-        argv = ("yarn", "install", "--immutable") + (
-            () if allow_scripts else ("--mode=skip-builds",)
+    elif manager == "bun":
+        argv = ("bun", "install", "--frozen-lockfile") + (
+            () if allow_scripts else ("--ignore-scripts",)
         )
-    elif "uv" in managers:
-        argv = ("uv", "sync", "--frozen") + (() if allow_build_hooks else ("--no-install-project",))
-    elif "poetry" in managers:
-        argv = ("poetry", "install") + (() if allow_build_hooks else ("--no-root",))
-    elif "pdm" in managers:
+    elif manager == "yarn":
+        if _yarn_is_modern(root, target_path):
+            # Berry replaced --frozen-lockfile with --immutable, and skips
+            # package build steps through the install mode rather than a flag.
+            argv = ("yarn", "install", "--immutable") + (
+                () if allow_scripts else ("--mode=skip-build",)
+            )
+        else:
+            argv = ("yarn", "install", "--frozen-lockfile") + (
+                () if allow_scripts else ("--ignore-scripts",)
+            )
+    elif manager == "uv":
+        argv = ("uv", "sync", "--frozen") + (
+            () if allow_build_hooks else ("--no-install-workspace", "--no-build")
+        )
+    elif manager == "pdm":
         argv = ("pdm", "sync", "--frozen-lockfile") + (() if allow_build_hooks else ("--no-self",))
+        if not allow_build_hooks:
+            extra_env = (("PDM_ONLY_BINARY", ":all:"),)
+    elif manager == "poetry":
+        if not allow_build_hooks:
+            # Poetry has no supported switch that guarantees every dependency is
+            # installed without running its build hooks.
+            raise PreparationPolicyError(
+                "hook-free locked preparation is not supported for poetry; "
+                "set allow_build_hooks = true on the Validation Gate to accept "
+                "project build hooks, or select a package manager that can "
+                "install from binaries only",
+                reason="policy-unsupported",
+                argv=("poetry", "install"),
+            )
+        argv = ("poetry", "install")
     else:
-        raise ValueError("locked preparation requires a confirmed package manager")
+        raise PreparationPolicyError(
+            "locked preparation requires a confirmed package manager",
+            reason="policy-unsupported",
+        )
     return ValidationCommand(
         target=target,
         argv=argv,
         timeout_seconds=1200,
         capability="locked-install",
         enabled=True,
+        extra_env=extra_env,
     )
+
+
+def _yarn_is_modern(root: Path, target_path: Path) -> bool:
+    """Detect Yarn Berry from repository-owned evidence only."""
+
+    for directory in _unique_paths(root / target_path, root):
+        if (directory / _YARN_MODERN_MARKER).is_file():
+            return True
+        major = _declared_yarn_major(directory / "package.json")
+        if major is not None:
+            return major >= 2
+    return False
+
+
+def _unique_paths(*paths: Path) -> tuple[Path, ...]:
+    seen: list[Path] = []
+    for path in paths:
+        resolved = path.resolve()
+        if resolved not in seen:
+            seen.append(resolved)
+    return tuple(seen)
+
+
+def _declared_yarn_major(manifest: Path) -> int | None:
+    try:
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    declared = payload.get("packageManager") if isinstance(payload, dict) else None
+    if not isinstance(declared, str) or not declared.startswith("yarn@"):
+        return None
+    version = declared.removeprefix("yarn@").lstrip("^~>=<v ")
+    major = version.split(".", 1)[0].strip()
+    return int(major) if major.isdigit() else None
 
 
 def _status(executor: Executor, repository: Path) -> str | None:
@@ -325,7 +567,11 @@ def _status(executor: Executor, repository: Path) -> str | None:
     return result.stdout if result.ok else None
 
 
-def _sanitized_environment(source: Mapping[str, str]) -> dict[str, str]:
+def _sanitized_environment(
+    source: Mapping[str, str],
+    *,
+    extra: tuple[tuple[str, str], ...] = (),
+) -> dict[str, str]:
     result = {
         key: value
         for key, value in source.items()
@@ -333,16 +579,25 @@ def _sanitized_environment(source: Mapping[str, str]) -> dict[str, str]:
         and not any(marker in key.upper() for marker in _SECRET_MARKERS)
     }
     result["HOME"] = str(Path(tempfile.gettempdir()) / "touchstone-validation-home")
+    for name, value in extra:
+        if any(marker in name.upper() for marker in _SECRET_MARKERS):
+            continue
+        result[name] = value
     return result
 
 
 __all__ = [
+    "PreparationPolicyError",
     "PreparationReport",
     "ValidationCommand",
     "ValidationReport",
     "ValidationResult",
+    "affected_validation_targets",
+    "preparation_directories",
+    "preparation_lockfiles",
     "prepare",
     "run_gate",
     "validate",
+    "validate_affected",
     "validate_commands",
 ]

@@ -113,6 +113,11 @@ def _metadata(raw: object) -> GeneratedMetadata | None:
         return None
     if not isinstance(raw, dict):
         raise ConfigError("metadata must be a table")
+    extra = sorted(
+        set(raw) - {"package_version", "profile_versions", "source_digest", "package_managers"}
+    )
+    if extra:
+        raise ConfigError(f"unknown configuration key metadata.{extra[0]}")
     package_version = raw.get("package_version")
     source_digest = raw.get("source_digest")
     versions = raw.get("profile_versions", {})
@@ -142,6 +147,20 @@ def _targets(raw: object, repository: Path) -> dict[str, TargetConfig]:
     for target_id, value in sorted(raw.items()):
         if not isinstance(value, dict):
             raise ConfigError(f"target.{target_id} must be a table")
+        allowed = {
+            "path",
+            "profiles",
+            "dependencies",
+            "package_managers",
+            "validation",
+            "audit_context",
+            "protected_paths",
+            "source_paths",
+            "evidence",
+        }
+        extra = sorted(set(value) - allowed)
+        if extra:
+            raise ConfigError(f"unknown configuration key target.{target_id}.{extra[0]}")
         path_value = value.get("path")
         profiles = value.get("profiles", [])
         dependencies = value.get("dependencies", [])

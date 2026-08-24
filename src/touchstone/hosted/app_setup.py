@@ -15,7 +15,7 @@ import urllib.parse
 import urllib.request
 import webbrowser
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Literal, Protocol
@@ -29,6 +29,9 @@ _PERMISSIONS = {
     "actions": "read",
     "issues": "write",
 }
+# GitHub grants metadata:read to every App and does not let an owner remove it,
+# so it is the one permission an exact match still tolerates.
+_IMPLICIT_PERMISSIONS = {"metadata": "read"}
 _REQUIRED_SECRETS = {
     "TOUCHSTONE_APP_ID",
     "TOUCHSTONE_APP_PRIVATE_KEY",
@@ -41,7 +44,7 @@ class SetupGitHub(Protocol):
 
     def actions_secret_names(self) -> set[str]: ...
 
-    def installation(self) -> dict[str, Any] | None: ...
+    def installation(self, app_id: int, private_key: bytes) -> dict[str, Any] | None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,6 +85,9 @@ class PartialSetup:
     app_id: int | None = None
     app_slug: str = ""
     updated_at: str = ""
+    installation_id: int | None = None
+    repository_selection: str = ""
+    permissions: dict[str, str] = field(default_factory=dict)
     version: int = 1
 
 
@@ -92,6 +98,36 @@ class SetupReport:
     repair: str = ""
     app_id: int | None = None
     app_slug: str = ""
+    installation_id: int | None = None
+    repository_selection: str = ""
+    permissions: dict[str, str] = field(default_factory=dict)
+
+
+def required_permissions() -> dict[str, str]:
+    """Name the exact installation permissions Touchstone publication needs."""
+
+    return dict(_PERMISSIONS)
+
+
+def permissions_are_exact(permissions: object) -> bool:
+    """Accept only the required permission map, plus GitHub's implicit metadata read.
+
+    Anything broader — `administration: write`, an extra `checks` grant, a
+    stronger access level — is rejected rather than tolerated, so an
+    over-permissive App installation cannot pass setup or doctor.
+    """
+
+    if not isinstance(permissions, dict):
+        return False
+    observed: dict[str, str] = {}
+    for name, access in permissions.items():
+        if not isinstance(name, str) or not isinstance(access, str):
+            return False
+        observed[name] = access
+    for name, access in _IMPLICIT_PERMISSIONS.items():
+        if observed.get(name) == access:
+            observed.pop(name)
+    return observed == dict(_PERMISSIONS)
 
 
 def build_manifest(*, owner: str, repository: str, redirect_url: str) -> AppManifest:
@@ -202,16 +238,14 @@ class ActionsSetup:
 
         private_key = bytearray(pem.encode("utf-8"))
         try:
-            if not self.github.set_actions_secret("TOUCHSTONE_APP_PRIVATE_KEY", bytes(private_key)):
+            installation_url = f"https://github.com/apps/{app_slug}/installations/new"
+            self._open_browser(installation_url)
+            if not self._confirm_installation(installation_url):
                 report = self._partial(
-                    "private-key-repair-required",
+                    "installation-required",
                     app_id=app_id,
                     app_slug=app_slug,
-                    repair=(
-                        "generate a replacement key in the App settings, pipe it to "
-                        "'gh secret set TOUCHSTONE_APP_PRIVATE_KEY --app actions', "
-                        "then rerun setup"
-                    ),
+                    repair=f"install the App for {self.config.forge.slug}, then restart setup",
                 )
                 self._write_state(
                     PartialSetup(
@@ -223,44 +257,32 @@ class ActionsSetup:
                     )
                 )
                 return report
+            installation = self.github.installation(app_id, bytes(private_key))
+            verification = self._installation_report(app_id, app_slug, installation)
+            if verification.state != "complete":
+                self._write_state(self._state_from_report(verification))
+                return verification
+            if not self.github.set_actions_secret("TOUCHSTONE_APP_PRIVATE_KEY", bytes(private_key)):
+                report = SetupReport(
+                    state="partial",
+                    step="private-key-repair-required",
+                    repair=(
+                        "generate a replacement key in the App settings, pipe it to "
+                        "'gh secret set TOUCHSTONE_APP_PRIVATE_KEY --app actions', "
+                        "then rerun setup"
+                    ),
+                    app_id=app_id,
+                    app_slug=app_slug,
+                    installation_id=verification.installation_id,
+                    repository_selection=verification.repository_selection,
+                    permissions=dict(verification.permissions),
+                )
+                self._write_state(self._state_from_report(report))
+                return report
         finally:
             for index in range(len(private_key)):
                 private_key[index] = 0
-
-        installation_url = f"https://github.com/apps/{app_slug}/installations/new"
-        self._open_browser(installation_url)
-        if not self._confirm_installation(installation_url):
-            report = self._partial(
-                "installation-required",
-                app_id=app_id,
-                app_slug=app_slug,
-                repair=f"install the App for {self.config.forge.slug}, then rerun --check",
-            )
-            self._write_state(
-                PartialSetup(
-                    self.config.forge.slug,
-                    "partial",
-                    report.step,
-                    app_id,
-                    app_slug,
-                )
-            )
-            return report
-        verification = self._installation_report(app_id, app_slug)
-        if verification.state != "complete":
-            self._write_state(
-                PartialSetup(
-                    self.config.forge.slug,
-                    "partial",
-                    verification.step,
-                    app_id,
-                    app_slug,
-                )
-            )
-            return verification
-        self._write_state(
-            PartialSetup(self.config.forge.slug, "complete", "configured", app_id, app_slug)
-        )
+        self._write_state(self._state_from_report(verification))
         return verification
 
     def _check(self, previous: PartialSetup | None) -> SetupReport:
@@ -281,7 +303,21 @@ class ActionsSetup:
                 app_slug=previous.app_slug,
                 repair=f"repair Actions secret metadata: {', '.join(missing)}",
             )
-        return self._installation_report(previous.app_id, previous.app_slug)
+        report = self._installation_report(
+            previous.app_id,
+            previous.app_slug,
+            self._attested_installation(previous),
+        )
+        if report.state == "complete":
+            return replace(
+                report,
+                step="configured-attested",
+                repair=(
+                    "cached setup attestation only; run the hosted workflow to prove "
+                    "the current App installation can mint a repository token"
+                ),
+            )
+        return report
 
     def _repair(self, previous: PartialSetup) -> SetupReport:
         if previous.repository != self.config.forge.slug:
@@ -318,17 +354,13 @@ class ActionsSetup:
                 )
             )
             return report
-        report = self._installation_report(previous.app_id, previous.app_slug)
+        report = self._installation_report(
+            previous.app_id,
+            previous.app_slug,
+            self._attested_installation(previous),
+        )
         if report.state == "complete":
-            self._write_state(
-                PartialSetup(
-                    self.config.forge.slug,
-                    "complete",
-                    "configured",
-                    previous.app_id,
-                    previous.app_slug,
-                )
-            )
+            self._write_state(self._state_from_report(report))
         return report
 
     def _set_state_key(self) -> bool:
@@ -339,8 +371,12 @@ class ActionsSetup:
             for index in range(len(state_key)):
                 state_key[index] = 0
 
-    def _installation_report(self, app_id: int, app_slug: str) -> SetupReport:
-        installation = self.github.installation()
+    def _installation_report(
+        self,
+        app_id: int,
+        app_slug: str,
+        installation: dict[str, Any] | None,
+    ) -> SetupReport:
         if not isinstance(installation, dict) or installation.get("app_id") != app_id:
             return self._partial(
                 "installation-missing",
@@ -355,17 +391,52 @@ class ActionsSetup:
                 app_slug=app_slug,
                 repair="restrict the GitHub App installation to only this selected repository",
             )
-        permissions = installation.get("permissions")
-        if not isinstance(permissions, dict) or any(
-            permissions.get(name) != access for name, access in _PERMISSIONS.items()
-        ):
+        if not permissions_are_exact(installation.get("permissions")):
             return self._partial(
                 "permissions-mismatch",
                 app_id=app_id,
                 app_slug=app_slug,
-                repair="update the GitHub App installation to the documented permissions",
+                repair="update the GitHub App installation to exactly the documented permissions",
             )
-        return SetupReport("complete", "configured", app_id=app_id, app_slug=app_slug)
+        return SetupReport(
+            "complete",
+            "configured",
+            app_id=app_id,
+            app_slug=app_slug,
+            installation_id=(
+                int(installation["id"]) if isinstance(installation.get("id"), int) else None
+            ),
+            repository_selection="selected",
+            # Persist only the required non-secret map so a later cached check
+            # cannot be satisfied by a broader recorded grant.
+            permissions=required_permissions(),
+        )
+
+    def _attested_installation(self, previous: PartialSetup) -> dict[str, Any] | None:
+        if (
+            previous.installation_id is None
+            or not previous.repository_selection
+            or not previous.permissions
+        ):
+            return None
+        return {
+            "id": previous.installation_id,
+            "app_id": previous.app_id,
+            "repository_selection": previous.repository_selection,
+            "permissions": dict(previous.permissions),
+        }
+
+    def _state_from_report(self, report: SetupReport) -> PartialSetup:
+        return PartialSetup(
+            self.config.forge.slug,
+            report.state,
+            report.step,
+            report.app_id,
+            report.app_slug,
+            installation_id=report.installation_id,
+            repository_selection=report.repository_selection,
+            permissions=dict(report.permissions),
+        )
 
     def _record_secret_failure(self, app_id: int, app_slug: str, step: str) -> SetupReport:
         report = self._partial(
@@ -565,4 +636,6 @@ __all__ = [
     "build_manifest",
     "exchange_manifest_code",
     "parse_callback",
+    "permissions_are_exact",
+    "required_permissions",
 ]

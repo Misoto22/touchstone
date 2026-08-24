@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -74,6 +76,8 @@ class PublicationRequest:
     author_name: str | None = None
     author_email: str | None = None
     pre_staged: bool = False
+    repository: str = ""
+    isolated_push: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -464,6 +468,10 @@ class RepositoryLifecycle:
             return f"could not inspect staged changes: {staged.tail()}"
         if staged.code == 1:
             argv = ["git", "-C", worktree]
+            environment = None
+            if request.isolated_push:
+                argv += ["-c", "core.hooksPath=/dev/null"]
+                environment = _isolated_git_environment()
             if request.author_name and request.author_email:
                 argv += [
                     "-c",
@@ -474,24 +482,39 @@ class RepositoryLifecycle:
             argv += ["commit", "--quiet", "--no-verify", "-m", request.commit_subject]
             if request.summary:
                 argv += ["-m", request.summary]
-            committed = self._executor.run(argv, timeout=180)
+            committed = self._executor.run(argv, timeout=180, env=environment)
             if not committed.ok:
                 return f"could not commit changes: {committed.tail()}"
 
-        pushed = self._executor.run(
-            [
-                "git",
-                "-C",
-                worktree,
-                "push",
-                "--quiet",
-                "--no-verify",
-                "-u",
-                "origin",
-                request.branch,
-            ],
-            timeout=180,
-        )
+        push = ["git", "-C", worktree]
+        environment = None
+        destination = "origin"
+        refspec = request.branch
+        if request.isolated_push:
+            if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", request.repository):
+                return "could not push the branch: repository identity is invalid"
+            push += [
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-c",
+                "protocol.ext.allow=never",
+                "-c",
+                "credential.helper=",
+                "-c",
+                "credential.helper=!gh auth git-credential",
+            ]
+            environment = _isolated_git_environment()
+            destination = f"https://github.com/{request.repository}.git"
+            refspec = f"HEAD:refs/heads/{request.branch}"
+        push += [
+            "push",
+            "--quiet",
+            "--no-verify",
+            "-u",
+            destination,
+            refspec,
+        ]
+        pushed = self._executor.run(push, timeout=180, env=environment)
         return "" if pushed.ok else f"could not push the branch: {pushed.tail()}"
 
     def _git(self, worktree: Path, argv: list[str]) -> str:
@@ -524,6 +547,26 @@ class RepositoryLifecycle:
                 partial=partial,
             )
         )
+
+
+def _isolated_git_environment() -> dict[str, str]:
+    allowed = {
+        "GH_TOKEN",
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "PATH",
+        "SYSTEMROOT",
+        "TEMP",
+        "TMP",
+        "TMPDIR",
+        "TZ",
+    }
+    result = {key: value for key, value in os.environ.items() if key in allowed and value}
+    result["GIT_CONFIG_NOSYSTEM"] = "1"
+    result["GIT_TERMINAL_PROMPT"] = "0"
+    return result
 
 
 def _age_hours(created_at: str, now: dt.datetime) -> float:

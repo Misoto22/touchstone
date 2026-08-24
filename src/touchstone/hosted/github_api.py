@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import base64
+import datetime as dt
 import json
 import re
 import subprocess
+import urllib.error
+import urllib.request
 from collections.abc import Callable
 from typing import Any
+
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding
 
 
 class GitHubCLI:
@@ -15,11 +22,13 @@ class GitHubCLI:
         repository: str,
         *,
         run: Callable[..., subprocess.CompletedProcess[bytes]] = subprocess.run,
+        open_url: Callable[..., Any] = urllib.request.urlopen,
     ) -> None:
         if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
             raise ValueError("GitHub repository must be OWNER/REPOSITORY")
         self.repository = repository
         self._run = run
+        self._open_url = open_url
 
     def set_actions_secret(self, name: str, value: bytes) -> bool:
         if not re.fullmatch(r"[A-Z][A-Z0-9_]{1,127}", name):
@@ -64,10 +73,26 @@ class GitHubCLI:
             if isinstance(row, dict) and isinstance(row.get("name"), str)
         }
 
-    def installation(self) -> dict[str, Any] | None:
-        payload = self._json(
-            ["gh", "api", f"repos/{self.repository}/installation"],
-        )
+    def installation(self, app_id: int, private_key: bytes) -> dict[str, Any] | None:
+        """Read this repository's installation using the App JWT required by GitHub."""
+
+        if app_id <= 0 or not private_key:
+            return None
+        try:
+            token = _app_jwt(app_id, private_key)
+            request = urllib.request.Request(
+                f"https://api.github.com/repos/{self.repository}/installation",
+                headers={
+                    "Accept": "application/vnd.github+json",
+                    "Authorization": f"Bearer {token}",
+                    "User-Agent": "touchstone-agent",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                },
+            )
+            with self._open_url(request, timeout=20) as response:
+                payload = json.load(response)
+        except (OSError, ValueError, TypeError, urllib.error.HTTPError, urllib.error.URLError):
+            return None
         return payload if isinstance(payload, dict) else None
 
     def workflow(self, name: str = "touchstone.yml") -> dict[str, Any] | None:
@@ -101,6 +126,29 @@ class GitHubCLI:
             return json.loads(text)
         except json.JSONDecodeError:
             return None
+
+
+def _app_jwt(app_id: int, private_key: bytes) -> str:
+    now = int(dt.datetime.now(dt.UTC).timestamp())
+    header = _base64url(json.dumps({"alg": "RS256", "typ": "JWT"}, separators=(",", ":")))
+    claims = _base64url(
+        json.dumps(
+            {"iat": now - 60, "exp": now + 540, "iss": str(app_id)},
+            separators=(",", ":"),
+        )
+    )
+    signing_input = f"{header}.{claims}".encode()
+    key = serialization.load_pem_private_key(private_key, password=None)
+    signature = key.sign(signing_input, padding.PKCS1v15(), hashes.SHA256())
+    return f"{header}.{claims}.{_base64url_bytes(signature)}"
+
+
+def _base64url(value: str) -> str:
+    return _base64url_bytes(value.encode())
+
+
+def _base64url_bytes(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
 
 
 __all__ = ["GitHubCLI"]

@@ -11,7 +11,9 @@ If this rewrite is to replace the shell version, it has to keep every one.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -124,6 +126,72 @@ def test_each_engine_declares_what_it_cannot_do() -> None:
     assert CodexEngine.enforces_paths is False
     assert ClaudeEngine.reports_cost is True
     assert ClaudeEngine.enforces_paths is True
+
+
+@pytest.mark.parametrize(
+    ("engine_type", "name", "credential"),
+    (
+        (CodexEngine, "codex", "OPENAI_API_KEY"),
+        (ClaudeEngine, "claude", "ANTHROPIC_API_KEY"),
+    ),
+)
+def test_model_process_receives_only_its_runtime_and_model_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    engine_type,
+    name: str,
+    credential: str,
+) -> None:  # type: ignore[no-untyped-def]
+    class EnvironmentSpy(_Spy):
+        def __init__(self) -> None:
+            super().__init__()
+            self.environments: list[dict[str, str]] = []
+
+        def run(self, argv, **kwargs):  # type: ignore[no-untyped-def]
+            self.sent.append(argv)
+            self.environments.append(kwargs.get("env") or {})
+            return Result(0, '{"result":"ok"}', "")
+
+        def write_text(self, _path: str, _text: str) -> None:
+            return None
+
+        def read_text(self, _path: str) -> str:
+            return '{"result":"ok"}'
+
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    monkeypatch.setenv("PATH", os.environ["PATH"])
+    monkeypatch.setenv(credential, "model-secret")
+    monkeypatch.setenv("TOUCHSTONE_STATE_KEY", "state-secret")
+    monkeypatch.setenv("GH_TOKEN", "publish-secret")
+    spy = EnvironmentSpy()
+    config = SimpleNamespace(
+        engine=SimpleNamespace(
+            name=name,
+            model="model",
+            audit_effort="medium",
+            review_effort="medium",
+            timeout_seconds=30,
+            extra_args=(),
+            budget=SimpleNamespace(audit=1.0, review=1.0),
+        )
+    )
+    engine = engine_type(config, spy)
+
+    engine.author("brief", worktree=str(tmp_path), denied=())
+    engine.review("review", worktree=str(tmp_path), schema={"type": "object"})
+
+    model_environments = [
+        environment
+        for argv, environment in zip(spy.sent, spy.environments, strict=True)
+        if argv[0] == name
+    ]
+    assert len(model_environments) == 2
+    for model_environment in model_environments:
+        assert model_environment[credential] == "model-secret"
+        assert model_environment["HOME"].startswith(str(tmp_path))
+        assert "TOUCHSTONE_STATE_KEY" not in model_environment
+        assert "GH_TOKEN" not in model_environment
 
 
 def test_a_malformed_envelope_yields_no_cost_rather_than_a_wrong_one() -> None:

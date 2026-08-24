@@ -7,7 +7,7 @@ import json
 import os
 import re
 import tomllib
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -58,7 +58,11 @@ class TargetDiscovery:
     workspace_container: bool = False
 
 
-def discover_targets(root: Path) -> TargetDiscovery:
+def discover_targets(
+    root: Path,
+    *,
+    target_ids_by_path: Mapping[Path, str] | None = None,
+) -> TargetDiscovery:
     repository = root.expanduser().resolve()
     if not repository.is_dir():
         raise ValueError(f"repository does not exist: {repository}")
@@ -82,7 +86,26 @@ def discover_targets(root: Path) -> TargetDiscovery:
     workspace_declared = bool(includes)
     root_is_target = not workspace_declared or _root_has_independent_contract(repository)
     target_paths = ([Path(".")] if root_is_target else []) + member_paths
-    targets, id_warnings = _build_targets(repository, target_paths)
+    configured_ids = dict(target_ids_by_path or {})
+    # A nested standalone manifest is only a candidate until the project names
+    # it. Once configuration points at that exact path, refresh must keep it
+    # rather than silently dropping a Target the operator already reviewed.
+    promoted = sorted(
+        (
+            relative
+            for relative in manifest_paths
+            if relative in configured_ids
+            and relative not in target_paths
+            and _inside_repository(repository, relative)
+        ),
+        key=lambda item: item.as_posix(),
+    )
+    target_paths += promoted
+    targets, id_warnings = _build_targets(
+        repository,
+        target_paths,
+        target_ids_by_path=configured_ids,
+    )
     warnings.extend(id_warnings)
 
     owned = {target.path for target in targets}
@@ -94,7 +117,7 @@ def discover_targets(root: Path) -> TargetDiscovery:
         if relative in owned or relative in seen_candidates:
             continue
         seen_candidates.add(relative)
-        candidates.append(TargetCandidate(_suggested_id(relative, repository.name), relative))
+        candidates.append(TargetCandidate(_suggested_id(repository, relative), relative))
 
     targets = _attach_dependencies(repository, targets)
     return TargetDiscovery(
@@ -135,6 +158,35 @@ def affected_targets(changed_paths: Iterable[str], discovery: TargetDiscovery) -
                 result.append(dependent)
                 pending.append(dependent)
     return tuple(result)
+
+
+def changed_target_scope(
+    changed_paths: Iterable[str],
+    discovery: TargetDiscovery,
+) -> tuple[tuple[str, ...], bool]:
+    """Map changed paths to Targets and say when that mapping is not trustworthy.
+
+    The second value is ``True`` when at least one changed path cannot be
+    attributed to a narrow Target — an unmapped path, or a repository-root
+    change in a repository that also has member Targets. Callers must widen to
+    every applicable Target in that case rather than validating a guess.
+    """
+
+    paths = list(changed_paths)
+    scope = affected_targets(paths, discovery)
+    deepest = sorted(discovery.targets, key=lambda target: (-len(target.path.parts), target.id))
+    root = next((target for target in discovery.targets if target.path == Path(".")), None)
+    has_members = any(target.path != Path(".") for target in discovery.targets)
+    for raw_path in paths:
+        path = PurePosixPath(raw_path)
+        if path.is_absolute() or ".." in path.parts:
+            return scope, True
+        owner = next((target for target in deepest if _owns(target.path, path)), None)
+        if owner is None:
+            return scope, True
+        if root is not None and owner.id == root.id and has_members:
+            return scope, True
+    return scope, False
 
 
 def _workspace_rules(root: Path) -> tuple[list[str], list[str], list[str]]:
@@ -252,6 +304,16 @@ def _manifest_directories(
     return sorted(found, key=lambda item: item.as_posix()), excluded
 
 
+def _inside_repository(root: Path, relative: Path) -> bool:
+    """Reject a configured path that escapes the repository or lost its manifest."""
+    if relative.is_absolute() or ".." in relative.parts:
+        return False
+    resolved = (root / relative).resolve()
+    if not resolved.is_relative_to(root) or not resolved.is_dir():
+        return False
+    return any((resolved / name).is_file() for name in _MANIFESTS)
+
+
 def _submodule_paths(root: Path) -> tuple[Path, ...]:
     path = root / ".gitmodules"
     if not path.is_file():
@@ -287,15 +349,28 @@ def _root_has_independent_contract(root: Path) -> bool:
     return pyproject is not None and isinstance(pyproject.get("project"), dict)
 
 
-def _build_targets(root: Path, paths: list[Path]) -> tuple[tuple[ProjectTarget, ...], list[str]]:
+def _build_targets(
+    root: Path,
+    paths: list[Path],
+    *,
+    target_ids_by_path: Mapping[Path, str],
+) -> tuple[tuple[ProjectTarget, ...], list[str]]:
     targets: list[ProjectTarget] = []
     warnings: list[str] = []
-    bases = [_suggested_id(path, root.name) for path in paths]
+    bases = [_suggested_id(root, path) for path in paths]
     counts = {base: bases.count(base) for base in set(bases)}
+    preferred_ids = set(target_ids_by_path.values())
     for path in paths:
-        base = _suggested_id(path, root.name)
-        target_id = base if counts[base] == 1 else _path_id(path)
-        if target_id != base:
+        base = _suggested_id(root, path)
+        preferred = target_ids_by_path.get(path)
+        target_id = (
+            preferred
+            if preferred is not None
+            else base
+            if counts[base] == 1 and base not in preferred_ids
+            else _path_id(path)
+        )
+        if preferred is None and target_id != base:
             warnings.append(
                 f"Target ID {base!r} was disambiguated as {target_id!r} for {path.as_posix()}"
             )
@@ -316,8 +391,8 @@ def _path_id(path: Path) -> str:
     return f"{stem}-{digest}"
 
 
-def _suggested_id(path: Path, root_name: str) -> str:
-    value = root_name if path == Path(".") else path.name
+def _suggested_id(root: Path, path: Path) -> str:
+    value = _package_name(root / path) or ("root" if path == Path(".") else path.name)
     normalized = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
     return normalized or "target"
 
@@ -429,5 +504,6 @@ __all__ = [
     "ProjectTarget",
     "TargetDiscovery",
     "affected_targets",
+    "changed_target_scope",
     "discover_targets",
 ]

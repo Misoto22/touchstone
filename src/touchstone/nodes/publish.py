@@ -38,16 +38,18 @@ def _request(state: dict[str, Any], context: Any) -> PublicationRequest:
         author_name=context.config.git.author_name,
         author_email=context.config.git.author_email,
         pre_staged=bool(state.get("pre_staged", False)),
+        repository=context.config.forge.slug,
+        isolated_push=bool(state.get("isolated_push", False)),
     )
 
 
 def _publish(state: dict[str, Any], *, validation_required: bool = True) -> dict[str, Any]:
     context = current()
     if validation_required:
-        from touchstone.validation import validate
+        from touchstone.validation import validate_affected
 
         loop = context.loop(state["loop"])
-        validation = validate(
+        validation = validate_affected(
             context.config,
             loop.targets,
             context.executor,
@@ -159,7 +161,7 @@ def rehearse(state: dict[str, Any], *, would: str) -> dict[str, Any]:
     context = current()
     worktree = state["worktree"]
     loop = context.config.loop(state["loop"])
-    from touchstone.validation import prepare, validate
+    from touchstone.validation import prepare, validate_affected
 
     preparation = prepare(
         context.config,
@@ -173,7 +175,7 @@ def rehearse(state: dict[str, Any], *, would: str) -> dict[str, Any]:
             "pr": None,
             "notes": ["Dry-run preparation blocked candidate validation."],
         }
-    validation = validate(
+    validation = validate_affected(
         context.config,
         loop.targets,
         context.executor,

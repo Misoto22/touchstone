@@ -31,8 +31,6 @@ def test_non_interactive_init_writes_a_loadable_generic_config(tmp_path: Path) -
     assert config.forge.slug == "acme/widgets"
     assert config.forge.default_branch == "trunk"
     assert config.loop("code").schedule == "hourly"
-    assert config.actions.codex_cli_version == "0.149.1"
-    assert config.actions.claude_code_version == "2.1.241"
     text = report.root.read_text(encoding="utf-8")
     assert "/Users/" not in text
     assert "api_key" not in text.lower()

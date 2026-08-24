@@ -57,38 +57,51 @@ class RefreshReport:
 
 
 def detect_repository(
-    root: Path, *, explicit_profiles: tuple[str, ...] = ()
+    root: Path,
+    *,
+    explicit_profiles: tuple[str, ...] = (),
+    target_ids_by_path: dict[Path, str] | None = None,
 ) -> tuple[TargetDiscovery, dict[str, tuple[ProfileMatch, ...]], ProfileCatalog]:
     repository = root.expanduser().resolve()
     catalog = load_catalog(repository / ".touchstone/profiles")
     for name in explicit_profiles:
         catalog.get(name)
-    discovery = discover_targets(repository)
-    matches: dict[str, tuple[ProfileMatch, ...]] = {}
+    discovery = discover_targets(repository, target_ids_by_path=target_ids_by_path)
+    detected_by_target: dict[str, list[ProfileMatch]] = {}
     for target in discovery.targets:
-        detected = list(
+        detected_by_target[target.id] = list(
             detect_profiles(
                 repository,
                 TargetCandidate(id=target.id, path=target.path),
                 catalog=catalog,
             )
         )
-        present = {match.profile for match in detected}
-        for name in explicit_profiles:
-            if name not in present:
-                detected.append(
-                    ProfileMatch(
-                        name,
-                        "confirmed",
-                        (
-                            Evidence(
-                                "explicit",
-                                target.path.as_posix(),
-                                "selected by project owner",
-                            ),
-                        ),
-                    )
+    selections: dict[str, list[str]] = {target.id: [] for target in discovery.targets}
+    for name in explicit_profiles:
+        matching = [
+            target.id
+            for target in discovery.targets
+            if any(match.profile == name for match in detected_by_target[target.id])
+        ]
+        if not matching:
+            if len(discovery.targets) != 1:
+                raise ConfigError(
+                    f"Profile {name!r} has no Target-specific evidence; "
+                    "add it to one [target.NAME] table after init"
                 )
+            matching = [discovery.targets[0].id]
+        for target_id in matching:
+            selections[target_id].append(name)
+
+    matches: dict[str, tuple[ProfileMatch, ...]] = {}
+    for target in discovery.targets:
+        detected = detected_by_target[target.id]
+        detected = _apply_explicit_profiles(
+            detected,
+            tuple(selections[target.id]),
+            target.path,
+            catalog,
+        )
         order = {name: index for index, name in enumerate(catalog.profiles)}
         matches[target.id] = tuple(
             sorted(detected, key=lambda match: order.get(match.profile, len(order)))
@@ -122,6 +135,13 @@ def materialize(
         target_protected: list[str] = []
         target_sources: list[str] = []
         audit_context: list[str] = []
+        target_managers = _target_package_managers(
+            repository,
+            target.path,
+            confirmed,
+            package_managers,
+            strict=strict_package_managers,
+        )
         for match in target_matches:
             definition = catalog.get(match.profile)
             for item in match.evidence:
@@ -145,7 +165,9 @@ def materialize(
                 audit_context.append(definition.audit_context)
             for candidate in definition.validation:
                 record = {
-                    "argv": list(candidate.argv),
+                    "argv": list(
+                        _manager_argv(candidate.argv, candidate.capability, target_managers)
+                    ),
                     "timeout_seconds": candidate.timeout_seconds,
                     "capability": candidate.capability,
                     "enabled": candidate.enabled,
@@ -162,15 +184,7 @@ def materialize(
             "path": target.path.as_posix(),
             "profiles": confirmed,
             "dependencies": list(target.dependencies),
-            "package_managers": list(
-                _target_package_managers(
-                    repository,
-                    target.path,
-                    confirmed,
-                    package_managers,
-                    strict=strict_package_managers,
-                )
-            ),
+            "package_managers": list(target_managers),
             "audit_context": audit_context,
             "protected_paths": target_protected,
             "source_paths": target_sources,
@@ -218,32 +232,22 @@ def profile_diff(config: Config) -> ProfileDiff:
     generated_path = config.source.generated_path
     if generated_path is None:
         raise ConfigError("Profile refresh requires a version 2 configuration")
-    discovery, matches, catalog = detect_repository(config.repo_path)
+    discovery, matches, catalog = detect_repository(
+        config.repo_path,
+        target_ids_by_path={target.path: target_id for target_id, target in config.targets.items()},
+    )
     explicit_profiles = _explicit_profiles_by_target(config.source.path)
     order = {name: index for index, name in enumerate(catalog.profiles)}
     for target in discovery.targets:
         configured = config.targets.get(target.id)
         if configured is None:
             continue
-        detected = list(matches[target.id])
-        present = {match.profile for match in detected}
-        for name in explicit_profiles.get(target.id, ()):
-            if name in present:
-                continue
-            catalog.get(name)
-            detected.append(
-                ProfileMatch(
-                    name,
-                    "confirmed",
-                    (
-                        Evidence(
-                            "explicit",
-                            target.path.as_posix(),
-                            "selected by project owner",
-                        ),
-                    ),
-                )
-            )
+        detected = _apply_explicit_profiles(
+            list(matches[target.id]),
+            explicit_profiles.get(target.id, ()),
+            target.path,
+            catalog,
+        )
         matches[target.id] = tuple(
             sorted(detected, key=lambda match: order.get(match.profile, len(order)))
         )
@@ -345,8 +349,19 @@ def ambiguous_package_managers(managers: tuple[str, ...]) -> tuple[tuple[str, ..
     return tuple(groups)
 
 
-def select_package_managers(root: Path, explicit: str | None = None) -> tuple[str, ...]:
-    found = detect_package_managers(root)
+def select_package_managers(
+    root: Path,
+    explicit: str | None = None,
+    *,
+    target_paths: tuple[Path, ...] = (),
+) -> tuple[str, ...]:
+    found_list = list(detect_package_managers(root))
+    for target in target_paths:
+        for manager in detect_package_managers(root / target):
+            if manager not in found_list:
+                found_list.append(manager)
+    order = {manager: index for index, (manager, _, _) in enumerate(_MANAGER_LOCKS)}
+    found = tuple(sorted(found_list, key=lambda manager: order[manager]))
     ambiguous = ambiguous_package_managers(found)
     if not ambiguous:
         if explicit is not None and explicit not in found:
@@ -361,6 +376,84 @@ def select_package_managers(root: Path, explicit: str | None = None) -> tuple[st
         raise ConfigError(f"package manager {explicit!r} has no repository evidence")
     ambiguous_names = {name for group in ambiguous for name in group}
     return tuple(name for name in found if name not in ambiguous_names or name == explicit)
+
+
+def _apply_explicit_profiles(
+    detected: list[ProfileMatch],
+    explicit_profiles: tuple[str, ...],
+    target: Path,
+    catalog: ProfileCatalog,
+) -> list[ProfileMatch]:
+    for name in explicit_profiles:
+        catalog.get(name)
+        evidence = Evidence("explicit", target.as_posix(), "selected by project owner")
+        existing = next((match for match in detected if match.profile == name), None)
+        if existing is None:
+            detected.append(ProfileMatch(name, "confirmed", (evidence,)))
+            continue
+        if existing.verdict != "confirmed":
+            detected[detected.index(existing)] = ProfileMatch(
+                name,
+                "confirmed",
+                (*existing.evidence, evidence),
+                existing.detected_version,
+                existing.warning,
+            )
+    return detected
+
+
+_JAVASCRIPT_MANAGERS = ("npm", "pnpm", "yarn", "bun")
+
+
+def _manager_argv(
+    argv: tuple[str, ...],
+    capability: str,
+    managers: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Express a Profile's JavaScript candidate in the Target's own package manager."""
+
+    manager = next((name for name in managers if name in _JAVASCRIPT_MANAGERS), "")
+    if not manager:
+        return argv
+    if capability == "package-script":
+        script, rest = _script_invocation(argv)
+        if script is None:
+            return argv
+        return (manager, "run", script, *rest)
+    if capability == "package-executable":
+        tool, rest = _executable_invocation(argv)
+        if tool is None:
+            return argv
+        if manager == "npm":
+            return ("npx", tool, *rest)
+        if manager == "pnpm":
+            return ("pnpm", "exec", tool, *rest)
+        if manager == "bun":
+            return ("bun", "x", tool, *rest)
+        return ("yarn", "run", tool, *rest)
+    return argv
+
+
+def _script_invocation(argv: tuple[str, ...]) -> tuple[str | None, tuple[str, ...]]:
+    if len(argv) < 2 or argv[0] not in _JAVASCRIPT_MANAGERS:
+        return None, ()
+    if argv[1] == "run":
+        return (argv[2], argv[3:]) if len(argv) >= 3 else (None, ())
+    return argv[1], argv[2:]
+
+
+def _executable_invocation(argv: tuple[str, ...]) -> tuple[str | None, tuple[str, ...]]:
+    if len(argv) < 2:
+        return None, ()
+    if argv[0] == "npx":
+        return argv[1], argv[2:]
+    if argv[0] == "pnpm" and argv[1] == "exec" and len(argv) >= 3:
+        return argv[2], argv[3:]
+    if argv[0] == "bun" and argv[1] == "x" and len(argv) >= 3:
+        return argv[2], argv[3:]
+    if argv[0] == "yarn" and argv[1] == "run" and len(argv) >= 3:
+        return argv[2], argv[3:]
+    return None, ()
 
 
 def _target_package_managers(

@@ -301,7 +301,9 @@ def _v2_config(tmp_path: Path):  # type: ignore[no-untyped-def]
         ),
         LocalExecutor(),
     )
-    return report, load_config(report.root)
+    config = load_config(report.root)
+    object.__setattr__(config, "state_dir", tmp_path / "touchstone-state")
+    return report, config
 
 
 def _v2_context() -> DoctorContext:

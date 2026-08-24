@@ -255,10 +255,17 @@ def _actions_setup(args: argparse.Namespace) -> int:
 
 
 def _hosted(args: argparse.Namespace) -> int:
-    from touchstone.hosted.runtime import CandidateIntegrityError, run_stage
+    from touchstone.hosted.runtime import (
+        CandidateIntegrityError,
+        install_stage,
+        run_stage,
+    )
 
     config = load(args.config)
     try:
+        if args.stage == "install":
+            install_stage(config, for_stage=args.for_stage)
+            return 0
         result = run_stage(config, args.stage)
     except CandidateIntegrityError as exc:
         print(f"touchstone hosted: {exc}", file=sys.stderr)
@@ -584,7 +591,15 @@ def main(argv: list[str] | None = None) -> int:
     actions_setup.set_defaults(handler=_actions_setup)
 
     hosted = sub.add_parser("hosted", help="run an internal GitHub-hosted trust stage")
-    hosted.add_argument("stage", choices=("prepare", "analysis", "verify", "publish", "snapshot"))
+    hosted.add_argument(
+        "stage", choices=("install", "prepare", "analysis", "verify", "publish", "snapshot")
+    )
+    hosted.add_argument(
+        "--for-stage",
+        choices=("prepare", "analysis", "verify", "publish", "snapshot"),
+        default="analysis",
+        help="the credential-mapped stage this credential-free install prepares",
+    )
     hosted.set_defaults(handler=_hosted)
 
     status = sub.add_parser("status", help="read repository lifecycle state without mutation")
