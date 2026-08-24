@@ -9,7 +9,7 @@ from typing import Literal, Protocol
 
 from touchstone.config import LoopConfig
 from touchstone.execution import Executor
-from touchstone.forge import OperationResult, PullState
+from touchstone.forge import ForgeUnavailable, OperationResult, PullState
 from touchstone.ledger import FindingProjection, Ledger, LifecycleEvent
 
 
@@ -174,7 +174,12 @@ class RepositoryLifecycle:
             return PublicationResult("held", request.finding_id, None, None, detail)
 
         park = request.risk != "low" or request.verdict != "approve"
-        pull = self._forge.pull_for_branch(request.branch)
+        try:
+            pull = self._forge.pull_for_branch(request.branch)
+        except ForgeUnavailable:
+            detail = "could not verify existing pull requests for the published branch"
+            self._record(request, "proposed", head_sha=head, detail=detail)
+            return PublicationResult("held", request.finding_id, None, head, detail)
         number = (
             pull.number
             if pull is not None

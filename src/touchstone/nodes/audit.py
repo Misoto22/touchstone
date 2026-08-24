@@ -80,6 +80,11 @@ def _fields(payload: dict[str, Any], *, required: set[str], allowed: set[str]) -
     return ""
 
 
+def _session_failure(engine_name: str) -> str:
+    """Return a persistable failure note without model output or repository data."""
+    return f"the {engine_name} session failed"
+
+
 def run(state: dict[str, Any]) -> dict[str, Any]:
     context = current()
     loop = context.loop(state["loop"])
@@ -95,7 +100,9 @@ def run(state: dict[str, Any]) -> dict[str, Any]:
     if not session.ok:
         return {
             "outcome": "held",
-            "notes": [f"the {context.engine.name} session failed: {session.detail}"],
+            # Engine output may contain model transcript or repository data;
+            # graph notes are persisted to the structured event log.
+            "notes": [_session_failure(context.engine.name)],
             "cost": [session.cost],
         }
 

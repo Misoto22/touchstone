@@ -86,6 +86,17 @@ def test_discovery_honours_xdg_config_home(tmp_path: Path, monkeypatch) -> None:
     assert discover_config_path(start) == expected
 
 
+def test_discovery_falls_back_to_home_config_after_custom_xdg(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    start = tmp_path / "work"
+    start.mkdir()
+    home = tmp_path / "home"
+    expected = _write(home / ".config" / "touchstone" / "config.toml", _valid_config())
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "custom-xdg"))
+    monkeypatch.setattr("touchstone.config.Path.home", classmethod(lambda _cls: home))
+
+    assert discover_config_path(start) == expected
+
+
 def test_ssh_runtime_paths_come_from_the_ssh_section(tmp_path: Path) -> None:
     raw = (
         _valid_config()

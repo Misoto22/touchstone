@@ -5,7 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from touchstone.execution.local import LocalExecutor
-from touchstone.forge import OperationResult, PullState
+from touchstone.forge import ForgeUnavailable, OperationResult, PullState
 from touchstone.ledger import Ledger, finding_id
 from touchstone.lifecycle import PublicationRequest, RepositoryLifecycle
 from touchstone.nodes import publish as publish_node
@@ -138,6 +138,24 @@ def test_high_risk_publication_opens_a_draft_and_parks(tmp_path: Path) -> None:
     assert result.outcome == "parked"
     assert forge.transitions[0] == "create:draft"
     assert "auto-merge:12" not in forge.transitions
+
+
+def test_publication_holds_when_existing_pull_state_is_unavailable(tmp_path: Path) -> None:
+    class UnavailableForge(MemoryForge):
+        def pull_for_branch(self, branch: str) -> PullState | None:
+            raise ForgeUnavailable("pull lookup unavailable")
+
+    repo = _worktree(tmp_path)
+    forge = UnavailableForge()
+    lifecycle = RepositoryLifecycle(
+        forge, Ledger(tmp_path / "events.jsonl"), reap_after_hours=6, executor=LocalExecutor()
+    )
+
+    result = lifecycle.publish(_request(repo))
+
+    assert result.outcome == "held"
+    assert "verify existing pull" in result.detail
+    assert forge.created_pull_count == 0
 
 
 def test_node_builds_publication_from_project_configuration() -> None:

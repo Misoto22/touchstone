@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from touchstone.cli import _scheduler
+from touchstone.execution.base import Result
 from touchstone.execution.local import LocalExecutor
 from touchstone.scheduling.base import find_touchstone_executable
 from touchstone.scheduling.launchd import LaunchdScheduler
@@ -98,3 +99,41 @@ def test_native_scheduler_commands_always_run_on_the_local_orchestrator(
 
     assert isinstance(scheduler, LocalExecutor)
     assert observed == [scheduler]
+
+
+class FailingNativeExecutor:
+    def __init__(self, *, print_ok: bool = False) -> None:
+        self.print_ok = print_ok
+
+    def run(self, argv, **_kwargs):  # type: ignore[no-untyped-def]
+        if argv[:2] == ["launchctl", "print"]:
+            return Result(0 if self.print_ok else 1, "", "not loaded")
+        return Result(1, "", "native command failed")
+
+
+def test_launchd_uninstall_refuses_to_hide_a_bootout_failure(tmp_path: Path) -> None:
+    scheduler = LaunchdScheduler(
+        FailingNativeExecutor(print_ok=True),
+        executable=Path("/absolute/bin/touchstone"),
+        home=tmp_path,
+    )
+    scheduler.install(_config(tmp_path), target=tmp_path / "Library" / "LaunchAgents")
+
+    import pytest
+
+    with pytest.raises(RuntimeError, match="disable"):
+        scheduler.uninstall(_config(tmp_path))
+
+
+def test_systemd_uninstall_refuses_to_hide_a_disable_failure(tmp_path: Path) -> None:
+    scheduler = SystemdScheduler(
+        FailingNativeExecutor(),
+        executable=Path("/absolute/bin/touchstone"),
+        home=tmp_path,
+    )
+    scheduler.install(_config(tmp_path), target=tmp_path / ".config" / "systemd" / "user")
+
+    import pytest
+
+    with pytest.raises(RuntimeError, match="disable"):
+        scheduler.uninstall(_config(tmp_path))

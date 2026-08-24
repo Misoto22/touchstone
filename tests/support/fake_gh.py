@@ -12,6 +12,7 @@ class FakeGhExecutor:
     def __init__(self) -> None:
         self.pulls: dict[int, dict[str, Any]] = {}
         self.failures: dict[str, str] = {}
+        self.responses: dict[str, str] = {}
         self.repository = {
             "full_name": "acme/widgets",
             "default_branch": "trunk",
@@ -49,6 +50,9 @@ class FakeGhExecutor:
         failure = self.failures.pop(command, None)
         if failure is not None:
             return Result(1, "", failure)
+        response = self.responses.get(command)
+        if response is not None:
+            return Result(0, response, "")
         if argv[1:3] == ["pr", "view"]:
             number = int(argv[3])
             pull = self.pulls.get(number)

@@ -63,6 +63,7 @@ class DoctorContext:
     executor: Executor | None = None
     scheduler_status: SchedulerStatus | None = None
     online: bool = False
+    scheduler_error: str | None = None
 
 
 class _OfflineForge:
@@ -93,13 +94,14 @@ def build_context(config: Config, *, offline: bool = False) -> DoctorContext:
     else:
         scheduler = "unsupported"
     scheduler_status = None
+    scheduler_error = None
     if scheduler != "unsupported":
         try:
             # Scheduler files and launch commands live on the local
             # orchestrator, independently of a local or SSH execution target.
             scheduler_status = current_scheduler(execution.LocalExecutor()).status(config)
-        except RuntimeError:
-            scheduler_status = None
+        except RuntimeError as exc:
+            scheduler_error = str(exc)
     return DoctorContext(
         commands,
         forge,
@@ -107,6 +109,7 @@ def build_context(config: Config, *, offline: bool = False) -> DoctorContext:
         executor,
         scheduler_status,
         online=not offline and bool(config.forge.slug),
+        scheduler_error=scheduler_error,
     )
 
 
@@ -362,7 +365,16 @@ def run_doctor(config: Config, context: DoctorContext) -> DoctorReport:
             else "Run Touchstone from an external scheduler on this platform.",
         )
     )
-    if context.scheduler_status is not None:
+    if context.scheduler_error is not None:
+        checks.append(
+            CheckResult(
+                "scheduler.installed",
+                "WARN",
+                "could not inspect configured scheduler files",
+                "Verify the touchstone executable is installed and on PATH.",
+            )
+        )
+    elif context.scheduler_status is not None:
         missing = context.scheduler_status.missing
         checks.append(
             CheckResult(

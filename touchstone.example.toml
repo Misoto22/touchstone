@@ -17,7 +17,8 @@ reap_after_hours = 6
 
 [engine]
 name = "codex" # codex | claude
-model = "gpt-5.6-sol"
+# Replace with a model identifier supported by the selected engine.
+model = "your-model-id"
 audit_effort = "high"
 review_effort = "high"
 timeout_seconds = 2700

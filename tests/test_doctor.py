@@ -266,3 +266,17 @@ def test_doctor_warns_when_default_branch_protection_is_missing(tmp_path: Path) 
 
     assert check.level == "WARN"
     assert "not confirmed" in check.summary
+
+
+def test_doctor_reports_scheduler_inspection_failure(tmp_path: Path) -> None:
+    context = DoctorContext(
+        commands=frozenset({"git", "gh", "codex"}),
+        forge=MemoryForge(labels={"touchstone:audit", "touchstone:needs-review"}),
+        scheduler="launchd",
+        scheduler_error="could not locate executable",
+    )
+
+    check = run_doctor(_config(tmp_path), context).by_id("scheduler.installed")
+
+    assert check.level == "WARN"
+    assert "could not inspect" in check.summary

@@ -13,6 +13,7 @@ from __future__ import annotations
 import datetime as dt
 import os
 import shutil
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -84,6 +85,8 @@ def _gates(config: Config, loop_name: str, *, dry_run: bool) -> None:
     # first medium-risk finding would be the last thing the loop ever did.
     include_drafts = bool(loop.require_change_under)
     held = context.forge.open_pulls(loop.label, include_drafts=include_drafts)
+    if held is None:
+        raise Held("could not verify the open pull request slot")
     if held:
         raise Held(f"slot held by #{held[0]['number']}: {held[0].get('url', '')}")
 
@@ -151,16 +154,27 @@ def _worktree(config: Config) -> tuple[str, str]:
     return (path, branch)
 
 
-def _teardown(config: Config, path: str, branch: str, *, published: bool) -> None:
+def _teardown(config: Config, path: str, branch: str, *, published: bool) -> tuple[str, ...]:
     context = current()
     repo = config.execution_repo
-    context.executor.run(["git", "-C", repo, "worktree", "remove", "--force", path], timeout=60)
-    context.executor.run(["git", "-C", repo, "worktree", "prune"], timeout=60)
+    operations = [
+        (
+            ["git", "-C", repo, "worktree", "remove", "--force", path],
+            "remove the temporary worktree",
+        ),
+        (["git", "-C", repo, "worktree", "prune"], "prune worktree metadata"),
+    ]
     if not published:
         # Removing a worktree leaves its branch. A run that published wants it;
         # a clean pass or a crash leaves a dead ref nothing collects, and at one
         # run an hour that is a branch list nobody can read within a week.
-        context.executor.run(["git", "-C", repo, "branch", "-D", branch], timeout=60)
+        operations.append((["git", "-C", repo, "branch", "-D", branch], "delete the run branch"))
+    errors: list[str] = []
+    for argv, action in operations:
+        result = context.executor.run(argv, timeout=60)
+        if not result.ok:
+            errors.append(f"could not {action}: {result.tail()}")
+    return tuple(errors)
 
 
 def execute(config: Config, *, loop: str, dry_run: bool = False) -> int:
@@ -198,11 +212,12 @@ def execute(config: Config, *, loop: str, dry_run: bool = False) -> int:
     path = branch = ""
     published = False
     try:
-        RepositoryLifecycle(
-            context.forge,
-            context.ledger,
-            reap_after_hours=config.forge.reap_after_hours,
-        ).reconcile(config.loop(loop), dt.datetime.now(dt.UTC))
+        if not dry_run:
+            RepositoryLifecycle(
+                context.forge,
+                context.ledger,
+                reap_after_hours=config.forge.reap_after_hours,
+            ).reconcile(config.loop(loop), dt.datetime.now(dt.UTC))
         _gates(config, loop, dry_run=dry_run)
         path, branch = _worktree(config)
         thread_id = f"{loop}-{branch}"
@@ -235,6 +250,9 @@ def execute(config: Config, *, loop: str, dry_run: bool = False) -> int:
         for note in final.get("notes", []):
             print(f"  {note}")
         if paused:
+            parked_head = str(final.get("reviewed_head_sha") or "")
+            if parked_head:
+                print(f"  parked head: {parked_head}")
             print(f"  parked; resume with: touchstone resume {thread_id} merge|close")
         return 0
     except Held as held:
@@ -244,7 +262,11 @@ def execute(config: Config, *, loop: str, dry_run: bool = False) -> int:
         return 0
     finally:
         if path:
-            _teardown(config, path, branch, published=published)
+            cleanup_errors = _teardown(config, path, branch, published=published)
+            for error in cleanup_errors:
+                print(f"warning: {error}", file=sys.stderr)
+            if cleanup_errors:
+                final_detail = "; ".join(filter(None, (final_detail, *cleanup_errors)))
         shutil.rmtree(lock, ignore_errors=True)
         event_log.append(
             run_event(

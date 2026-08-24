@@ -473,11 +473,9 @@ def discover_config_path(start: Path | None = None) -> Path:
             return candidate
         if (directory / ".git").exists():
             break
+    home_config = Path.home() / ".config" / "touchstone" / "config.toml"
     xdg = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
-    search = (
-        xdg / "touchstone" / "config.toml",
-        Path("/etc/touchstone/config.toml"),
-    )
+    search = tuple(dict.fromkeys((xdg / "touchstone" / "config.toml", home_config)))
     for candidate in search:
         if candidate.exists():
             return candidate

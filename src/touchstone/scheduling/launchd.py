@@ -19,6 +19,11 @@ from touchstone.scheduling.base import (
 from touchstone.scheduling.model import parse_schedule
 
 
+def _not_loaded(result: Any) -> bool:
+    detail = result.tail().casefold()
+    return any(marker in detail for marker in ("could not find service", "not loaded"))
+
+
 class LaunchdScheduler:
     name = "launchd"
 
@@ -46,7 +51,15 @@ class LaunchdScheduler:
         domain = f"gui/{os.getuid()}"
         for path in report.files:
             label = path.stem
-            self._executor.run(["launchctl", "bootout", f"{domain}/{label}"], timeout=30)
+            active = self._executor.run(["launchctl", "print", f"{domain}/{label}"], timeout=30)
+            if active.ok:
+                unloaded = self._executor.run(
+                    ["launchctl", "bootout", f"{domain}/{label}"], timeout=30
+                )
+                if not unloaded.ok:
+                    raise RuntimeError(f"could not disable {label}: {unloaded.tail()}")
+            elif not _not_loaded(active):
+                raise RuntimeError(f"could not inspect {label}: {active.tail()}")
             loaded = self._executor.run(["launchctl", "bootstrap", domain, str(path)], timeout=30)
             if not loaded.ok:
                 raise RuntimeError(f"could not enable {label}: {loaded.tail()}")
@@ -61,7 +74,17 @@ class LaunchdScheduler:
         if target is None and not dry_run:
             domain = f"gui/{os.getuid()}"
             for path in files:
-                self._executor.run(["launchctl", "bootout", f"{domain}/{path.stem}"], timeout=30)
+                active = self._executor.run(
+                    ["launchctl", "print", f"{domain}/{path.stem}"], timeout=30
+                )
+                if active.ok:
+                    unloaded = self._executor.run(
+                        ["launchctl", "bootout", f"{domain}/{path.stem}"], timeout=30
+                    )
+                    if not unloaded.ok:
+                        raise RuntimeError(f"could not disable {path.stem}: {unloaded.tail()}")
+                elif not _not_loaded(active):
+                    raise RuntimeError(f"could not inspect {path.stem}: {active.tail()}")
         changed = tuple(path for path in files if path.exists())
         if not dry_run:
             for path in changed:

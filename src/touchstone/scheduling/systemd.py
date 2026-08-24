@@ -58,13 +58,19 @@ class SystemdScheduler:
         files = tuple(self._render(config, destination))
         timers = [path.name for path in files if path.suffix == ".timer"]
         if target is None and not dry_run and timers:
-            self._executor.run(["systemctl", "--user", "disable", "--now", *timers], timeout=60)
+            disabled = self._executor.run(
+                ["systemctl", "--user", "disable", "--now", *timers], timeout=60
+            )
+            if not disabled.ok:
+                raise RuntimeError(f"could not disable systemd timers: {disabled.tail()}")
         changed = tuple(path for path in files if path.exists())
         if not dry_run:
             for path in changed:
                 path.unlink()
             if target is None:
-                self._executor.run(["systemctl", "--user", "daemon-reload"], timeout=30)
+                reloaded = self._executor.run(["systemctl", "--user", "daemon-reload"], timeout=30)
+                if not reloaded.ok:
+                    raise RuntimeError(f"could not reload systemd: {reloaded.tail()}")
         return InstallReport(files=files, changed=changed)
 
     def status(self, config: Any) -> SchedulerStatus:

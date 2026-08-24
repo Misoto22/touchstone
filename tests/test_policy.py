@@ -12,6 +12,8 @@ def test_builtin_control_paths_cannot_be_removed_by_project_config() -> None:
 
     assert ".github/" in protected
     assert "touchstone.toml" in protected
+    assert "**/migrations/" in protected
+    assert "**/schema.*" in protected
 
 
 def test_protected_path_globs_match_environment_files() -> None:

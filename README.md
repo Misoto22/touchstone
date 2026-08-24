@@ -108,7 +108,7 @@ For automation, provide the decisions explicitly:
 ```bash
 touchstone init --non-interactive \
   --engine codex \
-  --model gpt-5.6-sol \
+  --model YOUR_MODEL_ID \
   --workflow ci.yml \
   --schedule hourly
 ```
@@ -117,7 +117,7 @@ touchstone init --non-interactive \
 
 ### Configuration
 
-Configuration starts with `version = 1`. Unknown keys fail validation. Search order is `--config`, `TOUCHSTONE_CONFIG`, `touchstone.toml` from the current directory to the Git root, the XDG user config, then `/etc/touchstone/config.toml`.
+Configuration starts with `version = 1`. Unknown keys fail validation. Search order is `--config`, `TOUCHSTONE_CONFIG`, `touchstone.toml` from the current directory to the Git root, `$XDG_CONFIG_HOME/touchstone/config.toml`, then `~/.config/touchstone/config.toml`.
 
 The generated file separates project decisions from credentials:
 
@@ -154,6 +154,8 @@ When a run parks, it prints the exact resume command:
 touchstone resume <thread-id> merge
 touchstone resume <thread-id> close
 ```
+
+`resume ... merge` is the operator's attestation that the printed parked head was reviewed. Touchstone reloads the live pull request and refuses the decision if that SHA has changed.
 
 ---
 

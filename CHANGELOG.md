@@ -23,5 +23,7 @@ All notable user-facing changes are documented here. The format follows [Keep a 
 - Built-in control-path escalation cannot be disabled by project config, and protected-path globs cover environment variants.
 - Secret-shaped SSH environment keys and invalid configuration types or ranges are rejected before execution.
 - A failed fetch cannot fall back to a stale default-branch worktree.
+- Dry runs no longer reconcile or close live pull requests, and persisted failure notes exclude model output.
+- GitHub API payloads and native scheduler command results are validated before state advances.
 
 [0.1.0]: https://github.com/Misoto22/touchstone/releases/tag/v0.1.0

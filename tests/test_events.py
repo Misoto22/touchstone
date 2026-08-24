@@ -4,7 +4,9 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+from touchstone.engines.base import Session
 from touchstone.events import EventLog, run_event
+from touchstone.nodes import audit
 
 
 def _config(secret: str = "do-not-log"):  # type: ignore[no-untyped-def]
@@ -67,3 +69,17 @@ def test_runner_records_started_and_finished_events() -> None:
     assert "EventLog" in source
     assert 'kind="started"' in source
     assert 'kind="finished"' in source
+
+
+def test_engine_failure_transcript_does_not_enter_graph_notes() -> None:
+    secret_transcript = "model said: private repository content"
+    session = Session(
+        ok=False,
+        text="",
+        cost=None,
+        timed_out=False,
+        detail=secret_transcript,
+    )
+
+    assert secret_transcript not in audit._session_failure("codex")
+    assert session.detail == secret_transcript

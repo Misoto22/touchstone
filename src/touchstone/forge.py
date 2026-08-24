@@ -17,6 +17,10 @@ from urllib.parse import quote
 from touchstone.execution import Executor
 
 
+class ForgeUnavailable(RuntimeError):
+    """GitHub state could not be distinguished from an empty result."""
+
+
 @dataclass(frozen=True, slots=True)
 class OperationResult:
     ok: bool
@@ -66,7 +70,7 @@ class Forge:
         except json.JSONDecodeError:
             return None
 
-    def open_pulls(self, label: str, *, include_drafts: bool) -> list[dict[str, Any]]:
+    def open_pulls(self, label: str, *, include_drafts: bool) -> list[dict[str, Any]] | None:
         """Pull requests holding the slot.
 
         `include_drafts` differs by loop and the difference is not an
@@ -75,45 +79,70 @@ class Forge:
         thing the loop ever did. For the harness review R-HAR-1 says "never
         more than one open at a time" — open, not open-and-not-a-draft.
         """
-        payload = (
-            self._json(
-                [
-                    "pr",
-                    "list",
-                    "--label",
-                    label,
-                    "--state",
-                    "open",
-                    "--json",
-                    "number,isDraft,createdAt,url",
-                ]
-            )
-            or []
+        payload = self._json(
+            [
+                "pr",
+                "list",
+                "--label",
+                label,
+                "--state",
+                "open",
+                "--json",
+                "number,isDraft,createdAt,url",
+            ]
         )
+        if not isinstance(payload, list):
+            return None
+        for pull in payload:
+            number = pull.get("number") if isinstance(pull, dict) else None
+            if (
+                not isinstance(pull, dict)
+                or isinstance(number, bool)
+                or not isinstance(number, int)
+                or number <= 0
+                or not isinstance(pull.get("isDraft"), bool)
+            ):
+                return None
+        pulls = payload
         if include_drafts:
-            return payload
-        return [pull for pull in payload if not pull.get("isDraft")]
+            return pulls
+        return [pull for pull in pulls if not pull.get("isDraft")]
 
     def repository_info(self) -> dict[str, Any] | None:
         payload = self._api_json(f"repos/{self._slug}")
         if not isinstance(payload, dict):
             return None
+        name = payload.get("full_name")
+        branch = payload.get("default_branch")
+        auto_merge = payload.get("allow_auto_merge")
+        if (
+            not isinstance(name, str)
+            or not name
+            or not isinstance(branch, str)
+            or not branch
+            or not isinstance(auto_merge, bool)
+        ):
+            return None
         return {
-            "nameWithOwner": str(payload.get("full_name") or ""),
-            "defaultBranchRef": {"name": str(payload.get("default_branch") or "")},
-            "autoMergeAllowed": bool(payload.get("allow_auto_merge")),
+            "nameWithOwner": name,
+            "defaultBranchRef": {"name": branch},
+            "autoMergeAllowed": auto_merge,
         }
 
     def branch_protection(self, branch: str) -> bool | None:
         payload = self._api_json(f"repos/{self._slug}/branches/{quote(branch, safe='')}")
-        if not isinstance(payload, dict):
+        if not isinstance(payload, dict) or not isinstance(payload.get("protected"), bool):
             return None
-        return bool(payload.get("protected"))
+        return payload["protected"]
 
     def labels(self) -> set[str]:
-        payload = self._json(["label", "list", "--limit", "100", "--json", "name"]) or []
+        payload = self._json(["label", "list", "--limit", "100", "--json", "name"])
+        if not isinstance(payload, list):
+            return set()
         return {
-            str(item["name"]) for item in payload if isinstance(item, dict) and item.get("name")
+            item["name"]
+            for item in payload
+            if isinstance(item, dict) and isinstance(item.get("name"), str) and item["name"]
         }
 
     def ensure_label(self, name: str, *, color: str, description: str) -> bool:
@@ -141,11 +170,11 @@ class Forge:
         argv = ["run", "list", "--workflow", workflow, "--limit", "1", "--json", "conclusion"]
         if branch:
             argv += ["--branch", branch]
-        payload = self._json(argv) or []
-        if not payload:
+        payload = self._json(argv)
+        if not isinstance(payload, list) or not payload or not isinstance(payload[0], dict):
             return "unknown"
         conclusion = payload[0].get("conclusion")
-        return conclusion if conclusion else "pending"
+        return conclusion if isinstance(conclusion, str) and conclusion else "pending"
 
     def create_pull(
         self,
@@ -206,9 +235,16 @@ class Forge:
                 "number,headRefOid,headRefName,isDraft,state,mergedAt,createdAt,url,statusCheckRollup",
             ]
         )
-        if not isinstance(payload, list) or not payload or not isinstance(payload[0], dict):
+        if not isinstance(payload, list):
+            raise ForgeUnavailable("could not verify the existing pull request")
+        if not payload:
             return None
-        return _pull_state(payload[0])
+        if len(payload) != 1 or not isinstance(payload[0], dict):
+            raise ForgeUnavailable("existing pull request response is malformed")
+        pull = _pull_state(payload[0])
+        if pull is None:
+            raise ForgeUnavailable("existing pull request response is malformed")
+        return pull
 
     def arm_auto_merge(self, number: int) -> OperationResult:
         ok, detail = self._gh(["pr", "merge", str(number), "--auto", "--squash", "--delete-branch"])
@@ -231,11 +267,25 @@ class Forge:
         return OperationResult(ok, "" if ok else detail)
 
 
-def _pull_state(payload: dict[str, Any]) -> PullState:
+def _pull_state(payload: dict[str, Any]) -> PullState | None:
+    number = payload.get("number")
+    if isinstance(number, bool) or not isinstance(number, int) or number <= 0:
+        return None
+    for key in ("headRefOid", "headRefName", "state", "createdAt", "url"):
+        if key in payload and not isinstance(payload[key], str):
+            return None
+    if "isDraft" in payload and not isinstance(payload["isDraft"], bool):
+        return None
+    if (
+        "mergedAt" in payload
+        and payload["mergedAt"] is not None
+        and not isinstance(payload["mergedAt"], str)
+    ):
+        return None
     merged_at = payload.get("mergedAt")
     state = str(payload.get("state") or "").upper()
     return PullState(
-        number=int(payload["number"]),
+        number=number,
         head_sha=str(payload.get("headRefOid") or ""),
         branch=str(payload.get("headRefName") or ""),
         draft=bool(payload.get("isDraft")),
@@ -275,4 +325,4 @@ def _check_state(raw: Any) -> str:
     return "unknown"
 
 
-__all__ = ["Forge", "OperationResult", "PullState"]
+__all__ = ["Forge", "ForgeUnavailable", "OperationResult", "PullState"]
