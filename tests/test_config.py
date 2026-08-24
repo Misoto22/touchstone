@@ -191,3 +191,34 @@ def test_config_rejects_invalid_types_and_ranges(
 
     with pytest.raises(ConfigError, match=message):
         load_config(_write(tmp_path / "touchstone.toml", raw))
+
+
+def test_a_malformed_attachment_entry_is_refused_at_load(tmp_path: Path) -> None:
+    """A misspelled key would reach the session as a heading that is simply
+    absent, and an absent section reads as evidence nobody asked for — not as
+    evidence asked for wrongly."""
+    for bad, expected in (
+        ('[[loop.code.attachment]]\ncommand = ["just"]\n', "heading"),
+        ('[[loop.code.attachment]]\nheading = "x"\n', "command"),
+        ('[[loop.code.attachment]]\nheading = "x"\ncommand = "just census"\n', "command"),
+        ('[[loop.code.attachment]]\nheading = "x"\ncommand = []\n', "command"),
+        ('[[loop.code.attachment]]\nheading = "x"\ncommand = ["a"]\ntypo = 1\n', "typo"),
+    ):
+        path = _write(tmp_path / "touchstone.toml", _valid_config() + bad)
+        with pytest.raises(ConfigError) as raised:
+            load_config(path)
+        assert expected in str(raised.value)
+
+
+def test_attachment_keeps_the_order_it_was_written_in(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "touchstone.toml",
+        _valid_config()
+        + '[[loop.code.attachment]]\nheading = "The census"\ncommand = ["just", "census"]\n'
+        + '[[loop.code.attachment]]\nheading = "The latest CI run"\ncommand = ["gh", "run"]\n',
+    )
+    loop = load_config(path).loops["code"]
+    assert loop.attachment == (
+        ("The census", ("just", "census")),
+        ("The latest CI run", ("gh", "run")),
+    )

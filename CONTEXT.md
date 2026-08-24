@@ -40,6 +40,10 @@ _Avoid_: Guessing, runtime framework selection
 An explainable `confirmed`, `candidate`, or `unsupported` classification paired with the Stack Evidence that produced it.
 _Avoid_: Confidence score, unexplained match
 
+**Loop Attachment**:
+A named command whose output is appended to a Loop's brief, so a session reads current repository state instead of being told about it.
+_Avoid_: Evidence, context substitution, trusted input
+
 **Stack Evidence**:
 Repository-owned manifests, lockfiles, and framework configuration that support a Stack Detection result.
 _Avoid_: Model guess, filename hunch
