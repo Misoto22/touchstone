@@ -31,6 +31,7 @@ def _root_config(*, generated: str = ".touchstone/generated.toml") -> dict[str, 
                 "label": "touchstone:audit",
                 "schedule": "hourly@00",
                 "targets": ["web"],
+                "priority": 10,
             }
         },
     }
@@ -101,6 +102,7 @@ def test_v2_loads_generated_then_project_override(tmp_path: Path) -> None:
     assert config.targets["web"].validation[0].argv == ("npm", "test")
     assert config.targets["web"].validation[0].enabled is False
     assert config.loop("code").targets == ("web",)
+    assert config.loop("code").priority == 10
     assert config.generated_metadata is not None
     assert config.generated_metadata.source_digest == "sha256:test"
 

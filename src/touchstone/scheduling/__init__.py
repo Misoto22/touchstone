@@ -6,7 +6,9 @@ import sys
 
 from touchstone.execution import Executor
 from touchstone.scheduling.base import InstallReport, Scheduler, SchedulerStatus
+from touchstone.scheduling.due import DueEvaluator, DueLoop, DueSlot, schedule_generation
 from touchstone.scheduling.model import Schedule, ScheduleError, parse_schedule
+from touchstone.scheduling.store import ClaimResult, DueStore, DurableClaim, SlotRecord
 
 
 def build_scheduler(platform: str, executor: Executor) -> Scheduler:
@@ -26,12 +28,20 @@ def current_scheduler(executor: Executor) -> Scheduler:
 
 
 __all__ = [
+    "ClaimResult",
+    "DueEvaluator",
+    "DueLoop",
+    "DueSlot",
+    "DueStore",
+    "DurableClaim",
     "InstallReport",
     "Schedule",
     "ScheduleError",
     "Scheduler",
     "SchedulerStatus",
+    "SlotRecord",
     "build_scheduler",
     "current_scheduler",
     "parse_schedule",
+    "schedule_generation",
 ]

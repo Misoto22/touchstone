@@ -110,6 +110,7 @@ class LoopConfig:
     label: str
     config_dir: Path
     schedule: str | None = None
+    priority: int = 100
     protected_paths: tuple[str, ...] = ()
     require_change_under: tuple[str, ...] = ()
     confine_to: tuple[str, ...] = ()
@@ -212,6 +213,7 @@ _LOOP = {
     "brief",
     "label",
     "schedule",
+    "priority",
     "protected_paths",
     "require_change_under",
     "confine_to",
@@ -329,6 +331,7 @@ def _validate(raw: dict[str, Any]) -> None:
             raise ConfigError(f"[loop.{name}.context] must be a table")
         for key in ("brief", "label", "schedule"):
             _string(value, key, f"loop.{name}", required=key in {"brief", "label"})
+        _positive_int(value, "priority", f"loop.{name}")
         for key in ("protected_paths", "require_change_under", "confine_to", "targets"):
             _string_array(value, key, f"loop.{name}")
         if any(
@@ -368,6 +371,7 @@ def _loops(raw: dict[str, Any], base_dir: Path) -> dict[str, LoopConfig]:
             label=str(_required(table, "label", f"loop.{name}")),
             config_dir=base_dir,
             schedule=str(schedule) if schedule is not None else None,
+            priority=int(table.get("priority", 100)),
             protected_paths=tuple(table.get("protected_paths", ())),
             require_change_under=tuple(table.get("require_change_under", ())),
             confine_to=tuple(table.get("confine_to", ())),
