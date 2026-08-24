@@ -16,6 +16,21 @@ class TargetConfig:
     path: Path
     profiles: tuple[str, ...]
     dependencies: tuple[str, ...] = ()
+    validation: tuple[ValidationGateConfig, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ValidationGateConfig:
+    argv: tuple[str, ...]
+    timeout_seconds: int
+    capability: str
+    enabled: bool = False
+    cwd: Path = Path(".")
+    preparation: str = "none"
+    shell: bool = False
+    risk_acknowledged: bool = False
+    allow_scripts: bool = False
+    allow_build_hooks: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,7 +61,7 @@ def merge_generated(generated: dict[str, Any], overrides: dict[str, Any]) -> dic
         if isinstance(base, dict) and isinstance(override, dict):
             merged[key] = merge_generated(base, override)
         elif isinstance(base, list) and isinstance(override, list):
-            merged[key] = _deduplicate((*base, *override))
+            merged[key] = _merge_lists(base, override)
         else:
             merged[key] = override
     return merged
@@ -129,6 +144,7 @@ def _targets(raw: object, repository: Path) -> dict[str, TargetConfig]:
         path_value = value.get("path")
         profiles = value.get("profiles", [])
         dependencies = value.get("dependencies", [])
+        validation = value.get("validation", [])
         if not isinstance(path_value, str) or not path_value.strip():
             raise ConfigError(f"target.{target_id}.path must be a non-empty string")
         relative = Path(path_value)
@@ -144,6 +160,7 @@ def _targets(raw: object, repository: Path) -> dict[str, TargetConfig]:
             path=relative,
             profiles=tuple(profiles),
             dependencies=tuple(dependencies),
+            validation=_validation(validation, target_id),
         )
     return result
 
@@ -160,9 +177,105 @@ def _deduplicate(values: tuple[object, ...]) -> list[object]:
     return result
 
 
+def _merge_lists(base: list[object], override: list[object]) -> list[object]:
+    """Merge keyed command records while retaining additive list semantics."""
+    if not all(isinstance(item, dict) and isinstance(item.get("argv"), list) for item in base):
+        return _deduplicate((*base, *override))
+    result = [dict(item) for item in base]
+    for value in override:
+        if not isinstance(value, dict) or not isinstance(value.get("argv"), list):
+            if value not in result:
+                result.append(value)
+            continue
+        index = next(
+            (
+                position
+                for position, current in enumerate(result)
+                if current.get("argv") == value.get("argv")
+            ),
+            None,
+        )
+        if index is None:
+            result.append(dict(value))
+        else:
+            result[index] = merge_generated(result[index], value)
+    return result
+
+
+def _validation(raw: object, target_id: str) -> tuple[ValidationGateConfig, ...]:
+    if not isinstance(raw, list):
+        raise ConfigError(f"target.{target_id}.validation must be an array of tables")
+    allowed = {
+        "argv",
+        "timeout_seconds",
+        "capability",
+        "enabled",
+        "cwd",
+        "preparation",
+        "shell",
+        "risk_acknowledged",
+        "allow_scripts",
+        "allow_build_hooks",
+    }
+    result = []
+    for index, value in enumerate(raw):
+        where = f"target.{target_id}.validation[{index}]"
+        if not isinstance(value, dict):
+            raise ConfigError(f"{where} must be a table")
+        extra = sorted(set(value) - allowed)
+        if extra:
+            raise ConfigError(f"unknown configuration key {where}.{extra[0]}")
+        argv = value.get("argv")
+        timeout = value.get("timeout_seconds", 300)
+        capability = value.get("capability", "source-read")
+        enabled = value.get("enabled", False)
+        cwd = value.get("cwd", ".")
+        if not _string_list(argv) or not argv:
+            raise ConfigError(f"{where}.argv must be an array of non-empty strings")
+        if isinstance(timeout, bool) or not isinstance(timeout, int) or timeout <= 0:
+            raise ConfigError(f"{where}.timeout_seconds must be a positive integer")
+        if not isinstance(capability, str) or not capability:
+            raise ConfigError(f"{where}.capability must be a non-empty string")
+        if not isinstance(enabled, bool) or not isinstance(cwd, str) or not cwd:
+            raise ConfigError(f"{where} enabled/cwd values are invalid")
+        relative_cwd = Path(cwd)
+        if relative_cwd.is_absolute() or ".." in relative_cwd.parts:
+            raise ConfigError(f"{where}.cwd must stay inside the Target")
+        flags = {
+            name: value.get(name, False)
+            for name in (
+                "shell",
+                "risk_acknowledged",
+                "allow_scripts",
+                "allow_build_hooks",
+            )
+        }
+        if any(not isinstance(flag, bool) for flag in flags.values()):
+            raise ConfigError(f"{where} safety flags must be booleans")
+        preparation = value.get("preparation", "none")
+        if preparation not in {"none", "locked-install"}:
+            raise ConfigError(f"{where}.preparation must be 'none' or 'locked-install'")
+        result.append(
+            ValidationGateConfig(
+                argv=tuple(argv),
+                timeout_seconds=timeout,
+                capability=capability,
+                enabled=enabled,
+                cwd=relative_cwd,
+                preparation=preparation,
+                shell=flags["shell"],
+                risk_acknowledged=flags["risk_acknowledged"],
+                allow_scripts=flags["allow_scripts"],
+                allow_build_hooks=flags["allow_build_hooks"],
+            )
+        )
+    return tuple(result)
+
+
 __all__ = [
     "GeneratedMetadata",
     "TargetConfig",
+    "ValidationGateConfig",
     "load_v2",
     "merge_generated",
 ]

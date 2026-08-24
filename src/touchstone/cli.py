@@ -130,6 +130,33 @@ def _profile_refresh(args: argparse.Namespace) -> int:
     return 3 if report.changed and not args.write else 0
 
 
+def _validate(args: argparse.Namespace) -> int:
+    from touchstone import execution
+    from touchstone.validation import prepare, validate
+
+    config = load(args.config)
+    if args.target:
+        targets = tuple(args.target)
+    elif args.loop:
+        targets = config.loop(args.loop).targets
+    else:
+        targets = tuple(config.targets)
+    executor = execution.build(config)
+    preparation = prepare(config, targets, executor)
+    for result in preparation.results:
+        print(f"prepare {result.target}: {result.reason} — {' '.join(result.argv)}")
+    if preparation.outcome == "blocked":
+        return 3
+    report = validate(config, targets, executor)
+    for result in report.results:
+        print(f"validate {result.target}: {result.reason} — {' '.join(result.argv)}")
+        if result.reason not in {"passed", "disabled"}:
+            detail = (result.stderr or result.stdout).strip()
+            if detail:
+                print(f"  {detail[-400:]}")
+    return 3 if report.blocked else 0
+
+
 def _doctor(args: argparse.Namespace) -> int:
     from touchstone.doctor import build_context, run_doctor
 
@@ -342,6 +369,11 @@ def main(argv: list[str] | None = None) -> int:
     refresh_mode.add_argument("--check", action="store_true", help="report drift without writing")
     refresh_mode.add_argument("--write", action="store_true", help="replace generated config")
     profile_refresh.set_defaults(handler=_profile_refresh)
+
+    validate = sub.add_parser("validate", help="run enabled structured Validation Gates")
+    validate.add_argument("loop", nargs="?", help="use this Loop's configured Targets")
+    validate.add_argument("--target", action="append", help="validate only this Target")
+    validate.set_defaults(handler=_validate)
 
     doctor = sub.add_parser("doctor", help="check prerequisites without changing them")
     doctor.add_argument("--json", action="store_true")

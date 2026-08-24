@@ -42,6 +42,26 @@ def _request(state: dict[str, Any], context: Any) -> PublicationRequest:
 
 def _publish(state: dict[str, Any]) -> dict[str, Any]:
     context = current()
+    from touchstone.validation import validate
+
+    loop = context.loop(state["loop"])
+    validation = validate(
+        context.config,
+        loop.targets,
+        context.executor,
+        repository=Path(state["worktree"]),
+    )
+    if validation.blocked:
+        details = [
+            f"{' '.join(result.argv)}: {result.reason}"
+            for result in validation.results
+            if not result.ok
+        ]
+        return {
+            "outcome": "held",
+            "pr": None,
+            "notes": ["Validation blocked publication: " + "; ".join(details)],
+        }
     lifecycle = RepositoryLifecycle(
         context.forge,
         context.ledger,

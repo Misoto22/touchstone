@@ -50,6 +50,14 @@ def _generated_config() -> dict[str, object]:
                 "path": "apps/web",
                 "profiles": ["javascript", "nextjs"],
                 "dependencies": [],
+                "validation": [
+                    {
+                        "argv": ["npm", "test"],
+                        "timeout_seconds": 600,
+                        "capability": "package-script",
+                        "enabled": False,
+                    }
+                ],
             }
         },
     }
@@ -90,6 +98,8 @@ def test_v2_loads_generated_then_project_override(tmp_path: Path) -> None:
     assert config.forge.required_workflows == ("ci.yml", "security.yml")
     assert config.targets["web"].path == Path("apps/web")
     assert config.targets["web"].profiles == ("javascript", "nextjs")
+    assert config.targets["web"].validation[0].argv == ("npm", "test")
+    assert config.targets["web"].validation[0].enabled is False
     assert config.loop("code").targets == ("web",)
     assert config.generated_metadata is not None
     assert config.generated_metadata.source_digest == "sha256:test"
@@ -101,3 +111,15 @@ def test_generated_path_cannot_escape_repository(tmp_path: Path) -> None:
 
     with pytest.raises(ConfigError, match=r"generated.*repository"):
         load(root)
+
+
+def test_project_can_enable_a_generated_validation_candidate(tmp_path: Path) -> None:
+    _write(tmp_path / ".touchstone/generated.toml", _generated_config())
+    root_data = _root_config()
+    root_data["target"] = {"web": {"validation": [{"argv": ["npm", "test"], "enabled": True}]}}
+    root = _write(tmp_path / "touchstone.toml", root_data)
+
+    config = load(root)
+
+    assert len(config.targets["web"].validation) == 1
+    assert config.targets["web"].validation[0].enabled is True
