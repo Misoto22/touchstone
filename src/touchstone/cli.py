@@ -190,6 +190,31 @@ def _setup(args: argparse.Namespace) -> int:
     return 0
 
 
+def _actions_init(args: argparse.Namespace) -> int:
+    from touchstone.hosted.workflow import (
+        ActionPins,
+        actions_diff,
+        render_workflow,
+        resolve_action_sha,
+    )
+
+    config = load(args.config)
+    action_sha = args.action_sha or resolve_action_sha(config)
+    report = actions_diff(
+        config.repo_path,
+        render_workflow(config, ActionPins(), action_sha=action_sha),
+    )
+    if report.changed:
+        print(report.diff)
+        if args.check:
+            return 3
+        report.write()
+        print(f"wrote {report.path}")
+    else:
+        print("GitHub Actions workflow is current")
+    return 0
+
+
 def _status(args: argparse.Namespace) -> int:
     import json
 
@@ -427,6 +452,17 @@ def main(argv: list[str] | None = None) -> int:
     setup.add_argument("--dry-run", action="store_true")
     setup.add_argument("--json", action="store_true")
     setup.set_defaults(handler=_setup)
+
+    actions = sub.add_parser("actions", help="manage the GitHub-hosted execution backend")
+    actions_sub = actions.add_subparsers(dest="actions_command", required=True)
+    actions_init = actions_sub.add_parser("init", help="render the repository-owned workflow")
+    actions_init.add_argument(
+        "--action-sha", help="immutable Touchstone Action commit (40 hexadecimal characters)"
+    )
+    actions_init.add_argument(
+        "--check", action="store_true", help="report drift without writing (exit 3 on drift)"
+    )
+    actions_init.set_defaults(handler=_actions_init)
 
     status = sub.add_parser("status", help="read repository lifecycle state without mutation")
     status.add_argument("--json", action="store_true")

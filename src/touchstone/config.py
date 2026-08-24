@@ -104,6 +104,16 @@ class ForgeConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class ActionsConfig:
+    visibility: Literal["public", "private"] = "public"
+    wake_minutes: int = 15
+    artifact_retention_days: int = 90
+    action_sha: str = ""
+    approval_environment: str = ""
+    auto_merge: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class LoopConfig:
     name: str
     brief: str
@@ -155,6 +165,7 @@ class Config:
     timezone: str = "UTC"
     targets: dict[str, TargetConfig] = field(default_factory=dict)
     generated_metadata: GeneratedMetadata | None = None
+    actions: ActionsConfig = field(default_factory=ActionsConfig)
 
     def loop(self, name: str) -> LoopConfig:
         try:
@@ -186,7 +197,17 @@ class Config:
         )
 
 
-_TOP_LEVEL = {"version", "project", "state_dir", "forge", "engine", "execution", "git", "loop"}
+_TOP_LEVEL = {
+    "version",
+    "project",
+    "state_dir",
+    "forge",
+    "engine",
+    "execution",
+    "git",
+    "loop",
+    "actions",
+}
 _PROJECT = {"path"}
 _FORGE = {
     "provider",
@@ -219,6 +240,14 @@ _LOOP = {
     "confine_to",
     "targets",
     "context",
+}
+_ACTIONS = {
+    "visibility",
+    "wake_minutes",
+    "artifact_retention_days",
+    "action_sha",
+    "approval_environment",
+    "auto_merge",
 }
 
 
@@ -289,6 +318,7 @@ def _validate(raw: dict[str, Any]) -> None:
     execution = _table(raw, "execution")
     git = _table(raw, "git")
     loops = _table(raw, "loop")
+    actions = _table(raw, "actions")
     _unknown(project, _PROJECT, "project")
     _unknown(forge, _FORGE, "forge")
     _unknown(engine, _ENGINE, "engine")
@@ -296,6 +326,7 @@ def _validate(raw: dict[str, Any]) -> None:
     _unknown(execution, _EXECUTION, "execution")
     _unknown(_table(execution, "ssh"), _SSH, "execution.ssh")
     _unknown(git, _GIT, "git")
+    _unknown(actions, _ACTIONS, "actions")
     _string(project, "path", "project", required=True)
     if "state_dir" in raw and not isinstance(raw["state_dir"], str):
         raise ConfigError("state_dir must be a string")
@@ -322,6 +353,14 @@ def _validate(raw: dict[str, Any]) -> None:
         raise ConfigError("execution.ssh.env must be a table of string values")
     for key in ("author_name", "author_email"):
         _string(git, key, "git")
+    for key in ("visibility", "action_sha", "approval_environment"):
+        _string(actions, key, "actions")
+    for key in ("wake_minutes", "artifact_retention_days"):
+        _positive_int(actions, key, "actions")
+    if "auto_merge" in actions and not isinstance(actions["auto_merge"], bool):
+        raise ConfigError("actions.auto_merge must be a boolean")
+    if actions.get("visibility", "public") not in {"public", "private"}:
+        raise ConfigError("actions.visibility must be 'public' or 'private'")
     for name, value in loops.items():
         if not isinstance(value, dict):
             raise ConfigError(f"[loop.{name}] must be a table")
@@ -403,6 +442,7 @@ def _build_config(
     execution_raw = _table(raw, "execution")
     ssh_raw = _table(execution_raw, "ssh")
     git_raw = _table(raw, "git")
+    actions_raw = _table(raw, "actions")
 
     engine_name = os.environ.get("TOUCHSTONE_ENGINE", engine_raw.get("name", "codex"))
     if engine_name not in ("codex", "claude"):
@@ -476,6 +516,19 @@ def _build_config(
         timezone=timezone,
         targets=dict(targets or {}),
         generated_metadata=generated_metadata,
+        actions=ActionsConfig(
+            visibility=actions_raw.get("visibility", "public"),
+            wake_minutes=int(
+                actions_raw.get(
+                    "wake_minutes",
+                    15 if actions_raw.get("visibility", "public") == "public" else 60,
+                )
+            ),
+            artifact_retention_days=int(actions_raw.get("artifact_retention_days", 90)),
+            action_sha=str(actions_raw.get("action_sha", "")),
+            approval_environment=str(actions_raw.get("approval_environment", "")),
+            auto_merge=bool(actions_raw.get("auto_merge", False)),
+        ),
     )
 
 
@@ -527,6 +580,7 @@ def load(path: Path | None = None) -> Config:
 
 
 __all__ = [
+    "ActionsConfig",
     "Budget",
     "Config",
     "ConfigError",

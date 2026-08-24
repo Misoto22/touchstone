@@ -111,6 +111,12 @@ def render_config(
             "timeout_seconds": 2700,
         },
         "execution": {"target": "local"},
+        "actions": {
+            "visibility": "public",
+            "wake_minutes": 15,
+            "artifact_retention_days": 90,
+            "auto_merge": False,
+        },
         "loop": {
             "code": {
                 "brief": "builtin:code-audit",

@@ -25,6 +25,12 @@ def _root_config(*, generated: str = ".touchstone/generated.toml") -> dict[str, 
             "required_workflows": ["ci.yml", "security.yml"],
         },
         "engine": {"name": "codex", "model": "gpt-test", "timeout_seconds": 1200},
+        "actions": {
+            "visibility": "private",
+            "wake_minutes": 60,
+            "artifact_retention_days": 90,
+            "auto_merge": False,
+        },
         "loop": {
             "code": {
                 "brief": "builtin:code-audit",
@@ -104,6 +110,9 @@ def test_v2_loads_generated_then_project_override(tmp_path: Path) -> None:
     assert config.loop("code").targets == ("web",)
     assert config.loop("code").priority == 10
     assert config.generated_metadata is not None
+    assert config.actions.visibility == "private"
+    assert config.actions.wake_minutes == 60
+    assert config.actions.auto_merge is False
     assert config.generated_metadata.source_digest == "sha256:test"
 
 
