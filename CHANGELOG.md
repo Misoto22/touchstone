@@ -43,6 +43,7 @@ All notable user-facing changes are documented here. The format follows [Keep a 
 - A Publish job that fails or is cancelled without recording its outcome is reconstructed by Snapshot from the authenticated candidate as a `failed` partial marker.
 - Hosted commits are authored by the publishing App's bot identity instead of an identity git synthesizes from the runner's user and hostname.
 - `reconcile` no longer treats an existing pull request as a finished publication: a partial write stays unresolved until the Loop and escalation labels a complete publication applies are actually present.
+- A partial publication now exits non-zero. A parked thread was read as a completed run before the outcome was consulted, so a publication that opened a pull request and then failed reported exit 0 and every exit-code monitor stayed silent.
 - Owner App setup verifies repository scope and permissions with a short-lived App JWT before persisting only a non-secret attestation; later local checks label that evidence as cached.
 - Hosted bundles use AES-256-GCM with manifest AAD, fresh nonces, path-safe archives, configuration/Profile lineage checks, and ciphertext digests.
 - GitHub App private keys are sent to repository secrets through stdin and are never persisted by Touchstone.

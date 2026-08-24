@@ -261,6 +261,7 @@ def execute(config: Config, *, loop: str, dry_run: bool = False) -> int:
             paused=paused,
             pr=final_pr,
             detail=final_detail,
+            partial=final.get("partial") is True,
         )
         final_outcome = result.outcome.value
         published = result.lifecycle is not None

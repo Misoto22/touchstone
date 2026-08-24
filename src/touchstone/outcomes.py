@@ -82,9 +82,32 @@ def from_legacy_outcome(
     paused: bool = False,
     pr: int | None = None,
     detail: str = "",
+    partial: bool = False,
 ) -> RunResult:
+    """Map a graph outcome onto the run contract the exit code reports.
+
+    Order matters. A parked thread is not automatically a successful run: a
+    publication that pushed a branch and opened a pull request but failed at a
+    later step still parks, because the pull request exists and the graph asks a
+    person about it. Reading `paused` first reported that run as `completed`
+    with exit 0, so every monitor built on exit codes -- systemd `OnFailure=`,
+    a scheduled job that opens an issue on failure -- stayed silent through it.
+    An operation that should have succeeded and did not is a failure whatever
+    the graph did afterwards.
+    """
+
     if dry_run or value == "rehearsed":
         return RunResult(RunOutcome.REHEARSED, detail=detail)
+    if partial:
+        return RunResult(
+            RunOutcome.FAILED,
+            lifecycle=ChangeState.FAILED,
+            reason_code="partial-publication",
+            detail=detail,
+            pr_number=pr,
+            partial=True,
+            retryable=True,
+        )
     if value == "clean":
         return RunResult(RunOutcome.NO_CHANGE, detail=detail)
     if value in {"inconclusive"}:
@@ -92,6 +115,16 @@ def from_legacy_outcome(
             RunOutcome.FAILED,
             reason_code="contract-inconclusive",
             detail=detail,
+            retryable=True,
+        )
+    if value in {"held", "blocked"}:
+        return RunResult(RunOutcome.BLOCKED, reason_code="safety-gate", detail=detail)
+    if value == "failed":
+        return RunResult(
+            RunOutcome.FAILED,
+            reason_code="publication",
+            detail=detail,
+            pr_number=pr,
             retryable=True,
         )
     if value in {"awaiting_human", "escalated", "parked"} or paused:
@@ -108,8 +141,6 @@ def from_legacy_outcome(
             pr_number=pr,
             detail=detail,
         )
-    if value in {"held", "blocked"}:
-        return RunResult(RunOutcome.BLOCKED, reason_code="safety-gate", detail=detail)
     return RunResult(
         RunOutcome.FAILED,
         reason_code="unknown-outcome",
