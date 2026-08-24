@@ -45,10 +45,12 @@ def test_relative_paths_are_resolved_from_the_config_file(tmp_path: Path) -> Non
     config_path = write_config(tmp_path / "nested" / "touchstone.toml", project_path="../repo")
     assert load_config(config_path).repo_path == (tmp_path / "repo").resolve()
 
+
 def test_unknown_keys_are_rejected(tmp_path: Path) -> None:
     path = write_raw_config(tmp_path, VALID_CONFIG + '\n[engine]\nmodle = "wrong"\n')
     with pytest.raises(ConfigError, match="engine.modle"):
         load_config(path)
+
 
 def test_builtin_brief_is_available_from_package_resources(tmp_path: Path) -> None:
     config = load_config(write_config(tmp_path, brief="builtin:code-audit"))
@@ -68,6 +70,7 @@ Expected: FAIL on missing `load_config` and unresolved `builtin:` brief.
 class ConfigSource:
     path: Path
     schema_version: int
+
 
 def load_config(path: Path | None = None) -> Config:
     chosen = path or discover_config_path()
@@ -116,6 +119,7 @@ def test_discovers_slug_and_default_branch_from_origin(tmp_path: Path) -> None:
     assert found.slug == "acme/widgets"
     assert found.default_branch == "trunk"
 
+
 def test_non_interactive_init_writes_a_loadable_generic_config(tmp_path: Path) -> None:
     repo = make_git_repo(tmp_path, remote="https://github.com/acme/widgets.git")
     path = initialize(init_options(repo, engine="codex", model="gpt-test"), LocalExecutor())
@@ -140,6 +144,7 @@ class ProjectDiscovery:
     default_branch: str
     engines: tuple[str, ...]
     scheduler: Literal["launchd", "systemd", "unsupported"]
+
 
 @dataclass(frozen=True, slots=True)
 class InitOptions:
@@ -199,6 +204,7 @@ def test_doctor_fails_before_sessions_when_engine_is_missing(config: Config) -> 
     check = report.by_id("engine.command")
     assert (check.level, check.repair) == ("FAIL", "Install the configured codex command")
 
+
 def test_setup_dry_run_reports_labels_without_mutation(config: Config) -> None:
     forge = recording_forge(existing_labels=set())
     report = setup(config, dry_run=True, forge=forge)
@@ -221,6 +227,7 @@ class CheckResult:
     level: Literal["PASS", "WARN", "FAIL"]
     summary: str
     repair: str | None = None
+
 
 @dataclass(frozen=True, slots=True)
 class DoctorReport:
@@ -274,6 +281,7 @@ def test_migration_backs_up_unversioned_config_before_replacement(tmp_path: Path
     report = migrate_config(source)
     assert report.backup.read_bytes() == LEGACY_CONFIG.encode()
     assert load_config(source).source.schema_version == 1
+
 
 def test_distribution_uses_public_name_and_contains_briefs() -> None:
     metadata = tomllib.loads(Path("pyproject.toml").read_text())

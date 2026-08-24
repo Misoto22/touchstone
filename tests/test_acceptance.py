@@ -452,7 +452,9 @@ def test_the_loop_removes_its_own_scratch_files() -> None:
     assert "rm" in inspect.getsource(claude.ClaudeEngine.author), "the settings file survives"
 
 
-def test_answering_a_parked_thread_does_not_open_a_second_pull_request() -> None:
+def test_answering_a_parked_thread_does_not_open_a_second_pull_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A node that interrupts re-executes from its first line when resumed.
 
     Publishing and waiting in one node therefore opened a draft, stopped, and
@@ -460,6 +462,10 @@ def test_answering_a_parked_thread_does_not_open_a_second_pull_request() -> None
     checkpoint between the side effect and the wait, which is what makes the
     side effect happen once — and only a real resume shows it, because the
     first half looks perfect on its own.
+
+    `monkeypatch` rather than plain assignment: replacing a module's functions
+    outright leaves them replaced for every test that runs afterwards, which is
+    how the ledger test below passed on its own and failed in the suite.
     """
     from langgraph.checkpoint.memory import InMemorySaver
     from langgraph.types import Command
@@ -468,13 +474,25 @@ def test_answering_a_parked_thread_does_not_open_a_second_pull_request() -> None
 
     for answer, expected in (("merge", "merging"), ("close", "escalated")):
         calls: list[str] = []
-        G.publish.park = lambda s, c=calls: (c.append("park"), {"pr": 999})[1]  # type: ignore[assignment]
-        G.publish.arm_merge = lambda s, c=calls: (c.append("merge"), {"outcome": "merging"})[1]  # type: ignore[assignment]
-        G.publish.record_closed = lambda s, c=calls: (c.append("close"), {"outcome": "escalated"})[
-            1
-        ]  # type: ignore[assignment]
-        G.audit.run = lambda s: {"finding": {"status": "proposed", "risk": "medium", "title": "t"}}  # type: ignore[assignment]
-        G.classify.run = lambda s: {"risk": "medium"}  # type: ignore[assignment]
+        monkeypatch.setattr(
+            G.publish, "park", lambda s, c=calls: (c.append("park"), {"pr": 999})[1]
+        )
+        monkeypatch.setattr(
+            G.publish,
+            "arm_merge",
+            lambda s, c=calls: (c.append("merge"), {"outcome": "merging"})[1],
+        )
+        monkeypatch.setattr(
+            G.publish,
+            "record_closed",
+            lambda s, c=calls: (c.append("close"), {"outcome": "escalated"})[1],
+        )
+        monkeypatch.setattr(
+            G.audit,
+            "run",
+            lambda s: {"finding": {"status": "proposed", "risk": "medium", "title": "t"}},
+        )
+        monkeypatch.setattr(G.classify, "run", lambda s: {"risk": "medium"})
 
         app = G.build().compile(checkpointer=InMemorySaver())
         thread = {"configurable": {"thread_id": f"t-{answer}"}}
@@ -485,3 +503,37 @@ def test_answering_a_parked_thread_does_not_open_a_second_pull_request() -> None
 
         assert calls.count("park") == 1, f"{answer}: published {calls.count('park')} times"
         assert final.get("outcome") == expected
+
+
+def test_every_ending_leaves_a_row_in_the_ledger() -> None:
+    """A run that found nothing still has to say so.
+
+    The point of a scheduled loop is that its absence is noticeable: silence
+    means the review did not run, and that is itself a finding. A `clean`
+    outcome writing no row makes "ran and found nothing" indistinguishable from
+    "never started" — the one distinction the ledger exists to preserve. It was
+    silent for exactly that outcome until a real run on the server ended
+    `clean` and left nothing behind.
+    """
+    import inspect
+
+    from touchstone import runner
+    from touchstone.nodes import audit, classify, publish
+
+    assert "ledger.record" in inspect.getsource(audit._clean)
+
+    # Nothing may end a run clean without going through `_clean`.
+    helper = inspect.getsource(audit._clean)
+    for module in (audit, classify):
+        body = inspect.getsource(module).replace(helper, "")
+        assert '"outcome": "clean"' not in body, (
+            f"{module.__name__} ends a run clean without recording it"
+        )
+
+    # Publishing routes through the lifecycle service, which appends one event
+    # for each successful forge transition. Rehearsals keep their own row, and
+    # the runner independently records every run's terminal outcome.
+    assert "RepositoryLifecycle" in inspect.getsource(publish._publish)
+    assert "RepositoryLifecycle" in inspect.getsource(publish._resume)
+    assert "ledger.record" in inspect.getsource(publish.rehearse)
+    assert 'kind="finished"' in inspect.getsource(runner.execute)

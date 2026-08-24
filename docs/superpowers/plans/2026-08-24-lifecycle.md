@@ -44,6 +44,7 @@ def test_terminal_failure_does_not_suppress_rediscovery(tmp_path: Path, terminal
     ledger.append(event("f-1", terminal, title="Broken invariant"))
     assert ledger.suppressed_titles() == []
 
+
 def test_legacy_merging_row_projects_as_armed(tmp_path: Path) -> None:
     path = write_jsonl(tmp_path, {"status": "merging", "title": "Old finding", "pr": 7})
     assert Ledger(path).projections()[legacy_id("Old finding")].state == "armed"
@@ -103,7 +104,15 @@ git commit -m "feat: project finding lifecycle events"
 def test_pull_state_preserves_head_and_check_conclusions(fake_gh: FakeGh, forge: Forge) -> None:
     fake_gh.add_pull(number=12, head_sha="abc123", draft=True, checks=["SUCCESS", "FAILURE"])
     pull = forge.pull(12)
-    assert pull == PullState(number=12, head_sha="abc123", draft=True, check_state="failure", merged_at=None, closed=False)
+    assert pull == PullState(
+        number=12,
+        head_sha="abc123",
+        draft=True,
+        check_state="failure",
+        merged_at=None,
+        closed=False,
+    )
+
 
 def test_auto_merge_failure_returns_the_error(fake_gh: FakeGh, forge: Forge) -> None:
     fake_gh.fail_next("pr merge", stderr="auto-merge is disabled")
@@ -124,6 +133,7 @@ Expected: FAIL.
 class OperationResult:
     ok: bool
     detail: str = ""
+
 
 @dataclass(frozen=True, slots=True)
 class PullState:
@@ -166,17 +176,21 @@ git commit -m "feat: model live pull request state"
 - [ ] **Step 1: Write failing reconciliation tests**
 
 ```python
-def test_reconcile_records_merged_when_github_has_merged_pull(lifecycle: RepositoryLifecycle) -> None:
+def test_reconcile_records_merged_when_github_has_merged_pull(
+    lifecycle: RepositoryLifecycle,
+) -> None:
     seed(lifecycle.ledger, state="armed", pr=12, head_sha="abc")
     lifecycle.forge.set_pull(12, merged_at="2026-08-24T01:00:00Z")
     lifecycle.reconcile(loop("code"), now=NOW)
     assert lifecycle.ledger.projection("f-1").state == "merged"
+
 
 def test_reaper_closes_only_old_failed_non_drafts(lifecycle: RepositoryLifecycle) -> None:
     seed_old_armed_pull(lifecycle, pr=12, age_hours=7, check_state="failure", draft=False)
     report = lifecycle.reconcile(loop("code", reap_after_hours=6), now=NOW)
     assert report.reaped == (12,)
     assert lifecycle.ledger.projection("f-1").state == "reaped"
+
 
 def test_reaper_never_closes_parked_drafts(lifecycle: RepositoryLifecycle) -> None:
     seed_old_parked_pull(lifecycle, pr=13, age_days=90)
@@ -231,6 +245,7 @@ def test_failed_auto_merge_is_held_and_not_armed(lifecycle: RepositoryLifecycle)
     assert result.outcome == "held"
     assert lifecycle.ledger.projection(result.finding_id).state == "proposed"
 
+
 def test_retry_reuses_existing_pull_for_branch(lifecycle: RepositoryLifecycle) -> None:
     lifecycle.forge.add_pull(number=12, branch="touchstone/run-1", head_sha="abc")
     result = lifecycle.publish(request(branch="touchstone/run-1", head_sha="abc"))
@@ -258,6 +273,7 @@ class PublicationRequest:
     verdict: Verdict
     title: str
     body: str
+
 
 @dataclass(frozen=True, slots=True)
 class PublicationResult:
@@ -307,6 +323,7 @@ def test_resume_refuses_a_changed_head(lifecycle: RepositoryLifecycle) -> None:
     result = lifecycle.resume(resume_request(pr=12, decision="merge"))
     assert result.outcome == "held"
     assert "changed since review" in result.detail
+
 
 def test_resume_marks_draft_ready_before_arming(lifecycle: RepositoryLifecycle) -> None:
     parked(lifecycle, pr=12, reviewed_head_sha="same", live_head_sha="same")
@@ -362,6 +379,7 @@ git commit -m "fix: bind resume to the reviewed pull head"
 @pytest.mark.parametrize("raw", ["", "not json", '{"status":"unexpected"}'])
 def test_invalid_finding_is_inconclusive(raw: str) -> None:
     assert parse_finding(raw).status == "inconclusive"
+
 
 def test_event_log_excludes_prompts_and_environment_values(tmp_path: Path) -> None:
     log = EventLog(tmp_path / "events.jsonl")

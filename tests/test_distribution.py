@@ -10,6 +10,22 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_documented_pytest_entrypoint_collects_internal_helpers() -> None:
+    result = subprocess.run(
+        [
+            str(Path(sys.executable).with_name("pytest")),
+            "--collect-only",
+            "-q",
+            "tests/test_context.py",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_distribution_metadata_declares_public_contract() -> None:
     metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     project = metadata["project"]

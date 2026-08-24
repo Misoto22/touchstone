@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 .venv/
+# Local sibling checkouts must never be committed as gitlinks.
 .worktrees/
 .langgraph_api/
 .env

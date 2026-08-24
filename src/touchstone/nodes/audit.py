@@ -85,6 +85,24 @@ def _session_failure(engine_name: str) -> str:
     return f"the {engine_name} session failed"
 
 
+def _clean(context: Any, state: dict[str, Any], detail: str, **extra: Any) -> dict[str, Any]:
+    """A run that found nothing, written down.
+
+    The runner's event log records every finished run. Keep a clean ledger row
+    as well so existing operators can distinguish "ran and found nothing" from
+    "never started" while lifecycle projections remain finding-only.
+    """
+    context.ledger.record(
+        status="clean",
+        loop=str(state.get("loop") or ""),
+        risk=None,
+        pr=None,
+        title=state.get("finding", {}).get("title", ""),
+        detail=detail,
+    )
+    return {"finding": {"status": "none"}, "outcome": "clean", **extra}
+
+
 def run(state: dict[str, Any]) -> dict[str, Any]:
     context = current()
     loop = context.loop(state["loop"])
@@ -121,5 +139,11 @@ def run(state: dict[str, Any]) -> dict[str, Any]:
             "cost": [session.cost],
         }
     if finding.status == "none":
-        return {"finding": finding.to_state(), "outcome": "clean", "cost": [session.cost]}
+        return _clean(
+            context,
+            state,
+            finding.summary,
+            finding=finding.to_state(),
+            cost=[session.cost],
+        )
     return {"finding": finding.to_state(), "cost": [session.cost]}

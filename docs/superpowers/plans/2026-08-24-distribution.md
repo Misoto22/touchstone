@@ -41,10 +41,15 @@
 ```python
 @pytest.mark.parametrize(
     ("raw", "systemd"),
-    [("hourly", "hourly"), ("daily@03:15", "*-*-* 03:15:00"), ("weekly@MON,09:30", "Mon *-*-* 09:30:00")],
+    [
+        ("hourly", "hourly"),
+        ("daily@03:15", "*-*-* 03:15:00"),
+        ("weekly@MON,09:30", "Mon *-*-* 09:30:00"),
+    ],
 )
 def test_schedule_has_a_stable_systemd_calendar(raw: str, systemd: str) -> None:
     assert parse_schedule(raw).systemd_calendar() == systemd
+
 
 @pytest.mark.parametrize("raw", ["", "daily@25:00", "weekly@FUNDAY,09:00", "*/5 * * * *"])
 def test_invalid_or_unsupported_schedules_are_rejected(raw: str) -> None:
@@ -107,6 +112,7 @@ def test_launchd_file_has_absolute_paths_and_no_environment_secrets(tmp_path: Pa
     assert "/absolute/bin/touchstone" in plist
     assert "/absolute/project/touchstone.toml" in plist
     assert "GH_TOKEN" not in plist
+
 
 def test_systemd_install_is_idempotent(tmp_path: Path) -> None:
     scheduler = systemd_scheduler()
