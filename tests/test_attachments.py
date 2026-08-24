@@ -5,7 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from touchstone.execution.base import Result
-from touchstone.nodes.audit import EVIDENCE_LIMIT, _evidence
+from touchstone.nodes.audit import ATTACHMENT_LIMIT, _attachment
 
 
 class _Executor:
@@ -19,12 +19,12 @@ class _Executor:
 
 
 def _loop(*evidence):  # type: ignore[no-untyped-def]
-    return SimpleNamespace(evidence=tuple(evidence))
+    return SimpleNamespace(attachment=tuple(evidence))
 
 
-def test_a_loop_without_evidence_adds_nothing() -> None:
+def test_a_loop_without_attachment_adds_nothing() -> None:
     executor = _Executor()
-    assert _evidence(SimpleNamespace(executor=executor), _loop(), "/tree") == ""
+    assert _attachment(SimpleNamespace(executor=executor), _loop(), "/tree") == ""
     assert executor.calls == []
 
 
@@ -32,7 +32,7 @@ def test_collected_output_reaches_the_prompt_under_its_heading() -> None:
     executor = _Executor(Result(code=0, stdout="rows: 54\n", stderr=""))
     loop = _loop(("The census", ("just", "census")))
 
-    text = _evidence(SimpleNamespace(executor=executor), loop, "/tree")
+    text = _attachment(SimpleNamespace(executor=executor), loop, "/tree")
 
     assert "### The census" in text
     assert "rows: 54" in text
@@ -46,20 +46,20 @@ def test_a_failed_command_says_so_rather_than_going_missing() -> None:
     executor = _Executor(Result(code=127, stdout="", stderr="just: not found"))
     loop = _loop(("The census", ("just", "census")))
 
-    text = _evidence(SimpleNamespace(executor=executor), loop, "/tree")
+    text = _attachment(SimpleNamespace(executor=executor), loop, "/tree")
 
     assert "### The census" in text
     assert "unavailable" in text
     assert "127" in text
 
 
-def test_oversized_evidence_is_refused_rather_than_cut() -> None:
+def test_oversized_attachment_is_refused_rather_than_cut() -> None:
     """Half a census cannot say whether a ratchet regressed, while looking like
     it can — the same reason the review refuses an oversized diff."""
-    executor = _Executor(Result(code=0, stdout="x" * (EVIDENCE_LIMIT + 1), stderr=""))
+    executor = _Executor(Result(code=0, stdout="x" * (ATTACHMENT_LIMIT + 1), stderr=""))
     loop = _loop(("The census", ("just", "census")))
 
-    text = _evidence(SimpleNamespace(executor=executor), loop, "/tree")
+    text = _attachment(SimpleNamespace(executor=executor), loop, "/tree")
 
     assert "unavailable" in text
     assert "x" * 200 not in text, "the oversized output was pasted in anyway"
@@ -72,12 +72,12 @@ def test_sections_keep_the_order_they_were_configured_in() -> None:
     )
     loop = _loop(("The census", ("a",)), ("The latest CI run", ("b",)))
 
-    text = _evidence(SimpleNamespace(executor=executor), loop, "/tree")
+    text = _attachment(SimpleNamespace(executor=executor), loop, "/tree")
 
     assert text.index("The census") < text.index("The latest CI run")
 
 
-def test_evidence_runs_without_the_credentials_around_it(monkeypatch) -> None:
+def test_attachment_runs_without_the_credentials_around_it(monkeypatch) -> None:
     """A hosted Analysis step holds the model key and `TOUCHSTONE_STATE_KEY`,
     and an evidence command is repository-authored — `just census` is whatever
     the justfile and its dependencies say today. The rest of the system already
@@ -99,7 +99,7 @@ def test_evidence_runs_without_the_credentials_around_it(monkeypatch) -> None:
             seen.update(env or {})
             return Result(code=0, stdout="ok", stderr="")
 
-    _evidence(
+    _attachment(
         SimpleNamespace(executor=_Recording()),
         _loop(("The census", ("just", "census"))),
         "/tree",
@@ -128,7 +128,7 @@ def test_a_command_that_cannot_start_does_not_end_the_run() -> None:
             return Result(code=0, stdout="later output", stderr="")
 
     executor = _Missing()
-    text = _evidence(
+    text = _attachment(
         SimpleNamespace(executor=executor),
         _loop(("The census", ("just", "census")), ("The latest CI run", ("gh", "run"))),
         "/tree",
@@ -140,7 +140,7 @@ def test_a_command_that_cannot_start_does_not_end_the_run() -> None:
     assert executor.calls == 2
 
 
-def test_changing_evidence_changes_the_configuration_digest() -> None:
+def test_changing_attachment_changes_the_configuration_digest() -> None:
     """Evidence lands in the audit prompt, so it is an Analysis input. Left out
     of the digest, a changed command keeps naming the same state artifact and a
     snapshot taken under the old evidence is restored as compatible."""
@@ -150,13 +150,13 @@ def test_changing_evidence_changes_the_configuration_digest() -> None:
         name="code",
         brief="builtin:code-audit",
         label="touchstone:audit",
-        evidence=(("The census", ("just", "census")),),
+        attachment=(("The census", ("just", "census")),),
     )
     changed_command = SimpleNamespace(
-        **{**vars(base), "evidence": (("The census", ("just", "c")),)}
+        **{**vars(base), "attachment": (("The census", ("just", "c")),)}
     )
     changed_heading = SimpleNamespace(
-        **{**vars(base), "evidence": (("The ratchet census", ("just", "census")),)}
+        **{**vars(base), "attachment": (("The ratchet census", ("just", "census")),)}
     )
 
     assert _loop_config(base) != _loop_config(changed_command)

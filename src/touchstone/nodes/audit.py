@@ -104,14 +104,14 @@ def _clean(context: Any, state: dict[str, Any], detail: str, **extra: Any) -> di
     return {"finding": {"status": "none"}, "outcome": "clean", **extra}
 
 
-#: Above this an evidence section is refused rather than cut. A census is read
+#: Above this an attachment is refused rather than cut. A census is read
 #: to decide whether a ratchet regressed, and half a census cannot answer that
 #: while looking like it did — the same reason the review refuses an oversized
 #: diff instead of truncating it.
-EVIDENCE_LIMIT = 40_000
+ATTACHMENT_LIMIT = 40_000
 
 
-def _evidence(context: Any, loop: Any, worktree: str) -> str:
+def _attachment(context: Any, loop: Any, worktree: str) -> str:
     """The sections the brief says were "collected before you".
 
     Without this the promise is unkept and the session says so: kioku's nightly
@@ -123,7 +123,7 @@ def _evidence(context: Any, loop: Any, worktree: str) -> str:
     Run without credentials. A hosted Analysis step holds the model key and
     `TOUCHSTONE_STATE_KEY`, and the environment is already scrubbed before the
     model, preparation and validation subprocesses for exactly that reason.
-    An evidence command is repository-authored — `just census` is whatever the
+    An attachment command is repository-authored — `just census` is whatever the
     justfile and its dependencies say it is today — so inheriting that
     environment would route both secrets around a boundary the rest of the
     system keeps. `engine_environment` is the same allowlist those subprocesses
@@ -131,16 +131,16 @@ def _evidence(context: Any, loop: Any, worktree: str) -> str:
 
     A command that fails produces a section saying it is unavailable, never a
     missing section. The brief distinguishes the two: an absent heading reads
-    as evidence nobody asked for, and an unavailable one as evidence that was
+    as an attachment nobody asked for, and an unavailable one as one that was
     asked for and could not be had. Only the second is true here — which is why
     a command that cannot even start is caught rather than allowed to end the
     run, and why the entries after it are still collected.
     """
-    if not loop.evidence:
+    if not loop.attachment:
         return ""
     environment = engine_environment("")
-    parts = ["\n\n## Evidence collected for you\n"]
-    for heading, argv in loop.evidence:
+    parts = ["\n\n## Collected before this session started\n"]
+    for heading, argv in loop.attachment:
         shown = " ".join(argv)
         try:
             result = context.executor.run(list(argv), cwd=worktree, timeout=600, env=environment)
@@ -149,10 +149,10 @@ def _evidence(context: Any, loop: Any, worktree: str) -> str:
         else:
             if not result.ok:
                 body = f"unavailable: `{shown}` exited {result.code}"
-            elif len(result.stdout) > EVIDENCE_LIMIT:
+            elif len(result.stdout) > ATTACHMENT_LIMIT:
                 body = (
                     f"unavailable: `{shown}` produced {len(result.stdout)} characters, "
-                    f"over the {EVIDENCE_LIMIT} this prompt carries. A partial answer "
+                    f"over the {ATTACHMENT_LIMIT} this prompt carries. A partial answer "
                     "here would look like a whole one."
                 )
             else:
@@ -171,7 +171,7 @@ def run(state: dict[str, Any]) -> dict[str, Any]:
     if handled:
         brief += "\n\n## Already handled — do not raise any of these again\n\n"
         brief += "\n".join(f"- {title}" for title in handled)
-    brief += _evidence(context, loop, worktree)
+    brief += _attachment(context, loop, worktree)
 
     session = context.engine.author(brief, worktree=worktree, denied=loop.protected_paths)
     if session.blocked:
