@@ -420,6 +420,10 @@ def test_the_briefs_keep_the_constraints_that_were_paid_for() -> None:
     assert "Remove **one** violation" in flowed
     assert "Never raise one" in flowed
     assert "Record what it found" in flowed
+    # kioku protects its register from the loop that would edit it. Without
+    # this the register queue makes every run touch a protected path, which
+    # forces the highest risk class and parks the change — quietly, each time.
+    assert "yours to write" in flowed
     # A ceiling raised instead of a regression reported.
     assert "never raised" in harness
     # A date stamped in UTC by a schedule that runs on local time.

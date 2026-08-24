@@ -33,11 +33,19 @@ only when the queue above is empty, and take the first row of either kind:
 
 - **A measured rule whose count is above zero.** Remove **one** violation. Not
   all of them: a diff that touches two hundred call sites cannot be reviewed by
-  anyone, and this one merges without a person. Then lower the recorded count by
-  exactly what you removed.
+  anyone, and this one merges without a person.
 - **A rule that exists only as prose**, with no test named as its home. Write
   the test that measures it, and record the row as measured at whatever count
   that test finds.
+
+**Check whether the register is yours to write before you plan to write it.** It
+is often protected, and for a reason — a session that can edit the standard it
+is measured against will eventually edit the standard. Where it is protected,
+do the work and leave the file alone: the count is a measurement, so removing a
+violation lowers it whether or not anyone writes the new number down, and
+whoever owns the register follows it down. Editing it anyway does not fail
+loudly; it makes the diff touch a protected path, which forces the change to
+the highest risk class and parks it for a person. Every run, silently, forever.
 
 Three things about counts, and they decide whether this is safe:
 
