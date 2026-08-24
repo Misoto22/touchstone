@@ -19,6 +19,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 
 from touchstone.config import Config
 from touchstone.graph import build
+from touchstone.lifecycle import RepositoryLifecycle
 from touchstone.nodes.context import current
 
 
@@ -139,6 +140,11 @@ def execute(config: Config, *, loop: str, dry_run: bool = False) -> int:
     path = branch = ""
     published = False
     try:
+        RepositoryLifecycle(
+            context.forge,
+            context.ledger,
+            reap_after_hours=config.forge.reap_after_hours,
+        ).reconcile(config.loop(loop), dt.datetime.now(dt.UTC))
         _gates(config, loop, dry_run=dry_run)
         path, branch = _worktree(config)
         thread_id = f"{loop}-{branch}"
