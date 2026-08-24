@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -38,9 +39,11 @@ def test_readme_starts_with_the_installable_first_run() -> None:
 
 def test_readme_links_the_published_release() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    version = metadata["project"]["version"]
 
     assert "https://pypi.org/project/touchstone-agent/" in readme
-    assert "https://github.com/Misoto22/touchstone/releases/tag/v0.1.0" in readme
+    assert f"https://github.com/Misoto22/touchstone/releases/tag/v{version}" in readme
     assert "release candidate" not in readme
     assert "Before the first PyPI release" not in readme
 
