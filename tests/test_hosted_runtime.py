@@ -62,6 +62,51 @@ def test_stage_environment_keeps_model_and_publish_credentials_apart() -> None:
         validate_stage_environment("snapshot", {"GH_TOKEN": "app-token"})
 
 
+def test_agent_runtime_install_uses_an_isolated_secret_free_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import subprocess
+
+    from touchstone.hosted import runtime
+
+    observed: dict[str, str] = {}
+
+    def which(command: str) -> str | None:
+        return "/usr/bin/npm" if command == "npm" else None
+
+    def install(argv, **kwargs):  # type: ignore[no-untyped-def]
+        observed.update(kwargs["env"])
+        prefix = Path(argv[argv.index("--prefix") + 1])
+        binary = prefix / "bin" / "codex"
+        binary.parent.mkdir(parents=True)
+        binary.write_text("#!/bin/sh\n", encoding="utf-8")
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(runtime.shutil, "which", which)
+    monkeypatch.setattr(subprocess, "run", install)
+    config = SimpleNamespace(
+        engine=SimpleNamespace(name="codex"),
+        actions=SimpleNamespace(codex_cli_version="0.149.1"),
+    )
+
+    runtime._ensure_engine(
+        config,
+        {
+            "GITHUB_ACTIONS": "true",
+            "RUNNER_TEMP": str(tmp_path),
+            "PATH": "/usr/bin:/bin",
+            "HOME": "/home/runner",
+            "OPENAI_API_KEY": "model-secret",
+            "TOUCHSTONE_STATE_KEY": "state-secret",
+        },
+    )
+
+    assert observed["PATH"] == "/usr/bin:/bin"
+    assert observed["HOME"].startswith(str(tmp_path))
+    assert "OPENAI_API_KEY" not in observed
+    assert "TOUCHSTONE_STATE_KEY" not in observed
+
+
 def test_hosted_outputs_are_versioned_and_write_github_contracts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

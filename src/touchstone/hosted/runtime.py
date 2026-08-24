@@ -1542,6 +1542,7 @@ def _ensure_engine(config: Config, env: Mapping[str, str]) -> None:
     if not binary.is_file():
         import subprocess
 
+        installation_environment = _agent_install_environment(env, prefix)
         completed = subprocess.run(
             [
                 npm,
@@ -1557,10 +1558,27 @@ def _ensure_engine(config: Config, env: Mapping[str, str]) -> None:
             text=True,
             timeout=300,
             check=False,
+            env=installation_environment,
         )
         if completed.returncode != 0 or not binary.is_file():
             raise ConfigError(f"could not install {engine} CLI {version}")
     os.environ["PATH"] = f"{binary.parent}{os.pathsep}{os.environ.get('PATH', '')}"
+
+
+def _agent_install_environment(env: Mapping[str, str], prefix: Path) -> dict[str, str]:
+    home = prefix / "install-home"
+    cache = prefix / "npm-cache"
+    home.mkdir(parents=True, exist_ok=True)
+    cache.mkdir(parents=True, exist_ok=True)
+    allowed = {
+        key: value
+        for key, value in env.items()
+        if key in {"LANG", "LC_ALL", "LC_CTYPE", "PATH", "TEMP", "TMP", "TMPDIR", "TZ"}
+    }
+    allowed["HOME"] = str(home)
+    allowed["npm_config_cache"] = str(cache)
+    allowed["npm_config_userconfig"] = os.devnull
+    return allowed
 
 
 def _git_head(repository: Path) -> str:
