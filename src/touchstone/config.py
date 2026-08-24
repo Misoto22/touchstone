@@ -10,7 +10,10 @@ from dataclasses import dataclass, field
 from importlib.resources import files
 from pathlib import Path, PurePosixPath
 from string import Template
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from touchstone.config_v2 import GeneratedMetadata, TargetConfig
 
 EngineName = Literal["codex", "claude"]
 Target = Literal["local", "ssh"]
@@ -24,6 +27,7 @@ class ConfigError(ValueError):
 class ConfigSource:
     path: Path
     schema_version: int
+    generated_path: Path | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,6 +150,9 @@ class Config:
     execution: ExecutionConfig
     git: GitConfig
     loops: dict[str, LoopConfig]
+    timezone: str = "UTC"
+    targets: dict[str, TargetConfig] = field(default_factory=dict)
+    generated_metadata: GeneratedMetadata | None = None
 
     def loop(self, name: str) -> LoopConfig:
         try:
@@ -369,20 +376,16 @@ def _loops(raw: dict[str, Any], base_dir: Path) -> dict[str, LoopConfig]:
     return result
 
 
-def load_config(path: Path | None = None) -> Config:
-    chosen = (path or discover_config_path()).expanduser().resolve()
-    try:
-        raw = tomllib.loads(chosen.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        raise ConfigError(f"no configuration at {chosen}") from None
-    except tomllib.TOMLDecodeError as exc:
-        raise ConfigError(f"{chosen} is not valid TOML: {exc}") from None
-
-    version = raw.get("version")
-    if version is None:
-        raise ConfigError("unversioned configuration; run 'touchstone config migrate'")
-    if version != 1:
-        raise ConfigError(f"unsupported configuration version {version!r}; expected 1")
+def _build_config(
+    chosen: Path,
+    raw: dict[str, Any],
+    *,
+    schema_version: int,
+    generated_path: Path | None = None,
+    timezone: str = "UTC",
+    targets: dict[str, TargetConfig] | None = None,
+    generated_metadata: GeneratedMetadata | None = None,
+) -> Config:
     _validate(raw)
 
     base_dir = chosen.parent
@@ -438,7 +441,11 @@ def load_config(path: Path | None = None) -> Config:
         Path.cwd() if repo_override else base_dir,
     )
     return Config(
-        source=ConfigSource(path=chosen, schema_version=1),
+        source=ConfigSource(
+            path=chosen,
+            schema_version=schema_version,
+            generated_path=generated_path,
+        ),
         repo_path=repo_path,
         state_dir=_state_dir(
             raw,
@@ -459,7 +466,31 @@ def load_config(path: Path | None = None) -> Config:
             author_name=git_raw.get("author_name"), author_email=git_raw.get("author_email")
         ),
         loops=_loops(_table(raw, "loop"), base_dir),
+        timezone=timezone,
+        targets=dict(targets or {}),
+        generated_metadata=generated_metadata,
     )
+
+
+def load_config(path: Path | None = None) -> Config:
+    chosen = (path or discover_config_path()).expanduser().resolve()
+    try:
+        raw = tomllib.loads(chosen.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise ConfigError(f"no configuration at {chosen}") from None
+    except tomllib.TOMLDecodeError as exc:
+        raise ConfigError(f"{chosen} is not valid TOML: {exc}") from None
+
+    version = raw.get("version")
+    if version is None:
+        raise ConfigError("unversioned configuration; run 'touchstone config migrate'")
+    if version == 2:
+        from touchstone.config_v2 import load_v2
+
+        return load_v2(chosen, raw)
+    if version != 1:
+        raise ConfigError(f"unsupported configuration version {version!r}; expected 1 or 2")
+    return _build_config(chosen, raw, schema_version=1)
 
 
 def discover_config_path(start: Path | None = None) -> Path:

@@ -15,6 +15,7 @@ _WEEKDAYS = {
     "SAT": (5, "Sat", 7),
     "SUN": (6, "Sun", 1),
 }
+_HOURLY = re.compile(r"hourly@(\d{2})")
 _DAILY = re.compile(r"daily@(\d{2}):(\d{2})")
 _WEEKLY = re.compile(r"weekly@([A-Z]{3}),(\d{2}):(\d{2})")
 
@@ -32,7 +33,7 @@ class Schedule:
 
     def systemd_calendar(self) -> str:
         if self.frequency == "hourly":
-            return "hourly"
+            return "hourly" if self.minute is None else f"*-*-* *:{self.minute:02d}:00"
         assert self.hour is not None and self.minute is not None
         clock = f"{self.hour:02d}:{self.minute:02d}:00"
         if self.frequency == "daily":
@@ -43,7 +44,7 @@ class Schedule:
 
     def launchd_calendar(self) -> dict[str, int] | None:
         if self.frequency == "hourly":
-            return None
+            return None if self.minute is None else {"Minute": self.minute}
         assert self.hour is not None and self.minute is not None
         calendar = {"Hour": self.hour, "Minute": self.minute}
         if self.frequency == "weekly":
@@ -57,6 +58,12 @@ class Schedule:
 def parse_schedule(raw: str) -> Schedule:
     if raw == "hourly":
         return Schedule("hourly")
+    hourly = _HOURLY.fullmatch(raw)
+    if hourly:
+        minute = int(hourly.group(1))
+        if minute > 59:
+            raise ScheduleError(f"invalid local time in schedule {raw!r}")
+        return Schedule("hourly", minute=minute)
     daily = _DAILY.fullmatch(raw)
     if daily:
         hour, minute = _clock(daily.group(1), daily.group(2), raw)
@@ -69,7 +76,8 @@ def parse_schedule(raw: str) -> Schedule:
         hour, minute = _clock(weekly.group(2), weekly.group(3), raw)
         return Schedule("weekly", hour=hour, minute=minute, weekday=weekday[0])
     raise ScheduleError(
-        f"unsupported schedule {raw!r}; use hourly, daily@HH:MM, or weekly@DAY,HH:MM"
+        f"unsupported schedule {raw!r}; use hourly@MM, daily@HH:MM, "
+        "or weekly@DAY,HH:MM"
     )
 
 
