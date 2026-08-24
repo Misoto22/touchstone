@@ -537,3 +537,62 @@ def test_every_ending_leaves_a_row_in_the_ledger() -> None:
     assert "RepositoryLifecycle" in inspect.getsource(publish._resume)
     assert "ledger.record" in inspect.getsource(publish.rehearse)
     assert 'kind="finished"' in inspect.getsource(runner.execute)
+
+
+def test_the_reviewer_sees_the_files_the_commit_will_create(tmp_path) -> None:
+    """`git diff` omits untracked files; `git add -A` commits them.
+
+    Two pull requests were rejected for "including neither the implementation
+    nor the claimed test" while both were in the diff — as new files, invisible
+    to the reviewer. The wrong reject is the cheap direction. The same gap
+    approves a change whose entire risk is in a file the reviewer never read.
+    """
+    import subprocess
+
+    from touchstone.execution import LocalExecutor
+    from touchstone.nodes.review import _reviewable_diff
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*argv: str) -> None:
+        subprocess.run(["git", "-C", str(repo), *argv], check=True, capture_output=True)
+
+    git("init", "-q", ".")
+    git("config", "user.email", "t@example.com")
+    git("config", "user.name", "t")
+    (repo / "existing.py").write_text("value = 1\n", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-qm", "base")
+    git("branch", "-q", "base-ref")
+
+    (repo / "existing.py").write_text("value = 2\n", encoding="utf-8")
+    (repo / "brand_new.py").write_text("def helper() -> int:\n    return 1\n", encoding="utf-8")
+
+    class _Context:
+        executor = LocalExecutor()
+
+    diff = _reviewable_diff(_Context(), str(repo), "base-ref")
+
+    assert diff is not None
+    assert "existing.py" in diff, "the tracked change is missing"
+    assert "brand_new.py" in diff, "a file the commit will create is missing from the review"
+    assert "def helper() -> int:" in diff, "the new file's contents never reach the reviewer"
+
+
+def test_an_incomplete_diff_is_refused_rather_than_narrowed(monkeypatch, tmp_path) -> None:
+    """Falling back to the tracked-only diff would review a subset and return a
+    verdict on the whole, which is the failure the staging step removes."""
+    from touchstone.execution import Result
+    from touchstone.nodes.review import _reviewable_diff
+
+    class _Executor:
+        def run(self, argv, timeout=None):  # type: ignore[no-untyped-def]
+            if "--intent-to-add" in argv:
+                return Result(code=1, stdout="", stderr="index.lock exists")
+            raise AssertionError("the diff was read after staging failed")
+
+    class _Context:
+        executor = _Executor()
+
+    assert _reviewable_diff(_Context(), str(tmp_path), "base-ref") is None

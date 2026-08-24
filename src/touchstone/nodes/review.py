@@ -60,6 +60,37 @@ def parse_review(raw: str) -> ReviewAnswer:
     return ReviewAnswer("valid", verdict=verdict, reason=reason)
 
 
+def _reviewable_diff(context, worktree: str, base: str) -> str | None:  # type: ignore[no-untyped-def]
+    """Everything the commit will carry, including files that do not exist yet.
+
+    `git diff <base>` lists tracked changes only, and the commit is `git add -A`,
+    which sweeps untracked files as well. So a change that adds a module and its
+    tests arrived here as a change importing a module it never defines and
+    proving nothing. Two were rejected for "including neither the implementation
+    nor the claimed test" while the diff contained both; the reviewer judged
+    exactly what it was shown.
+
+    A wrong reject is the survivable direction and not the reason this matters.
+    The same blindness approves a change whose entire risk sits in a file the
+    reviewer never saw — one step in front of an unattended production merge.
+
+    `--intent-to-add` records paths without their content, which is what makes
+    them appear in `git diff` at all. It stages nothing the publishing
+    `git add -A` would not stage, and skips ignored files on the same rules, so
+    what the reviewer reads is what the commit will contain.
+
+    Returns `None` rather than the narrower diff when the staging fails.
+    Falling back would review a subset while reporting a verdict on the whole,
+    which is the failure this function exists to remove.
+    """
+    staged = context.executor.run(
+        ["git", "-C", worktree, "add", "--all", "--intent-to-add"], timeout=120
+    )
+    if not staged.ok:
+        return None
+    return context.executor.run(["git", "-C", worktree, "diff", base], timeout=180).stdout
+
+
 def run(state: dict[str, Any]) -> dict[str, Any]:
     context = current()
     loop = context.loop(state["loop"])
@@ -70,7 +101,12 @@ def run(state: dict[str, Any]) -> dict[str, Any]:
 
     brief = Template(loop.review_prompt()).safe_substitute(dict(loop.context))
 
-    diff = context.executor.run(["git", "-C", worktree, "diff", base], timeout=180).stdout
+    diff = _reviewable_diff(context, worktree, base)
+    if diff is None:
+        return {
+            "verdict": "skipped",
+            "verdict_reason": "the diff under review could not be made complete",
+        }
     finding = state.get("finding", {})
     prompt = (
         f"{brief}\n\n## The change under review\n\n### Stated intent\n\n"
