@@ -14,4 +14,3 @@ dry-run.diff
 dist/
 build/
 *.egg-info/
-uv.lock

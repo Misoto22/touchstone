@@ -7,7 +7,7 @@ Prerequisites: Python 3.12 or 3.13, Git, and [uv](https://docs.astral.sh/uv/).
 ```bash
 git clone https://github.com/Misoto22/touchstone.git
 cd touchstone
-uv sync --all-groups
+uv sync --extra dev
 ```
 
 ## Workflow

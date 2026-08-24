@@ -1,0 +1,30 @@
+name: Feature request
+description: Propose a bounded change to Touchstone's public contract
+title: "feat: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What operator workflow or safety invariant is missing?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the CLI or configuration contract, not an implementation only.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: textarea
+    id: safety
+    attributes:
+      label: Safety and compatibility
+      description: Explain effects on credentials, GitHub mutations, resume, and existing configs.
+    validations:
+      required: true

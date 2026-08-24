@@ -3,6 +3,21 @@ name = "touchstone-agent"
 version = "0.1.0"
 description = "Scheduled agent loops that audit a repository and the harness that judges it"
 requires-python = ">=3.12"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+keywords = ["agents", "audit", "github", "langgraph"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Quality Assurance",
+]
 dependencies = [
     "langgraph>=1.0",
     # SQLite, not Postgres. The loop's value depends on it not sharing fate
@@ -12,13 +27,20 @@ dependencies = [
     "tomli-w>=1.2",
 ]
 
+[project.urls]
+Homepage = "https://github.com/Misoto22/touchstone"
+Issues = "https://github.com/Misoto22/touchstone/issues"
+Changelog = "https://github.com/Misoto22/touchstone/blob/main/CHANGELOG.md"
+
 [project.scripts]
 touchstone = "touchstone.cli:main"
 
-[dependency-groups]
+[project.optional-dependencies]
 dev = [
+    "build>=1.3",
     "pytest>=8.0",
     "ruff>=0.9",
+    "twine>=6.2",
     # The Studio server. Kept out of the runtime dependencies: a scheduled
     # unattended run has no use for a web UI.
     "langgraph-cli[inmem]>=0.2",

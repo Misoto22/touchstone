@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -8,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_documented_first_run_commands_exist() -> None:
     result = subprocess.run(
-        [str(ROOT / ".venv" / "bin" / "touchstone"), "--help"],
+        [str(Path(sys.executable).parent / "touchstone"), "--help"],
         check=True,
         capture_output=True,
         text=True,

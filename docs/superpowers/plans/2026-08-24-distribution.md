@@ -269,7 +269,7 @@ Expected: no unexpected worktree changes; all verification commands exit 0.
 
 - [ ] **Step 2: Run secret and personal-value scans**
 
-Run: `gitleaks git . --redact && rg -n '/Users/macbook01|henrycxw@gmail.com|Misoto22/kioku' --glob '!.git/**' .`
+Run: `gitleaks git . --redact && rg -n '/Users/[^/]+|@gmail\.com|private-repository-slug' --glob '!.git/**' .`
 
 Expected: Gitleaks exits 0 and current project files have no owner-specific operational values.
 

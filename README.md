@@ -221,7 +221,7 @@ Report vulnerabilities privately through [GitHub Security Advisories](SECURITY.m
 ```bash
 git clone https://github.com/Misoto22/touchstone.git
 cd touchstone
-uv sync --all-groups
+uv sync --extra dev
 uv run pytest
 uv run ruff check .
 uv run touchstone graph --check
