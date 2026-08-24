@@ -135,7 +135,7 @@ def run(state: dict[str, Any]) -> dict[str, Any]:
         f"### Diff\n\n```diff\n{reviewable.diff}\n```"
     )
 
-    session = context.engine.review(prompt, worktree=worktree, schema=SCHEMA)
+    session = context.engine.review(prompt, worktree=worktree, schema=SCHEMA, model=loop.model)
     if not session.ok:
         return {
             "verdict": "skipped",

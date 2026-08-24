@@ -52,7 +52,9 @@ class ClaudeEngine:
             return None
         return engine_environment(self.name)
 
-    def author(self, brief: str, *, worktree: str, denied: tuple[str, ...]) -> Session:
+    def author(
+        self, brief: str, *, worktree: str, denied: tuple[str, ...], model: str = ""
+    ) -> Session:
         settings_path = f"{worktree}/.harness-settings.json"
         self._exec.write_text(settings_path, self._settings(denied))
 
@@ -60,7 +62,7 @@ class ClaudeEngine:
             "claude",
             "-p",
             "--model",
-            self._config.engine.model,
+            model or self._config.engine.model,
             "--effort",
             self._config.engine.audit_effort,
             "--max-budget-usd",
@@ -100,12 +102,12 @@ class ClaudeEngine:
             detail=blocked or result.tail(),
         )
 
-    def review(self, brief: str, *, worktree: str, schema: dict) -> Session:
+    def review(self, brief: str, *, worktree: str, schema: dict, model: str = "") -> Session:
         argv = [
             "claude",
             "-p",
             "--model",
-            self._config.engine.model,
+            model or self._config.engine.model,
             "--effort",
             self._config.engine.review_effort,
             "--max-budget-usd",

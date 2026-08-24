@@ -145,6 +145,10 @@ class LoopConfig:
     confine_to: tuple[str, ...] = ()
     targets: tuple[str, ...] = ()
     context: tuple[tuple[str, str], ...] = ()
+    #: Overrides `engine.model` for this loop only. The loops do different work
+    #: — implementing a fix against judging a harness — and the model that
+    #: suits one need not suit the other. Empty means the engine's own choice.
+    model: str = ""
     #: Commands whose output the brief is told it will be given, as
     #: `(heading, argv)`. Ordered as written, because a brief refers to them by
     #: name and a reader compares them run to run.
@@ -257,6 +261,7 @@ _GIT = {"author_name", "author_email"}
 _LOOP = {
     "brief",
     "attachment",
+    "model",
     "label",
     "schedule",
     "priority",
@@ -460,7 +465,7 @@ def _validate(raw: dict[str, Any]) -> None:
         context = value.get("context", {})
         if not isinstance(context, dict):
             raise ConfigError(f"[loop.{name}.context] must be a table")
-        for key in ("brief", "label", "schedule"):
+        for key in ("brief", "label", "schedule", "model"):
             _string(value, key, f"loop.{name}", required=key in {"brief", "label"})
         _positive_int(value, "priority", f"loop.{name}")
         _attachment(value, f"loop.{name}")
@@ -509,6 +514,7 @@ def _loops(raw: dict[str, Any], base_dir: Path) -> dict[str, LoopConfig]:
             confine_to=tuple(table.get("confine_to", ())),
             targets=tuple(table.get("targets", ())),
             context=tuple(sorted(dict(table.get("context", {})).items())),
+            model=str(table.get("model", "")),
             attachment=tuple(
                 (str(entry["heading"]), tuple(str(part) for part in entry["command"]))
                 for entry in table.get("attachment", ())
