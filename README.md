@@ -3,8 +3,8 @@
 <div align="center">
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/brand/touchstone-readme-hero-dark.png">
-  <img src="assets/brand/touchstone-readme-hero.png" alt="Touchstone repository audit lifecycle" width="900">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Misoto22/touchstone/main/assets/brand/touchstone-readme-hero-dark.png">
+  <img src="https://raw.githubusercontent.com/Misoto22/touchstone/main/assets/brand/touchstone-readme-hero.png" alt="Touchstone repository audit lifecycle" width="900">
 </picture>
 
 <br />
@@ -15,7 +15,7 @@ Codex or Claude findings become reviewable GitHub pull requests.
 
 <br />
 
-[PyPI](https://pypi.org/project/touchstone-agent/) · [Install](#getting-started) · [Loop graph](docs/graph.md) · [Example config](touchstone.example.toml) · [Report issue](https://github.com/Misoto22/touchstone/issues)
+[PyPI](https://pypi.org/project/touchstone-agent/) · [Install](#getting-started) · [Loop graph](https://github.com/Misoto22/touchstone/blob/main/docs/graph.md) · [Example config](https://github.com/Misoto22/touchstone/blob/main/touchstone.example.toml) · [Report issue](https://github.com/Misoto22/touchstone/issues)
 
 <br />
 
@@ -127,7 +127,7 @@ The generated file separates project decisions from credentials:
 - `[git]` — optional commit author override; omit it to inherit repository Git configuration.
 - `[loop.<name>]` — brief, label, schedule, protected paths, and project context.
 
-See the complete generic [`touchstone.example.toml`](touchstone.example.toml). Built-in briefs use `builtin:code-audit`; custom brief paths resolve relative to the configuration file.
+See the complete generic [`touchstone.example.toml`](https://github.com/Misoto22/touchstone/blob/main/touchstone.example.toml). Built-in briefs use `builtin:code-audit`; custom brief paths resolve relative to the configuration file.
 
 Secrets do not belong in TOML. Secret-shaped SSH environment keys are rejected; GitHub and engine authentication remain in their native CLI stores or the remote runtime environment. When `state_dir` is omitted, Touchstone creates an isolated per-repository directory under `$XDG_STATE_HOME/touchstone` (or `~/.local/state/touchstone`).
 
@@ -218,7 +218,7 @@ Touchstone owns configuration validation, isolated worktrees, model orchestratio
 
 The target repository owns its tests, branch protection, required checks, deployment verification, audit policy, and credentials. `touchstone setup` creates only the state directory and configured labels; it does not weaken branch protection, create secrets, change Actions permissions, or authenticate tools.
 
-Report vulnerabilities privately through [GitHub Security Advisories](SECURITY.md). Do not include credentials, private repository content, model transcripts, or unredacted `doctor` output in a public issue.
+Report vulnerabilities privately through [GitHub Security Advisories](https://github.com/Misoto22/touchstone/blob/main/SECURITY.md). Do not include credentials, private repository content, model transcripts, or unredacted `doctor` output in a public issue.
 
 ---
 
@@ -234,13 +234,13 @@ uv run ruff format --check src tests
 uv run touchstone graph --check
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the TDD and pull-request workflow. User-facing changes are recorded in [CHANGELOG.md](CHANGELOG.md).
+See [CONTRIBUTING.md](https://github.com/Misoto22/touchstone/blob/main/CONTRIBUTING.md) for the TDD and pull-request workflow. User-facing changes are recorded in [CHANGELOG.md](https://github.com/Misoto22/touchstone/blob/main/CHANGELOG.md).
 
 ---
 
 ### Release
 
-The current release is [v0.1.1](https://github.com/Misoto22/touchstone/releases/tag/v0.1.1), published as [`touchstone-agent` on PyPI](https://pypi.org/project/touchstone-agent/).
+The current release is [v0.1.2](https://github.com/Misoto22/touchstone/releases/tag/v0.1.2), published as [`touchstone-agent` on PyPI](https://pypi.org/project/touchstone-agent/).
 
 GitHub Actions verifies Python 3.12 and 3.13, builds the wheel and source distribution, checks package metadata, and smoke-tests the installed wheel. Publishing is triggered by a GitHub Release and uses PyPI trusted publishing through the protected `pypi` environment; the repository stores no PyPI API token.
 
@@ -248,10 +248,10 @@ GitHub Actions verifies Python 3.12 and 3.13, builds the wheel and source distri
 
 ### Documentation
 
-[`docs/graph.md`](docs/graph.md) is generated from the compiled LangGraph. `touchstone graph --check` keeps the committed diagram aligned with source. The approved architecture and implementation plans live under `docs/superpowers/`.
+[`docs/graph.md`](https://github.com/Misoto22/touchstone/blob/main/docs/graph.md) is generated from the compiled LangGraph. `touchstone graph --check` keeps the committed diagram aligned with source. The approved architecture and implementation plans live under `docs/superpowers/`.
 
 ---
 
 ### License
 
-Apache License 2.0. See [LICENSE](LICENSE).
+Apache License 2.0. See [LICENSE](https://github.com/Misoto22/touchstone/blob/main/LICENSE).
