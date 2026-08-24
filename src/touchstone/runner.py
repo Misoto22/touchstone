@@ -13,13 +13,18 @@ from __future__ import annotations
 import datetime as dt
 import os
 import shutil
+import sys
+import time
+import uuid
 from pathlib import Path
 
 from langgraph.checkpoint.sqlite import SqliteSaver
 
-from touchstone.config import Config
+from touchstone.config import Config, LoopConfig
+from touchstone.events import EventLog, run_event
 from touchstone.graph import build
-from touchstone.nodes.context import current
+from touchstone.lifecycle import RepositoryLifecycle
+from touchstone.nodes.context import configure, current
 
 
 class Held(Exception):
@@ -80,27 +85,63 @@ def _gates(config: Config, loop_name: str, *, dry_run: bool) -> None:
     # first medium-risk finding would be the last thing the loop ever did.
     include_drafts = bool(loop.require_change_under)
     held = context.forge.open_pulls(loop.label, include_drafts=include_drafts)
+    if held is None:
+        raise Held("could not verify the open pull request slot")
     if held:
         raise Held(f"slot held by #{held[0]['number']}: {held[0].get('url', '')}")
 
-    # Only an explicit success passes. Treating "anything but failure" as
-    # healthy admits cancelled, timed-out and still-running checks, and those
-    # are not reassurance — they are the absence of an answer.
-    verify = context.forge.latest_run("verify-deploy.yml")
-    ci = context.forge.latest_run("ci.yml", branch=config.forge.default_branch)
-    if verify != "success" or ci != "success":
-        raise Held(f"production not known good: verify-deploy={verify} ci={ci}")
+    _health_gate(config)
+    _publication_gate(config, loop)
+
+
+def _health_gate(config: Config) -> None:
+    """Require explicit success from every project-configured workflow."""
+    if not config.forge.required_workflows:
+        raise Held("no required workflows are configured for unattended publication")
+    forge = current().forge
+    unhealthy: list[str] = []
+    for workflow in config.forge.required_workflows:
+        conclusion = forge.latest_run(workflow, branch=config.forge.default_branch)
+        if conclusion != "success":
+            unhealthy.append(f"{workflow}={conclusion}")
+    if unhealthy:
+        raise Held(f"production not known good: {' '.join(unhealthy)}")
+
+
+def _publication_gate(config: Config, loop: LoopConfig) -> None:
+    """Refuse to buy an author session when GitHub cannot accept its result."""
+    forge = current().forge
+    repository = forge.repository_info()
+    if repository is None:
+        raise Held("GitHub repository is not accessible; run touchstone doctor")
+    if not repository.get("autoMergeAllowed"):
+        raise Held("GitHub auto-merge is disabled; enable it before unattended runs")
+    expected = {loop.label, config.forge.escalation_label}
+    missing = sorted(expected - forge.labels())
+    if missing:
+        raise Held(
+            f"configured GitHub labels are missing: {', '.join(missing)}; run touchstone setup"
+        )
 
 
 def _worktree(config: Config) -> tuple[str, str]:
     context = current()
     branch = f"audit/{dt.datetime.now(dt.UTC).strftime('%Y%m%dT%H%M%SZ')}"
-    path = str(Path(config.state_dir) / "worktree")
-    repo = str(config.repo_path)
+    path = config.execution_worktree
+    repo = config.execution_repo
     base = f"origin/{config.forge.default_branch}"
 
-    context.executor.run(["git", "-C", repo, "fetch", "--prune", "--quiet", "origin"], timeout=300)
-    context.executor.run(["git", "-C", repo, "worktree", "prune"], timeout=60)
+    prepared = context.executor.run(["mkdir", "-p", str(Path(path).parent)], timeout=60)
+    if not prepared.ok:
+        raise Held(f"could not prepare worktree state: {prepared.tail()}")
+    fetched = context.executor.run(
+        ["git", "-C", repo, "fetch", "--prune", "--quiet", "origin"], timeout=300
+    )
+    if not fetched.ok:
+        raise Held(f"could not fetch the current default branch: {fetched.tail()}")
+    pruned = context.executor.run(["git", "-C", repo, "worktree", "prune"], timeout=60)
+    if not pruned.ok:
+        raise Held(f"could not inspect existing worktrees: {pruned.tail()}")
     context.executor.run(["git", "-C", repo, "worktree", "remove", "--force", path], timeout=60)
     # Always from the fetched base, never from whatever the clone has checked
     # out: a clone parked on a feature branch would seed every branch weeks
@@ -113,32 +154,70 @@ def _worktree(config: Config) -> tuple[str, str]:
     return (path, branch)
 
 
-def _teardown(config: Config, path: str, branch: str, *, published: bool) -> None:
+def _teardown(config: Config, path: str, branch: str, *, published: bool) -> tuple[str, ...]:
     context = current()
-    repo = str(config.repo_path)
-    context.executor.run(["git", "-C", repo, "worktree", "remove", "--force", path], timeout=60)
-    context.executor.run(["git", "-C", repo, "worktree", "prune"], timeout=60)
+    repo = config.execution_repo
+    operations = [
+        (
+            ["git", "-C", repo, "worktree", "remove", "--force", path],
+            "remove the temporary worktree",
+        ),
+        (["git", "-C", repo, "worktree", "prune"], "prune worktree metadata"),
+    ]
     if not published:
         # Removing a worktree leaves its branch. A run that published wants it;
         # a clean pass or a crash leaves a dead ref nothing collects, and at one
         # run an hour that is a branch list nobody can read within a week.
-        context.executor.run(["git", "-C", repo, "branch", "-D", branch], timeout=60)
+        operations.append((["git", "-C", repo, "branch", "-D", branch], "delete the run branch"))
+    errors: list[str] = []
+    for argv, action in operations:
+        result = context.executor.run(argv, timeout=60)
+        if not result.ok:
+            errors.append(f"could not {action}: {result.tail()}")
+    return tuple(errors)
 
 
 def execute(config: Config, *, loop: str, dry_run: bool = False) -> int:
     state_dir = Path(config.state_dir)
     state_dir.mkdir(parents=True, exist_ok=True)
-    context = current()
+    context = configure(config)
+    event_log = EventLog(state_dir / "events.jsonl")
+    run_id = uuid.uuid4().hex
+    started = time.monotonic()
+    event_log.append(run_event(config, run_id=run_id, kind="started", loop=loop))
+    final_outcome = "held"
+    final_detail = ""
+    final_cost: float | None = None
+    final_risk = ""
+    final_verdict = ""
+    final_pr: int | None = None
 
     try:
         lock = _lock(state_dir)
     except Held as held:
         print(held)
+        event_log.append(
+            run_event(
+                config,
+                run_id=run_id,
+                kind="finished",
+                loop=loop,
+                outcome="held",
+                duration_seconds=time.monotonic() - started,
+                detail=str(held),
+            )
+        )
         return 0
 
     path = branch = ""
     published = False
     try:
+        if not dry_run:
+            RepositoryLifecycle(
+                context.forge,
+                context.ledger,
+                reap_after_hours=config.forge.reap_after_hours,
+            ).reconcile(config.loop(loop), dt.datetime.now(dt.UTC))
         _gates(config, loop, dry_run=dry_run)
         path, branch = _worktree(config)
         thread_id = f"{loop}-{branch}"
@@ -159,21 +238,51 @@ def execute(config: Config, *, loop: str, dry_run: bool = False) -> int:
         # what actually reached the forge. Recording again here produced two
         # rows for one run, disagreeing with each other.
         outcome = final.get("outcome") or ("escalated" if paused else "clean")
+        final_outcome = outcome
+        final_pr = int(final["pr"]) if final.get("pr") is not None else None
+        final_risk = str(final.get("risk") or "")
+        final_verdict = str(final.get("verdict") or "")
+        reported_costs = [value for value in final.get("cost", []) if value is not None]
+        final_cost = sum(reported_costs) if reported_costs else None
+        final_detail = "; ".join(str(note) for note in final.get("notes", []))
         published = outcome in {"merging", "escalated"}
         print(f"{loop}: {outcome}" + (f" #{final['pr']}" if final.get("pr") else ""))
         for note in final.get("notes", []):
             print(f"  {note}")
         if paused:
+            parked_head = str(final.get("reviewed_head_sha") or "")
+            if parked_head:
+                print(f"  parked head: {parked_head}")
             print(f"  parked; resume with: touchstone resume {thread_id} merge|close")
         return 0
     except Held as held:
         print(held)
+        final_detail = str(held)
         context.ledger.record(status="held", title="", detail=str(held))
         return 0
     finally:
         if path:
-            _teardown(config, path, branch, published=published)
+            cleanup_errors = _teardown(config, path, branch, published=published)
+            for error in cleanup_errors:
+                print(f"warning: {error}", file=sys.stderr)
+            if cleanup_errors:
+                final_detail = "; ".join(filter(None, (final_detail, *cleanup_errors)))
         shutil.rmtree(lock, ignore_errors=True)
+        event_log.append(
+            run_event(
+                config,
+                run_id=run_id,
+                kind="finished",
+                loop=loop,
+                outcome=final_outcome,
+                duration_seconds=time.monotonic() - started,
+                cost=final_cost,
+                risk_to=final_risk,
+                verdict=final_verdict,
+                pr=final_pr,
+                detail=final_detail,
+            )
+        )
 
 
 def resume(config: Config, *, thread: str, answer: str) -> int:
@@ -185,9 +294,43 @@ def resume(config: Config, *, thread: str, answer: str) -> int:
     """
     from langgraph.types import Command
 
+    configure(config)
     state_dir = Path(config.state_dir)
-    with SqliteSaver.from_conn_string(str(state_dir / "checkpoints.sqlite")) as saver:
-        app = build().compile(checkpointer=saver)
-        final = app.invoke(Command(resume=answer), {"configurable": {"thread_id": thread}})
-    print(f"{thread}: {final.get('outcome', 'unknown')}")
-    return 0
+    state_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        lock = _lock(state_dir)
+    except Held as held:
+        print(held)
+        return 0
+
+    try:
+        with SqliteSaver.from_conn_string(str(state_dir / "checkpoints.sqlite")) as saver:
+            app = build().compile(checkpointer=saver)
+            graph_config = {"configurable": {"thread_id": thread}}
+            checkpoint = app.get_state(graph_config)
+            values = checkpoint.values
+            if not checkpoint.next or not values:
+                raise Held(f"thread {thread!r} is not waiting for an operator decision")
+            loop_name = str(values.get("loop") or "")
+            if not loop_name:
+                raise Held(f"thread {thread!r} has no loop identity")
+
+            context = current()
+            RepositoryLifecycle(
+                context.forge,
+                context.ledger,
+                reap_after_hours=config.forge.reap_after_hours,
+            ).reconcile(config.loop(loop_name), dt.datetime.now(dt.UTC))
+            if answer == "merge":
+                _health_gate(config)
+                _publication_gate(config, config.loop(loop_name))
+            final = app.invoke(Command(resume=answer), graph_config)
+        print(f"{thread}: {final.get('outcome', 'unknown')}")
+        for note in final.get("notes", []):
+            print(f"  {note}")
+        return 0
+    except Held as held:
+        print(held)
+        return 0
+    finally:
+        shutil.rmtree(lock, ignore_errors=True)

@@ -27,6 +27,7 @@ graph TD;
 	classify -.-> park;
 	classify -.-> review;
 	park --> await_person;
+	review -.-> __end__;
 	review -.-> merge;
 	review -.-> park;
 	arm_merge --> __end__;

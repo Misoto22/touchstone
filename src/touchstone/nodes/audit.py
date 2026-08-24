@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from dataclasses import asdict, dataclass
+from typing import Any, Literal
 
 from touchstone.nodes.context import current
 
@@ -12,18 +13,88 @@ from touchstone.nodes.context import current
 FINDING_FILE = ".audit-finding.json"
 
 
-def _clean(context, state: dict[str, Any], detail: str, **extra: Any) -> dict[str, Any]:
+@dataclass(frozen=True, slots=True)
+class Finding:
+    status: Literal["none", "proposed", "inconclusive"]
+    summary: str = ""
+    risk: str = ""
+    title: str = ""
+    commit_subject: str = ""
+    rationale: str = ""
+    detail: str = ""
+
+    def to_state(self) -> dict[str, str]:
+        return {key: value for key, value in asdict(self).items() if value}
+
+
+def parse_finding(raw: str) -> Finding:
+    """Validate the complete author-to-runner contract without guessing."""
+    if not raw.strip():
+        return Finding("inconclusive", detail="the finding output is missing")
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        return Finding("inconclusive", detail=f"the finding output is not valid JSON: {exc.msg}")
+    if not isinstance(payload, dict):
+        return Finding("inconclusive", detail="the finding output must be a JSON object")
+
+    status = payload.get("status")
+    if status == "none":
+        error = _fields(payload, required={"status", "summary"}, allowed={"status", "summary"})
+        if error:
+            return Finding("inconclusive", detail=error)
+        return Finding("none", summary=str(payload["summary"]))
+    if status == "proposed":
+        required = {"status", "risk", "title", "commit_subject", "summary", "rationale"}
+        error = _fields(payload, required=required, allowed=required)
+        if error:
+            return Finding("inconclusive", detail=error)
+        risk = payload["risk"]
+        if risk not in {"low", "medium", "high"}:
+            return Finding(
+                "inconclusive", detail=f"risk must be low, medium, or high, not {risk!r}"
+            )
+        if len(str(payload["commit_subject"])) > 72:
+            return Finding("inconclusive", detail="commit_subject must be 72 characters or fewer")
+        return Finding(
+            "proposed",
+            risk=str(risk),
+            title=str(payload["title"]),
+            commit_subject=str(payload["commit_subject"]),
+            summary=str(payload["summary"]),
+            rationale=str(payload["rationale"]),
+        )
+    return Finding("inconclusive", detail=f"unrecognized finding status {status!r}")
+
+
+def _fields(payload: dict[str, Any], *, required: set[str], allowed: set[str]) -> str:
+    missing = sorted(required - set(payload))
+    if missing:
+        return f"the finding output is missing {missing[0]}"
+    extra = sorted(set(payload) - allowed)
+    if extra:
+        return f"the finding output has unknown field {extra[0]}"
+    for key in sorted(required - {"status"}):
+        if not isinstance(payload[key], str) or not payload[key].strip():
+            return f"the finding field {key} must be a non-empty string"
+    return ""
+
+
+def _session_failure(engine_name: str) -> str:
+    """Return a persistable failure note without model output or repository data."""
+    return f"the {engine_name} session failed"
+
+
+def _clean(context: Any, state: dict[str, Any], detail: str, **extra: Any) -> dict[str, Any]:
     """A run that found nothing, written down.
 
-    Recorded rather than passed over in silence, because the whole point of a
-    daily loop is that its absence is noticeable. R-HAR-7 puts it plainly:
-    silence in the report means the review did not run, and that is itself a
-    finding. A `clean` outcome that leaves no row makes "ran and found nothing"
-    indistinguishable from "never started" — which is the one distinction the
-    ledger exists to preserve.
+    The runner's event log records every finished run. Keep a clean ledger row
+    as well so existing operators can distinguish "ran and found nothing" from
+    "never started" while lifecycle projections remain finding-only.
     """
     context.ledger.record(
         status="clean",
+        loop=str(state.get("loop") or ""),
         risk=None,
         pr=None,
         title=state.get("finding", {}).get("title", ""),
@@ -47,7 +118,9 @@ def run(state: dict[str, Any]) -> dict[str, Any]:
     if not session.ok:
         return {
             "outcome": "held",
-            "notes": [f"the {context.engine.name} session failed: {session.detail}"],
+            # Engine output may contain model transcript or repository data;
+            # graph notes are persisted to the structured event log.
+            "notes": [_session_failure(context.engine.name)],
             "cost": [session.cost],
         }
 
@@ -57,24 +130,20 @@ def run(state: dict[str, Any]) -> dict[str, Any]:
     # fix, and leaving it for `git add -A` to find is how three such files ended
     # up in a pull request.
     context.executor.run(["rm", "-f", finding_path], timeout=30)
-    if not raw:
-        # No finding file is a clean pass, and a clean pass is the normal
-        # outcome for most runs. Inventing a defect to have something to
-        # report is the failure mode this makes cheap to avoid.
-        return _clean(context, state, "no finding file written", cost=[session.cost])
-
-    try:
-        finding = json.loads(raw)
-    except json.JSONDecodeError:
+    finding = parse_finding(raw or "")
+    if finding.status == "inconclusive":
+        return {
+            "finding": finding.to_state(),
+            "outcome": "inconclusive",
+            "notes": [finding.detail],
+            "cost": [session.cost],
+        }
+    if finding.status == "none":
         return _clean(
             context,
             state,
-            "the finding file was not valid JSON",
-            notes=["the finding file was not valid JSON"],
+            finding.summary,
+            finding=finding.to_state(),
             cost=[session.cost],
         )
-
-    if finding.get("status") != "proposed":
-        return _clean(context, state, finding.get("summary", "nothing found"), cost=[session.cost])
-
-    return {"finding": finding, "cost": [session.cost]}
+    return {"finding": finding.to_state(), "cost": [session.cost]}

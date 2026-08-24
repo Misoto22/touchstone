@@ -1,26 +1,67 @@
-"""What the loop remembers between runs.
-
-One JSON object per line, outside the repository on purpose: a ledger
-committed to the repo would be rewritten by the loop's own pull requests and
-conflict with itself.
-
-The `handled` filter is an allowlist and the distinction is not academic. Only
-two statuses mean a finding has somewhere to live — `merging`, where a pull
-request is queued, and `escalated`, where a draft waits for a person. Every
-other outcome leaves the defect exactly where it was, and feeding those titles
-back as "already handled" hides a defect nobody fixed. Written the other way
-round first, as a denylist of one status, it did precisely that.
-"""
+"""Append-only finding lifecycle events and their current projections."""
 
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
+import re
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-#: Statuses that dispose of a finding. Everything else is re-raisable.
-HANDLED = frozenset({"merging", "escalated"})
+LifecycleState = Literal[
+    "proposed",
+    "armed",
+    "parked",
+    "merged",
+    "failed",
+    "reaped",
+    "closed",
+    "held",
+    "rehearsed",
+]
+
+SUPPRESSED = frozenset({"armed", "parked", "merged"})
+LEGACY_STATES: dict[str, LifecycleState] = {
+    "merging": "armed",
+    "escalated": "parked",
+    "reaped": "reaped",
+    "held": "held",
+    "rehearsed": "rehearsed",
+    "reverted": "failed",
+    "closed": "closed",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class LifecycleEvent:
+    finding_id: str
+    state: LifecycleState
+    title: str
+    loop: str
+    risk: str | None = None
+    pr: int | None = None
+    head_sha: str | None = None
+    detail: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class FindingProjection:
+    finding_id: str
+    state: LifecycleState
+    title: str
+    loop: str
+    risk: str | None
+    pr: int | None
+    head_sha: str | None
+    detail: str
+    ts: str
+
+
+def finding_id(loop: str, title: str) -> str:
+    normalized = re.sub(r"\s+", " ", title.strip().casefold())
+    return hashlib.sha256(f"{loop}\0{normalized}".encode()).hexdigest()[:16]
 
 
 class Ledger:
@@ -29,10 +70,12 @@ class Ledger:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._path.touch(exist_ok=True)
 
+    def append(self, event: LifecycleEvent) -> None:
+        self._write({"ts": _now(), **asdict(event)})
+
     def record(self, **fields: Any) -> None:
-        row = {"ts": dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"), **fields}
-        with self._path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+        """Write one legacy-shaped row while older callers are migrated."""
+        self._write({"ts": _now(), **fields})
 
     def rows(self) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
@@ -40,17 +83,82 @@ class Ledger:
             if not line.strip():
                 continue
             try:
-                rows.append(json.loads(line))
+                row = json.loads(line)
             except json.JSONDecodeError:
-                # A truncated write is a lost record, not a lost run.
                 continue
+            if isinstance(row, dict):
+                rows.append(row)
         return rows
 
-    def handled_titles(self) -> list[str]:
-        """Findings that already have a pull request, newest wording kept once."""
-        seen: dict[str, None] = {}
+    def projections(self) -> dict[str, FindingProjection]:
+        projected: dict[str, FindingProjection] = {}
         for row in self.rows():
-            title = row.get("title") or ""
-            if title and row.get("status") in HANDLED:
-                seen[f"[{row['status']}/{row.get('risk', 'n/a')}] {title}"] = None
-        return list(seen)
+            title = str(row.get("title") or "")
+            if not title:
+                continue
+            loop = str(row.get("loop") or "legacy")
+            state = _state(row)
+            if state is None:
+                continue
+            identifier = str(row.get("finding_id") or finding_id(loop, title))
+            projected[identifier] = FindingProjection(
+                finding_id=identifier,
+                state=state,
+                title=title,
+                loop=loop,
+                risk=str(row["risk"]) if row.get("risk") is not None else None,
+                pr=int(row["pr"]) if row.get("pr") is not None else None,
+                head_sha=str(row["head_sha"]) if row.get("head_sha") else None,
+                detail=str(row.get("detail") or ""),
+                ts=str(row.get("ts") or ""),
+            )
+        return projected
+
+    def projection(self, identifier: str) -> FindingProjection | None:
+        return self.projections().get(identifier)
+
+    def suppressed_titles(self) -> list[str]:
+        return [
+            f"[{projection.state}/{projection.risk or 'n/a'}] {projection.title}"
+            for projection in self.projections().values()
+            if projection.state in SUPPRESSED
+        ]
+
+    def handled_titles(self) -> list[str]:
+        """Compatibility name for audit prompts."""
+        return self.suppressed_titles()
+
+    def _write(self, row: dict[str, Any]) -> None:
+        with self._path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def _state(row: dict[str, Any]) -> LifecycleState | None:
+    raw = row.get("state")
+    if raw in {
+        "proposed",
+        "armed",
+        "parked",
+        "merged",
+        "failed",
+        "reaped",
+        "closed",
+        "held",
+        "rehearsed",
+    }:
+        return raw
+    return LEGACY_STATES.get(str(row.get("status") or ""))
+
+
+def _now() -> str:
+    return dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+__all__ = [
+    "SUPPRESSED",
+    "FindingProjection",
+    "Ledger",
+    "LifecycleEvent",
+    "LifecycleState",
+    "finding_id",
+]

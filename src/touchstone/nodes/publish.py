@@ -10,157 +10,106 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from touchstone.ledger import finding_id
+from touchstone.lifecycle import PublicationRequest, RepositoryLifecycle, ResumeRequest
 from touchstone.nodes.context import current
 
-_BODY = """## What this changes
 
-{summary}
-
-## Why
-
-{rationale}
-
-## Risk
-
-`{risk}`{escalation}
-
-## Independent review
-
-**{verdict}** — {reason}
-
----
-
-Opened without human involvement by the harness loop. Closing it is a valid
-answer: the loop records the rejection and will not raise it again.
-"""
-
-
-def _commit_and_push(state: dict[str, Any]) -> bool:
-    context = current()
-    worktree = state["worktree"]
+def _request(state: dict[str, Any], context: Any) -> PublicationRequest:
     finding = state.get("finding", {})
-    subject = finding.get("commit_subject") or "chore: harness loop finding"
-    body = finding.get("summary", "")
-
-    for argv in (
-        ["git", "-C", worktree, "add", "-A"],
-        [
-            "git",
-            "-C",
-            worktree,
-            "-c",
-            "user.name=Henry Chen",
-            "-c",
-            "user.email=henrycxw@gmail.com",
-            "commit",
-            "--quiet",
-            "-m",
-            f"{subject}\n\n{body}\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>",
-        ],
-        ["git", "-C", worktree, "push", "--quiet", "-u", "origin", state["branch"]],
-    ):
-        if not context.executor.run(argv, timeout=180).ok:
-            return False
-    return True
-
-
-def _open(state: dict[str, Any]) -> int | None:
-    context = current()
     loop = context.loop(state["loop"])
-    finding = state.get("finding", {})
-    escalation = state.get("escalation", "")
-    body = _BODY.format(
+    title = finding.get("title") or "Touchstone finding"
+    return PublicationRequest(
+        finding_id=state.get("finding_id") or finding_id(loop.name, title),
+        loop=loop.name,
+        branch=state["branch"],
+        worktree=Path(state["worktree"]),
+        base=context.config.forge.default_branch,
+        label=loop.label,
+        escalation_label=context.config.forge.escalation_label,
+        risk=state.get("risk", "high"),
+        verdict=state.get("verdict", "skipped"),
+        title=title,
+        commit_subject=finding.get("commit_subject") or "chore: address Touchstone finding",
         summary=finding.get("summary", ""),
         rationale=finding.get("rationale", ""),
-        risk=state.get("risk", "high"),
-        escalation=f"\n\nEscalated by the loop: {escalation}" if escalation else "",
-        verdict=state.get("verdict", "skipped"),
-        reason=state.get("verdict_reason", ""),
+        review_reason=state.get("verdict_reason", ""),
+        escalation=state.get("escalation", ""),
+        author_name=context.config.git.author_name,
+        author_email=context.config.git.author_email,
     )
-    return context.forge.create_pull(
-        base=context.config.forge.default_branch,
-        head=state["branch"],
-        title=finding.get("commit_subject") or "chore: harness loop finding",
-        body=body,
-        label=loop.label,
+
+
+def _publish(state: dict[str, Any]) -> dict[str, Any]:
+    context = current()
+    lifecycle = RepositoryLifecycle(
+        context.forge,
+        context.ledger,
+        reap_after_hours=context.config.forge.reap_after_hours,
+        executor=context.executor,
     )
+    result = lifecycle.publish(_request(state, context))
+    outcome = {"armed": "merging", "parked": "escalated"}.get(result.outcome, "held")
+    payload: dict[str, Any] = {
+        "outcome": outcome,
+        "pr": result.pr,
+        "finding_id": result.finding_id,
+        "reviewed_head_sha": result.head_sha,
+    }
+    if result.outcome == "held" and result.detail:
+        payload["notes"] = [result.detail]
+    return payload
 
 
 def merge(state: dict[str, Any]) -> dict[str, Any]:
     """Approved and low risk: open it and let GitHub merge it when checks pass."""
-    context = current()
-    if not _commit_and_push(state):
-        return {"outcome": "held", "notes": ["could not push the branch"]}
-    number = _open(state)
-    if number is None:
-        return {"outcome": "held", "notes": ["could not open the pull request"]}
-
-    context.forge.arm_auto_merge(number)
-    context.ledger.record(
-        status="merging",
-        risk=state.get("risk"),
-        pr=number,
-        title=state.get("finding", {}).get("title", ""),
-        detail="approved, auto-merge armed",
-    )
-    return {"outcome": "merging", "pr": number}
+    return _publish(state)
 
 
 def park(state: dict[str, Any]) -> dict[str, Any]:
     """Anything else: a draft, labelled for a person, and the thread waits."""
-    context = current()
-    if not _commit_and_push(state):
-        return {"outcome": "held", "pr": None, "notes": ["could not push the branch"]}
-    number = _open(state)
-    if number is None:
-        return {"outcome": "held", "pr": None, "notes": ["could not open the pull request"]}
-
-    context.forge.to_draft(number)
-    context.forge.add_label(number, context.config.forge.escalation_label)
-    context.ledger.record(
-        status="escalated",
-        risk=state.get("risk"),
-        pr=number,
-        title=state.get("finding", {}).get("title", ""),
-        detail=(
-            f"{state.get('risk')} / {state.get('verdict', 'skipped')}: "
-            f"{state.get('verdict_reason', '')}"
-        ),
-    )
-    return {"outcome": "escalated", "pr": number}
+    return _publish(state)
 
 
 def arm_merge(state: dict[str, Any]) -> dict[str, Any]:
     """A person said merge. Resumed here rather than re-audited from scratch."""
-    context = current()
-    number = state.get("pr")
-    if number is None:
-        return {"outcome": "held", "notes": ["asked to merge, but no pull request exists"]}
-    context.forge.arm_auto_merge(int(number))
-    context.ledger.record(
-        status="merging",
-        risk=state.get("risk"),
-        pr=number,
-        title=state.get("finding", {}).get("title", ""),
-        detail="a person approved the parked draft",
-    )
-    return {"outcome": "merging", "pr": number}
+    return _resume(state, "merge")
 
 
 def record_closed(state: dict[str, Any]) -> dict[str, Any]:
     """A person said no. Recorded so the finding is not raised again."""
+    return _resume(state, "close")
+
+
+def _resume(state: dict[str, Any], decision: str) -> dict[str, Any]:
     context = current()
     number = state.get("pr")
-    if number is not None:
-        context.forge.close(int(number), "Closed by the operator from the harness loop.")
-    context.ledger.record(
-        status="escalated",
-        risk=state.get("risk"),
-        pr=number,
-        title=state.get("finding", {}).get("title", ""),
-        detail="a person closed the parked draft",
+    identifier = state.get("finding_id")
+    reviewed_head = state.get("reviewed_head_sha")
+    if number is None or not identifier or not reviewed_head:
+        return {
+            "outcome": "held",
+            "pr": number,
+            "notes": ["the parked checkpoint is missing its pull request identity"],
+        }
+    lifecycle = RepositoryLifecycle(
+        context.forge,
+        context.ledger,
+        reap_after_hours=context.config.forge.reap_after_hours,
     )
-    return {"outcome": "escalated", "pr": number}
+    result = lifecycle.resume(
+        ResumeRequest(
+            finding_id=str(identifier),
+            pr=int(number),
+            decision="merge" if decision == "merge" else "close",
+            reviewed_head_sha=str(reviewed_head),
+        )
+    )
+    outcome = {"armed": "merging", "closed": "escalated"}.get(result.outcome, "held")
+    payload: dict[str, Any] = {"outcome": outcome, "pr": result.pr}
+    if result.detail and result.outcome == "held":
+        payload["notes"] = [result.detail]
+    return payload
 
 
 def rehearse(state: dict[str, Any], *, would: str) -> dict[str, Any]:

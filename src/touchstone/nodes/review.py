@@ -10,7 +10,8 @@ production merge.
 from __future__ import annotations
 
 import json
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Literal
 
 from touchstone.nodes.context import current
 
@@ -30,6 +31,35 @@ SCHEMA = {
 DIFF_LIMIT = 60_000
 
 
+@dataclass(frozen=True, slots=True)
+class ReviewAnswer:
+    status: Literal["valid", "inconclusive"]
+    verdict: Literal["approve", "reject", "skipped"] = "skipped"
+    reason: str = ""
+
+
+def parse_review(raw: str) -> ReviewAnswer:
+    if not raw.strip():
+        return ReviewAnswer("inconclusive", reason="the review output is missing")
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        return ReviewAnswer(
+            "inconclusive", reason=f"the review output is not valid JSON: {exc.msg}"
+        )
+    if not isinstance(payload, dict) or set(payload) != {"verdict", "reason"}:
+        return ReviewAnswer(
+            "inconclusive", reason="the review output must contain only verdict and reason"
+        )
+    verdict = payload.get("verdict")
+    reason = payload.get("reason")
+    if verdict not in {"approve", "reject"}:
+        return ReviewAnswer("inconclusive", reason=f"unrecognized review verdict {verdict!r}")
+    if not isinstance(reason, str) or not reason.strip():
+        return ReviewAnswer("inconclusive", reason="the review reason must be a non-empty string")
+    return ReviewAnswer("valid", verdict=verdict, reason=reason)
+
+
 def run(state: dict[str, Any]) -> dict[str, Any]:
     context = current()
     loop = context.loop(state["loop"])
@@ -38,9 +68,7 @@ def run(state: dict[str, Any]) -> dict[str, Any]:
 
     from string import Template
 
-    brief = Template((loop.brief.parent / "review.md").read_text(encoding="utf-8")).safe_substitute(
-        dict(loop.context)
-    )
+    brief = Template(loop.review_prompt()).safe_substitute(dict(loop.context))
 
     diff = context.executor.run(["git", "-C", worktree, "diff", base], timeout=180).stdout
     finding = state.get("finding", {})
@@ -53,23 +81,23 @@ def run(state: dict[str, Any]) -> dict[str, Any]:
     session = context.engine.review(prompt, worktree=worktree, schema=SCHEMA)
     if not session.ok:
         return {
-            "verdict": "reject",
+            "verdict": "skipped",
             "verdict_reason": f"the {context.engine.name} review session failed",
+            "outcome": "inconclusive",
             "cost": [session.cost],
         }
 
-    try:
-        answer = json.loads(session.text)
-        verdict = answer["verdict"]
-        reason = str(answer.get("reason", ""))
-    except (json.JSONDecodeError, KeyError, TypeError):
-        # A verdict that will not parse is a reject. Refusing to read a
-        # malformed answer fails in the safe direction: a wrong approve is an
-        # incident, a wrong reject is one parked draft.
+    answer = parse_review(session.text)
+    if answer.status == "inconclusive":
         return {
-            "verdict": "reject",
-            "verdict_reason": f"unparseable verdict: {session.text[-300:]}",
+            "verdict": "skipped",
+            "verdict_reason": answer.reason,
+            "outcome": "inconclusive",
             "cost": [session.cost],
         }
 
-    return {"verdict": verdict, "verdict_reason": reason, "cost": [session.cost]}
+    return {
+        "verdict": answer.verdict,
+        "verdict_reason": answer.reason,
+        "cost": [session.cost],
+    }

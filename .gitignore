@@ -1,10 +1,17 @@
 __pycache__/
 *.pyc
 .venv/
-.env
-uv.lock
-
-# Sibling sessions keep isolated worktrees here. They are checkouts of this
-# same repository, and committing one leaves a gitlink that clones as an empty
-# directory nobody can explain.
+# Local sibling checkouts must never be committed as gitlinks.
 .worktrees/
+.langgraph_api/
+.env
+.env.*
+!.env.example
+touchstone.toml
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+dry-run.diff
+dist/
+build/
+*.egg-info/

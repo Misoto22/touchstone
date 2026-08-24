@@ -98,3 +98,7 @@ Something moved:
 The date in `commit_subject` is today's date **where this runs**, not UTC. The
 schedule is a local calendar time, and a review dated in the wrong timezone is
 dated wrong every single day.
+
+Always write the file, including when nothing changed. A missing or malformed
+file is inconclusive because the runner cannot distinguish a clean pass from
+an interrupted session.

@@ -205,7 +205,7 @@ def test_a_verdict_is_a_validated_field_not_the_last_word_in_prose() -> None:
 def test_ssh_without_a_host_section_is_refused(tmp_path: Path) -> None:
     path = _config(
         tmp_path,
-        'repo_path = "/tmp/r"\n[forge]\nslug = "o/r"\n'
+        'version = 1\n[project]\npath = "/tmp/r"\n[forge]\nslug = "o/r"\n'
         '[execution]\ntarget = "ssh"\n'
         '[loop.code]\nbrief = "b.md"\nlabel = "l"\n',
     )
@@ -214,7 +214,10 @@ def test_ssh_without_a_host_section_is_refused(tmp_path: Path) -> None:
 
 
 def test_a_configuration_with_no_loops_is_refused(tmp_path: Path) -> None:
-    path = _config(tmp_path, 'repo_path = "/tmp/r"\n[forge]\nslug = "o/r"\n')
+    path = _config(
+        tmp_path,
+        'version = 1\n[project]\npath = "/tmp/r"\n[forge]\nslug = "o/r"\n',
+    )
     with pytest.raises(ConfigError, match="nothing to run"):
         load(path)
 
@@ -222,7 +225,8 @@ def test_a_configuration_with_no_loops_is_refused(tmp_path: Path) -> None:
 def test_an_unknown_engine_is_refused(tmp_path: Path) -> None:
     path = _config(
         tmp_path,
-        'repo_path = "/tmp/r"\n[forge]\nslug = "o/r"\n[engine]\nname = "gemini"\n'
+        'version = 1\n[project]\npath = "/tmp/r"\n'
+        '[forge]\nslug = "o/r"\n[engine]\nname = "gemini"\n'
         '[loop.code]\nbrief = "b.md"\nlabel = "l"\n',
     )
     with pytest.raises(ConfigError, match=r"codex.*claude"):
@@ -236,7 +240,7 @@ def test_the_environment_overrides_only_the_volatile_values(
     while debugging. Everything structural stays in the file, reviewable."""
     path = _config(
         tmp_path,
-        'repo_path = "/tmp/r"\n[forge]\nslug = "o/r"\n'
+        'version = 1\n[project]\npath = "/tmp/r"\n[forge]\nslug = "o/r"\n'
         '[engine]\nname = "codex"\nmodel = "gpt-5.6-terra"\n'
         '[loop.code]\nbrief = "b.md"\nlabel = "l"\n',
     )
@@ -253,7 +257,7 @@ def test_the_description_names_the_model_before_anything_is_spent(tmp_path: Path
     guessing which model just approved something."""
     path = _config(
         tmp_path,
-        'repo_path = "/tmp/r"\n[forge]\nslug = "o/r"\n'
+        'version = 1\n[project]\npath = "/tmp/r"\n[forge]\nslug = "o/r"\n'
         '[engine]\nname = "codex"\nmodel = "gpt-5.6-sol"\n'
         '[loop.code]\nbrief = "b.md"\nlabel = "l"\n',
     )
@@ -295,10 +299,16 @@ def test_every_placeholder_a_brief_uses_is_supplied() -> None:
 
     root = Path(__file__).resolve().parents[1]
     raw = tomllib.loads((root / "touchstone.example.toml").read_text(encoding="utf-8"))
-    shared = re.findall(r"\$(\w+)", (root / "briefs" / "review.md").read_text(encoding="utf-8"))
+    brief_root = root / "src" / "touchstone" / "resources" / "briefs"
+    shared = re.findall(r"\$(\w+)", (brief_root / "review.md").read_text(encoding="utf-8"))
 
     for name, table in raw["loop"].items():
-        brief = root / table["brief"]
+        reference = table["brief"]
+        brief = (
+            brief_root / f"{reference.removeprefix('builtin:')}.md"
+            if reference.startswith("builtin:")
+            else root / reference
+        )
         assert brief.exists(), f"[loop.{name}] points at a brief that is not there: {brief}"
         used = set(re.findall(r"\$(\w+)", brief.read_text(encoding="utf-8"))) | set(shared)
         missing = used - set(table.get("context", {}))
@@ -311,7 +321,7 @@ def test_the_briefs_keep_the_constraints_that_were_paid_for() -> None:
     A rewrite is free to reword them. It is not free to drop them, and a test
     that names them makes deleting one a deliberate act rather than a tidy-up.
     """
-    root = Path(__file__).resolve().parents[1] / "briefs"
+    root = Path(__file__).resolve().parents[1] / "src" / "touchstone" / "resources" / "briefs"
     audit = (root / "code-audit.md").read_text(encoding="utf-8")
     harness = (root / "harness-review.md").read_text(encoding="utf-8")
     review = (root / "review.md").read_text(encoding="utf-8")
@@ -339,7 +349,7 @@ def test_the_description_names_where_it_runs_not_what_is_configured(tmp_path: Pa
     """
     path = _config(
         tmp_path,
-        'repo_path = "/tmp/r"\n[forge]\nslug = "o/r"\n'
+        'version = 1\n[project]\npath = "/tmp/r"\n[forge]\nslug = "o/r"\n'
         '[execution]\ntarget = "local"\n'
         '[execution.ssh]\nhost = "elsewhere"\nworkdir = "/w"\nstate_dir = "/s"\n'
         '[loop.code]\nbrief = "b.md"\nlabel = "l"\n',
@@ -365,7 +375,7 @@ def test_a_rehearsal_is_stopped_only_by_the_kill_switch(tmp_path: Path) -> None:
     paused_at = source.index("PAUSED")
     dry_at = source.index("if dry_run")
     slot_at = source.index("open_pulls")
-    health_at = source.index("latest_run")
+    health_at = source.index("_health_gate(config)")
     assert paused_at < dry_at < slot_at, "the slot gate runs before the dry-run exit"
     assert dry_at < health_at, "the health gate runs before the dry-run exit"
 
@@ -507,6 +517,7 @@ def test_every_ending_leaves_a_row_in_the_ledger() -> None:
     """
     import inspect
 
+    from touchstone import runner
     from touchstone.nodes import audit, classify, publish
 
     assert "ledger.record" in inspect.getsource(audit._clean)
@@ -519,8 +530,10 @@ def test_every_ending_leaves_a_row_in_the_ledger() -> None:
             f"{module.__name__} ends a run clean without recording it"
         )
 
-    # And every publishing outcome keeps its own row.
-    for name in ("merge", "park", "arm_merge", "record_closed", "rehearse"):
-        assert "ledger.record" in inspect.getsource(getattr(publish, name)), (
-            f"publish.{name} leaves no ledger row"
-        )
+    # Publishing routes through the lifecycle service, which appends one event
+    # for each successful forge transition. Rehearsals keep their own row, and
+    # the runner independently records every run's terminal outcome.
+    assert "RepositoryLifecycle" in inspect.getsource(publish._publish)
+    assert "RepositoryLifecycle" in inspect.getsource(publish._resume)
+    assert "ledger.record" in inspect.getsource(publish.rehearse)
+    assert 'kind="finished"' in inspect.getsource(runner.execute)
