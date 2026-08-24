@@ -93,3 +93,43 @@ def test_builtin_catalog_loads_and_rejects_executable_local_profile(tmp_path: Pa
 
     with pytest.raises(ValueError, match="module"):
         load_catalog(local)
+
+
+def test_repository_local_declarative_profile_participates_in_detection(
+    tmp_path: Path,
+) -> None:
+    local = tmp_path / ".touchstone" / "profiles"
+    local.mkdir(parents=True)
+    (local / "vue.toml").write_text(
+        'name = "vue"\n'
+        'version = "1"\n'
+        'category = "framework"\n'
+        'supported = ">=3,<4"\n'
+        'audit_context = "Inspect Vue components."\n'
+        "protected_paths = []\n"
+        'source_paths = ["src/"]\n'
+        '[[detect]]\nkind = "dependency"\necosystem = "node"\nname = "vue"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "package.json").write_text('{"dependencies":{"vue":"3.5.0"}}', encoding="utf-8")
+    catalog = load_catalog(local)
+
+    matches = detect_profiles(
+        tmp_path,
+        TargetCandidate(id="app", path=Path(".")),
+        catalog=catalog,
+    )
+
+    assert any(match.profile == "vue" and match.verdict == "confirmed" for match in matches)
+
+
+def test_unresolved_framework_version_requires_confirmation(tmp_path: Path) -> None:
+    (tmp_path / "package.json").write_text(
+        '{"dependencies":{"next":"workspace:*"}}', encoding="utf-8"
+    )
+
+    matches = detect_profiles(tmp_path, TargetCandidate(id="app", path=Path(".")))
+    nextjs = next(match for match in matches if match.profile == "nextjs")
+
+    assert nextjs.verdict == "candidate"
+    assert "version" in nextjs.warning.lower()

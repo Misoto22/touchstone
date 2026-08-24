@@ -557,14 +557,17 @@ def _actions_checks(config: Config, context: DoctorContext) -> list[CheckResult]
         "issues": "write",
         "pull_requests": "write",
     }
-    app_ok = isinstance(permissions, dict) and all(
-        permissions.get(name) == access for name, access in required_permissions.items()
+    app_ok = (
+        isinstance(installation, dict)
+        and installation.get("repository_selection") == "selected"
+        and isinstance(permissions, dict)
+        and all(permissions.get(name) == access for name, access in required_permissions.items())
     )
     checks.append(
         CheckResult(
             "actions.app",
             "PASS" if app_ok else "FAIL",
-            "publishing App is installed with the expected permissions"
+            "publishing App is selected-repository scoped with the expected permissions"
             if app_ok
             else "publishing App installation or permissions are incomplete",
             None if app_ok else "Rerun 'touchstone actions setup --check' and repair the App.",

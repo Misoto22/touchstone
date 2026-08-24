@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import tomli_w
 
@@ -27,6 +28,8 @@ class InitOptions:
     workflows: tuple[str, ...] = ()
     schedule: str = "hourly@00"
     timezone: str = "UTC"
+    visibility: Literal["public", "private"] = "public"
+    wake_minutes: int | None = None
     profiles: tuple[str, ...] = ()
     package_manager: str | None = None
     output: Path | None = None
@@ -46,6 +49,9 @@ def initialize(options: InitOptions, executor: Executor) -> InitReport:
         raise ConfigError("init requires an explicit model")
     if not options.timezone.strip():
         raise ConfigError("init requires a non-empty IANA timezone")
+    wake_minutes = options.wake_minutes or (15 if options.visibility == "public" else 60)
+    if wake_minutes not in {5, 10, 15, 20, 30, 60}:
+        raise ConfigError("hosted wake cadence must be one of 5, 10, 15, 20, 30, or 60 minutes")
     found = options.discovered or discover_project(options.start, executor)
     target = (options.output or found.root / "touchstone.toml").expanduser().resolve()
     if target.parent != found.root.resolve():
@@ -73,12 +79,15 @@ def initialize(options: InitOptions, executor: Executor) -> InitReport:
         discovery,
         matches,
         catalog,
+        repository=found.root,
         package_managers=managers,
+        strict_package_managers=True,
     )
     root_text = render_config(
         options,
         found,
         target_ids=tuple(target.id for target in discovery.targets),
+        wake_minutes=wake_minutes,
     )
     _replace_pair(target, root_text, generated_path, generated.text)
     return InitReport(target, generated_path, generated)
@@ -89,6 +98,7 @@ def render_config(
     discovery: ProjectDiscovery,
     *,
     target_ids: tuple[str, ...] = (),
+    wake_minutes: int | None = None,
 ) -> str:
     root: dict[str, object] = {
         "version": 2,
@@ -112,8 +122,8 @@ def render_config(
         },
         "execution": {"target": "local"},
         "actions": {
-            "visibility": "public",
-            "wake_minutes": 15,
+            "visibility": options.visibility,
+            "wake_minutes": wake_minutes or (15 if options.visibility == "public" else 60),
             "artifact_retention_days": 90,
             "node_version": "24",
             "codex_cli_version": "0.149.1",

@@ -70,6 +70,7 @@ def detect_repository(
             detect_profiles(
                 repository,
                 TargetCandidate(id=target.id, path=target.path),
+                catalog=catalog,
             )
         )
         present = {match.profile for match in detected}
@@ -100,7 +101,9 @@ def materialize(
     matches: dict[str, tuple[ProfileMatch, ...]],
     catalog: ProfileCatalog,
     *,
+    repository: Path,
     package_managers: tuple[str, ...] = (),
+    strict_package_managers: bool = False,
 ) -> MaterializedConfig:
     used_profiles: list[str] = []
     targets: dict[str, Any] = {}
@@ -159,6 +162,15 @@ def materialize(
             "path": target.path.as_posix(),
             "profiles": confirmed,
             "dependencies": list(target.dependencies),
+            "package_managers": list(
+                _target_package_managers(
+                    repository,
+                    target.path,
+                    confirmed,
+                    package_managers,
+                    strict=strict_package_managers,
+                )
+            ),
             "audit_context": audit_context,
             "protected_paths": target_protected,
             "source_paths": target_sources,
@@ -207,6 +219,7 @@ def profile_diff(config: Config) -> ProfileDiff:
     if generated_path is None:
         raise ConfigError("Profile refresh requires a version 2 configuration")
     discovery, matches, catalog = detect_repository(config.repo_path)
+    explicit_profiles = _explicit_profiles_by_target(config.source.path)
     order = {name: index for index, name in enumerate(catalog.profiles)}
     for target in discovery.targets:
         configured = config.targets.get(target.id)
@@ -214,7 +227,7 @@ def profile_diff(config: Config) -> ProfileDiff:
             continue
         detected = list(matches[target.id])
         present = {match.profile for match in detected}
-        for name in configured.profiles:
+        for name in explicit_profiles.get(target.id, ()):
             if name in present:
                 continue
             catalog.get(name)
@@ -237,7 +250,13 @@ def profile_diff(config: Config) -> ProfileDiff:
     managers = (
         config.generated_metadata.package_managers if config.generated_metadata is not None else ()
     )
-    generated = materialize(discovery, matches, catalog, package_managers=managers)
+    generated = materialize(
+        discovery,
+        matches,
+        catalog,
+        repository=config.repo_path,
+        package_managers=managers,
+    )
     try:
         current = generated_path.read_text(encoding="utf-8")
     except FileNotFoundError:
@@ -252,6 +271,26 @@ def profile_diff(config: Config) -> ProfileDiff:
         )
     )
     return ProfileDiff(changed, diff, current, generated.text, generated)
+
+
+def _explicit_profiles_by_target(path: Path) -> dict[str, tuple[str, ...]]:
+    try:
+        raw = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return {}
+    targets = raw.get("target", {})
+    if not isinstance(targets, dict):
+        return {}
+    explicit: dict[str, tuple[str, ...]] = {}
+    for target_id, value in targets.items():
+        profiles = value.get("profiles", []) if isinstance(value, dict) else []
+        if (
+            isinstance(target_id, str)
+            and isinstance(profiles, list)
+            and all(isinstance(profile, str) for profile in profiles)
+        ):
+            explicit[target_id] = tuple(profiles)
+    return explicit
 
 
 def refresh_profiles(config_path: Path, *, write: bool) -> RefreshReport:
@@ -322,6 +361,43 @@ def select_package_managers(root: Path, explicit: str | None = None) -> tuple[st
         raise ConfigError(f"package manager {explicit!r} has no repository evidence")
     ambiguous_names = {name for group in ambiguous for name in group}
     return tuple(name for name in found if name not in ambiguous_names or name == explicit)
+
+
+def _target_package_managers(
+    repository: Path,
+    target: Path,
+    profiles: list[str],
+    repository_managers: tuple[str, ...],
+    *,
+    strict: bool,
+) -> tuple[str, ...]:
+    local = detect_package_managers(repository / target)
+    if local:
+        ambiguous = ambiguous_package_managers(local)
+        if ambiguous:
+            ambiguous_names = {name for group in ambiguous for name in group}
+            selected = {name for name in repository_managers if name in ambiguous_names}
+            unresolved = tuple(group for group in ambiguous if not selected.intersection(group))
+            if unresolved and strict:
+                choices = ", ".join("/".join(group) for group in unresolved)
+                raise ConfigError(
+                    f"ambiguous package manager evidence for Target {target.as_posix()} "
+                    f"({choices}); select one package manager and rerun init"
+                )
+            if not unresolved:
+                return tuple(
+                    name for name in local if name not in ambiguous_names or name in selected
+                )
+        return local
+    ecosystems: set[str] = set()
+    if set(profiles) & {"javascript", "node", "typescript", "react", "nextjs"}:
+        ecosystems.add("node")
+    if set(profiles) & {"python", "fastapi", "django"}:
+        ecosystems.add("python")
+    manager_ecosystems = {manager: ecosystem for manager, ecosystem, _ in _MANAGER_LOCKS}
+    return tuple(
+        manager for manager in repository_managers if manager_ecosystems.get(manager) in ecosystems
+    )
 
 
 def _scoped(target: Path, value: str) -> str:

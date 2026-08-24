@@ -14,15 +14,20 @@ from packaging.utils import canonicalize_name
 from packaging.version import InvalidVersion, Version
 
 from touchstone.profiles.catalog import load_catalog
-from touchstone.profiles.model import Evidence, ProfileMatch, TargetCandidate
+from touchstone.profiles.model import Evidence, ProfileCatalog, ProfileMatch, TargetCandidate
 
 
-def detect_profiles(root: Path, target: TargetCandidate) -> tuple[ProfileMatch, ...]:
+def detect_profiles(
+    root: Path,
+    target: TargetCandidate,
+    *,
+    catalog: ProfileCatalog | None = None,
+) -> tuple[ProfileMatch, ...]:
     repository = root.expanduser().resolve()
     target_root = (repository / target.path).resolve()
     if not target_root.is_relative_to(repository):
         raise ValueError("Target path must stay inside the repository")
-    catalog = load_catalog()
+    catalog = catalog or load_catalog()
     matches: list[ProfileMatch] = []
 
     package_path = target_root / "package.json"
@@ -91,6 +96,25 @@ def detect_profiles(root: Path, target: TargetCandidate) -> tuple[ProfileMatch, 
                         catalog.get(profile).supported,
                     )
                 )
+
+    present = {match.profile for match in matches}
+    for name, definition in catalog.profiles.items():
+        if name in present or not definition.detectors:
+            continue
+        detected = _declarative_match(
+            repository,
+            target_root,
+            definition.name,
+            definition.supported,
+            definition.detectors,
+            package,
+            node_dependencies,
+            python_evidence,
+            python_dependencies,
+        )
+        if detected is not None:
+            matches.append(detected)
+            present.add(name)
 
     if not matches:
         matches.append(
@@ -167,8 +191,18 @@ def _versioned_match(
     profile: str, raw_version: str, evidence: Evidence, supported: str
 ) -> ProfileMatch:
     detected = _representative_version(raw_version)
-    if detected is None or not supported:
+    if not supported:
         return ProfileMatch(profile, "confirmed", (evidence,), detected_version=detected)
+    if detected is None:
+        return ProfileMatch(
+            profile,
+            "candidate",
+            (evidence,),
+            warning=(
+                f"detected {profile}, but its declared version {raw_version or '(missing)'} "
+                f"cannot be confirmed against supported range {supported}"
+            ),
+        )
     try:
         declared = SpecifierSet(raw_version)
         compatible = _specifier_sets_overlap(declared, SpecifierSet(supported))
@@ -221,6 +255,60 @@ def _specifier_sets_overlap(left: SpecifierSet, right: SpecifierSet) -> bool:
 
 def _evidence(repository: Path, path: Path, detail: str) -> Evidence:
     return Evidence("file", path.resolve().relative_to(repository).as_posix(), detail)
+
+
+def _declarative_match(
+    repository: Path,
+    target: Path,
+    profile: str,
+    supported: str,
+    detectors: tuple[tuple[tuple[str, str], ...], ...],
+    package: dict[str, Any] | None,
+    node_dependencies: dict[str, str],
+    python_evidence: Evidence | None,
+    python_dependencies: dict[str, str],
+) -> ProfileMatch | None:
+    for raw in detectors:
+        detector = dict(raw)
+        kind = detector.get("kind", "")
+        if kind == "dependency":
+            ecosystem = detector.get("ecosystem", "")
+            dependency = canonicalize_name(detector.get("name", ""))
+            dependencies = (
+                node_dependencies
+                if ecosystem == "node"
+                else python_dependencies
+                if ecosystem == "python"
+                else {}
+            )
+            if dependency not in dependencies:
+                continue
+            source = target / ("package.json" if ecosystem == "node" else "pyproject.toml")
+            return _versioned_match(
+                profile,
+                dependencies[dependency],
+                _evidence(repository, source, f"dependency {dependency}"),
+                supported,
+            )
+        if kind == "file":
+            declared = detector.get("path", "")
+            paths = sorted(target.glob(declared)) if declared else []
+            if paths and paths[0].is_file():
+                evidence = _evidence(repository, paths[0], f"declarative file {declared}")
+                return _versioned_match(profile, "", evidence, supported)
+        if kind == "python-project" and python_evidence is not None:
+            return _versioned_match(profile, "", python_evidence, supported)
+        if kind == "node-engine" and package is not None:
+            engines = package.get("engines", {})
+            version = engines.get("node") if isinstance(engines, dict) else None
+            if isinstance(version, str):
+                return _versioned_match(
+                    profile,
+                    version,
+                    _evidence(repository, target / "package.json", "engines.node"),
+                    supported,
+                )
+    return None
 
 
 __all__ = ["detect_profiles"]

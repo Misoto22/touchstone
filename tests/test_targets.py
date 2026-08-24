@@ -83,7 +83,7 @@ def test_single_project_root_is_a_target_and_owns_nested_files(tmp_path: Path) -
     assert affected_targets(["src/feature/module.py"], found) == (target_id,)
 
 
-def test_duplicate_directory_names_get_deterministic_suffixes(tmp_path: Path) -> None:
+def test_duplicate_directory_names_get_path_stable_ids(tmp_path: Path) -> None:
     (tmp_path / "package.json").write_text(
         '{"private":true,"workspaces":["apps/*","services/*"]}', encoding="utf-8"
     )
@@ -95,10 +95,13 @@ def test_duplicate_directory_names_get_deterministic_suffixes(tmp_path: Path) ->
     found = discover_targets(tmp_path)
 
     assert [(target.id, target.path) for target in found.targets] == [
-        ("api", Path("apps/api")),
-        ("api-2", Path("services/api")),
+        ("apps-api-b3013059", Path("apps/api")),
+        ("services-api-fe3b7a5f", Path("services/api")),
     ]
-    assert found.warnings == ("Target ID 'api' was disambiguated as 'api-2' for services/api",)
+    assert found.warnings == (
+        "Target ID 'api' was disambiguated as 'apps-api-b3013059' for apps/api",
+        "Target ID 'api' was disambiguated as 'services-api-fe3b7a5f' for services/api",
+    )
 
 
 def test_submodules_dependencies_venvs_fixtures_and_vendor_are_excluded(tmp_path: Path) -> None:

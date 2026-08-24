@@ -370,6 +370,10 @@ def _validate(raw: dict[str, Any]) -> None:
         _string(actions, key, "actions")
     for key in ("wake_minutes", "artifact_retention_days"):
         _positive_int(actions, key, "actions")
+    if actions.get("wake_minutes", 15) not in {5, 10, 15, 20, 30, 60}:
+        raise ConfigError("actions.wake_minutes must be one of 5, 10, 15, 20, 30, or 60")
+    if actions.get("artifact_retention_days", 90) > 90:
+        raise ConfigError("actions.artifact_retention_days must be at most 90")
     if "auto_merge" in actions and not isinstance(actions["auto_merge"], bool):
         raise ConfigError("actions.auto_merge must be a boolean")
     if actions.get("visibility", "public") not in {"public", "private"}:

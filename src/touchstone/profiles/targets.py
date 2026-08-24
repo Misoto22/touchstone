@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -288,12 +289,12 @@ def _root_has_independent_contract(root: Path) -> bool:
 
 def _build_targets(root: Path, paths: list[Path]) -> tuple[tuple[ProjectTarget, ...], list[str]]:
     targets: list[ProjectTarget] = []
-    counts: dict[str, int] = {}
     warnings: list[str] = []
+    bases = [_suggested_id(path, root.name) for path in paths]
+    counts = {base: bases.count(base) for base in set(bases)}
     for path in paths:
         base = _suggested_id(path, root.name)
-        counts[base] = counts.get(base, 0) + 1
-        target_id = base if counts[base] == 1 else f"{base}-{counts[base]}"
+        target_id = base if counts[base] == 1 else _path_id(path)
         if target_id != base:
             warnings.append(
                 f"Target ID {base!r} was disambiguated as {target_id!r} for {path.as_posix()}"
@@ -306,6 +307,13 @@ def _build_targets(root: Path, paths: list[Path]) -> tuple[tuple[ProjectTarget, 
             )
         )
     return tuple(targets), warnings
+
+
+def _path_id(path: Path) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", "-", path.as_posix().lower()).strip("-")
+    digest = hashlib.sha256(path.as_posix().encode()).hexdigest()[:8]
+    stem = normalized[:55].rstrip("-") or "target"
+    return f"{stem}-{digest}"
 
 
 def _suggested_id(path: Path, root_name: str) -> str:

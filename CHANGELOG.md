@@ -11,7 +11,7 @@ All notable user-facing changes are documented here. The format follows [Keep a 
 - Schema-v2 project/generated configuration ownership, deterministic Profile refresh, and an explicit backup-first v1-to-v2 migration command.
 - Structured preparation and Validation Gates with disabled-by-default detected candidates.
 - Durable Due Slots shared by native schedulers and GitHub-hosted wake signals.
-- Repository-owned GitHub Actions workflow generation, immutable Action pins, encrypted state/candidate artifacts, and split Prepare, Analysis, Publish, and Snapshot trust stages.
+- Repository-owned GitHub Actions workflow generation, immutable Action pins, encrypted state/candidate artifacts, and split Prepare, Analysis, Verify, Publish, and Snapshot trust stages.
 - Resumable owner-controlled GitHub App Manifest setup and hosted setup diagnostics.
 
 ### Changed
@@ -20,10 +20,14 @@ All notable user-facing changes are documented here. The format follows [Keep a 
 - Publication is PR-only by default; Touchstone no longer enables or requires GitHub auto-merge.
 - `status` is read-only, while `reconcile` performs explicit lifecycle reconciliation.
 - Operator resume decisions are `approve`, `close`, or `reanalyze` and remain bound to the reviewed candidate.
+- Generated configuration records package managers per Target, removes stale detected Profiles on refresh, and supports repository-local declarative detectors.
+- Hosted visibility and wake cadence are configurable during initialization; dry runs execute configured preparation and validation before stopping publication.
 
 ### Security
 
 - Model credentials and GitHub publishing credentials cannot coexist in one hosted stage.
+- Hosted candidates bind stable finding identity, base SHA, patch digest, run identity, Loop, and the full effective non-secret configuration; publication credentials are minted only after credential-free validation.
+- The publishing App token and installation are restricted to the selected repository, and partial remote writes block new analysis until explicit reconciliation.
 - Hosted bundles use AES-256-GCM with manifest AAD, fresh nonces, path-safe archives, configuration/Profile lineage checks, and ciphertext digests.
 - GitHub App private keys are sent to repository secrets through stdin and are never persisted by Touchstone.
 - Generated workflows run only from default-branch schedule or manual dispatch and pin every Action to a 40-character commit SHA.

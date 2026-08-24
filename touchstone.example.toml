@@ -38,7 +38,7 @@ state_dir = "/srv/touchstone/state"
 env = { PATH = "/usr/local/bin:/usr/bin:/bin" }
 
 [actions]
-visibility = "public" # public => 15-minute wake; private => hourly wake
+visibility = "public" # must match the live repository for doctor checks
 wake_minutes = 15
 artifact_retention_days = 90
 node_version = "24"

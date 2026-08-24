@@ -144,3 +144,47 @@ def test_check_mode_is_read_only(tmp_path: Path) -> None:
     assert report.state == "partial"
     assert report.step == "not-configured"
     assert list(tmp_path.rglob("*")) == []
+
+
+def test_partial_setup_rerun_repairs_recoverable_secret_writes(tmp_path: Path) -> None:
+    github = FakeGitHub(fail_secret="TOUCHSTONE_STATE_KEY")
+    setup = ActionsSetup(
+        _config(tmp_path),
+        github=github,
+        code_provider=lambda _manifest, _state: "manifest-code",
+        exchange=lambda _code: _conversion(),
+        open_browser=github.opened.append,
+        confirm_installation=lambda _url: True,
+    )
+
+    first = setup.run(SetupOptions())
+    github.fail_secret = ""
+    second = setup.run(SetupOptions())
+
+    assert first.step == "state-key-secret"
+    assert second.step == "private-key-repair-required"
+    assert set(github.secrets) == {"TOUCHSTONE_APP_ID", "TOUCHSTONE_STATE_KEY"}
+
+
+def test_setup_rejects_an_all_repositories_installation(tmp_path: Path) -> None:
+    class AllRepositoriesGitHub(FakeGitHub):
+        def installation(self):  # type: ignore[no-untyped-def]
+            installation = super().installation()
+            installation["repository_selection"] = "all"
+            return installation
+
+    github = AllRepositoriesGitHub()
+    setup = ActionsSetup(
+        _config(tmp_path),
+        github=github,
+        code_provider=lambda _manifest, _state: "manifest-code",
+        exchange=lambda _code: _conversion(),
+        open_browser=github.opened.append,
+        confirm_installation=lambda _url: True,
+    )
+
+    report = setup.run(SetupOptions())
+
+    assert report.state == "partial"
+    assert report.step == "repository-scope-mismatch"
+    assert "selected" in report.repair

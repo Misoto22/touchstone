@@ -140,3 +140,22 @@ def test_project_can_enable_a_generated_validation_candidate(tmp_path: Path) -> 
 
     assert len(config.targets["web"].validation) == 1
     assert config.targets["web"].validation[0].enabled is True
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("wake_minutes", 17, "wake_minutes"),
+        ("artifact_retention_days", 91, "artifact_retention_days"),
+    ],
+)
+def test_hosted_policy_ranges_fail_during_config_load(
+    tmp_path: Path, field: str, value: int, message: str
+) -> None:
+    _write(tmp_path / ".touchstone/generated.toml", _generated_config())
+    root_data = _root_config()
+    root_data["actions"][field] = value  # type: ignore[index]
+    root = _write(tmp_path / "touchstone.toml", root_data)
+
+    with pytest.raises(ConfigError, match=message):
+        load(root)

@@ -51,12 +51,13 @@ def test_actions_doctor_checks_workflow_app_and_secret_metadata(tmp_path) -> Non
 
         def installation(self):  # type: ignore[no-untyped-def]
             return {
+                "repository_selection": "selected",
                 "permissions": {
                     "actions": "read",
                     "contents": "write",
                     "issues": "write",
                     "pull_requests": "write",
-                }
+                },
             }
 
         def workflow(self, name: str = "touchstone.yml"):  # type: ignore[no-untyped-def]
@@ -104,12 +105,13 @@ def test_actions_doctor_warns_when_a_public_repository_is_near_the_cutoff(
 
         def installation(self):  # type: ignore[no-untyped-def]
             return {
+                "repository_selection": "selected",
                 "permissions": {
                     "actions": "read",
                     "contents": "write",
                     "issues": "write",
                     "pull_requests": "write",
-                }
+                },
             }
 
         def workflow(self, name: str = "touchstone.yml"):  # type: ignore[no-untyped-def]

@@ -13,6 +13,7 @@ generic = "1"
 path = "."
 profiles = ["generic"]
 dependencies = []
+package_managers = []
 audit_context = ["Audit repository-owned behavior without framework assumptions."]
 protected_paths = [".github/", ".env", ".env.*", "AGENTS.md"]
 source_paths = []

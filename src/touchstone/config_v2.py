@@ -16,6 +16,7 @@ class TargetConfig:
     path: Path
     profiles: tuple[str, ...]
     dependencies: tuple[str, ...] = ()
+    package_managers: tuple[str, ...] = ()
     validation: tuple[ValidationGateConfig, ...] = ()
 
 
@@ -144,6 +145,7 @@ def _targets(raw: object, repository: Path) -> dict[str, TargetConfig]:
         path_value = value.get("path")
         profiles = value.get("profiles", [])
         dependencies = value.get("dependencies", [])
+        package_managers = value.get("package_managers", [])
         validation = value.get("validation", [])
         if not isinstance(path_value, str) or not path_value.strip():
             raise ConfigError(f"target.{target_id}.path must be a non-empty string")
@@ -155,11 +157,14 @@ def _targets(raw: object, repository: Path) -> dict[str, TargetConfig]:
             raise ConfigError(f"target.{target_id}.profiles must be an array of strings")
         if not _string_list(dependencies):
             raise ConfigError(f"target.{target_id}.dependencies must be an array of strings")
+        if not _string_list(package_managers):
+            raise ConfigError(f"target.{target_id}.package_managers must be an array of strings")
         result[target_id] = TargetConfig(
             id=target_id,
             path=relative,
             profiles=tuple(profiles),
             dependencies=tuple(dependencies),
+            package_managers=tuple(package_managers),
             validation=_validation(validation, target_id),
         )
     return result

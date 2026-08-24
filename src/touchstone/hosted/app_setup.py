@@ -177,7 +177,7 @@ class ActionsSetup:
             report = self._check(previous)
             if report.state == "complete":
                 return report
-            return report
+            return self._repair(previous)
 
         owner, repository = self.config.forge.slug.split("/", 1)
         redirect = f"http://127.0.0.1:{options.callback_port}/callback"
@@ -197,13 +197,8 @@ class ActionsSetup:
 
         if not self.github.set_actions_secret("TOUCHSTONE_APP_ID", str(app_id).encode()):
             return self._record_secret_failure(app_id, app_slug, "app-id-secret")
-        state_key = bytearray(base64.urlsafe_b64encode(secrets.token_bytes(32)))
-        try:
-            if not self.github.set_actions_secret("TOUCHSTONE_STATE_KEY", bytes(state_key)):
-                return self._record_secret_failure(app_id, app_slug, "state-key-secret")
-        finally:
-            for index in range(len(state_key)):
-                state_key[index] = 0
+        if not self._set_state_key():
+            return self._record_secret_failure(app_id, app_slug, "state-key-secret")
 
         private_key = bytearray(pem.encode("utf-8"))
         try:
@@ -288,6 +283,62 @@ class ActionsSetup:
             )
         return self._installation_report(previous.app_id, previous.app_slug)
 
+    def _repair(self, previous: PartialSetup) -> SetupReport:
+        if previous.repository != self.config.forge.slug:
+            return self._partial("repository-mismatch", repair="remove stale local setup state")
+        if previous.app_id is None or not previous.app_slug:
+            return self._partial(previous.step, repair="rerun 'touchstone actions setup'")
+        present = self.github.actions_secret_names()
+        if "TOUCHSTONE_APP_ID" not in present and not self.github.set_actions_secret(
+            "TOUCHSTONE_APP_ID", str(previous.app_id).encode()
+        ):
+            return self._record_secret_failure(previous.app_id, previous.app_slug, "app-id-secret")
+        if "TOUCHSTONE_STATE_KEY" not in present and not self._set_state_key():
+            return self._record_secret_failure(
+                previous.app_id, previous.app_slug, "state-key-secret"
+            )
+        if "TOUCHSTONE_APP_PRIVATE_KEY" not in self.github.actions_secret_names():
+            report = self._partial(
+                "private-key-repair-required",
+                app_id=previous.app_id,
+                app_slug=previous.app_slug,
+                repair=(
+                    "generate a replacement key in the App settings, pipe it to "
+                    "'gh secret set TOUCHSTONE_APP_PRIVATE_KEY --app actions', "
+                    "then rerun setup"
+                ),
+            )
+            self._write_state(
+                PartialSetup(
+                    self.config.forge.slug,
+                    "partial",
+                    report.step,
+                    previous.app_id,
+                    previous.app_slug,
+                )
+            )
+            return report
+        report = self._installation_report(previous.app_id, previous.app_slug)
+        if report.state == "complete":
+            self._write_state(
+                PartialSetup(
+                    self.config.forge.slug,
+                    "complete",
+                    "configured",
+                    previous.app_id,
+                    previous.app_slug,
+                )
+            )
+        return report
+
+    def _set_state_key(self) -> bool:
+        state_key = bytearray(base64.urlsafe_b64encode(secrets.token_bytes(32)))
+        try:
+            return self.github.set_actions_secret("TOUCHSTONE_STATE_KEY", bytes(state_key))
+        finally:
+            for index in range(len(state_key)):
+                state_key[index] = 0
+
     def _installation_report(self, app_id: int, app_slug: str) -> SetupReport:
         installation = self.github.installation()
         if not isinstance(installation, dict) or installation.get("app_id") != app_id:
@@ -296,6 +347,13 @@ class ActionsSetup:
                 app_id=app_id,
                 app_slug=app_slug,
                 repair=f"install https://github.com/apps/{app_slug} for this repository",
+            )
+        if installation.get("repository_selection") != "selected":
+            return self._partial(
+                "repository-scope-mismatch",
+                app_id=app_id,
+                app_slug=app_slug,
+                repair="restrict the GitHub App installation to only this selected repository",
             )
         permissions = installation.get("permissions")
         if not isinstance(permissions, dict) or any(

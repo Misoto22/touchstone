@@ -63,6 +63,25 @@ def test_discovery_result_can_be_reused_by_init(tmp_path: Path) -> None:
     assert 'name = "claude"' in report.root.read_text(encoding="utf-8")
 
 
+def test_init_records_explicit_hosted_visibility_and_cadence(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path, remote="git@github.com:acme/widgets.git")
+
+    report = initialize(
+        InitOptions(
+            start=repo,
+            engine="codex",
+            model="gpt-test",
+            visibility="private",
+            wake_minutes=30,
+        ),
+        LocalExecutor(),
+    )
+    config = load_config(report.root)
+
+    assert config.actions.visibility == "private"
+    assert config.actions.wake_minutes == 30
+
+
 def test_non_interactive_init_is_available_from_the_cli(tmp_path: Path) -> None:
     repo = make_repo(tmp_path, remote="git@github.com:acme/widgets.git")
 

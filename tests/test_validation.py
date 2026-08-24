@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from touchstone.execution.local import LocalExecutor
-from touchstone.validation import ValidationCommand, run_gate, validate_commands
+from touchstone.validation import ValidationCommand, prepare, run_gate, validate_commands
 
 
 def _git(repository: Path, *args: str) -> None:
@@ -135,3 +135,41 @@ def test_shell_requires_an_explicit_executable_and_risk_acknowledgement(
 def test_validation_never_uses_implicit_shell_strings() -> None:
     with pytest.raises(ValueError, match="argv"):
         ValidationCommand(target="root", argv="pytest")  # type: ignore[arg-type]
+
+
+def test_preparation_uses_each_targets_confirmed_package_manager(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from types import SimpleNamespace
+
+    commands: list[tuple[str, tuple[str, ...]]] = []
+
+    def capture(_root, _path, command, _executor):  # type: ignore[no-untyped-def]
+        commands.append((command.target, command.argv))
+        return SimpleNamespace(ok=True)
+
+    gate = SimpleNamespace(
+        enabled=True,
+        preparation="locked-install",
+        allow_scripts=False,
+        allow_build_hooks=False,
+    )
+    config = SimpleNamespace(
+        repo_path=Path("."),
+        targets={
+            "web": SimpleNamespace(
+                path=Path("apps/web"), validation=(gate,), package_managers=("npm",)
+            ),
+            "api": SimpleNamespace(
+                path=Path("services/api"), validation=(gate,), package_managers=("uv",)
+            ),
+        },
+        generated_metadata=SimpleNamespace(package_managers=("npm", "uv")),
+    )
+    monkeypatch.setattr("touchstone.validation.run_gate", capture)
+
+    report = prepare(config, ("web", "api"), object())  # type: ignore[arg-type]
+
+    assert report.outcome == "completed"
+    assert commands == [
+        ("web", ("npm", "ci", "--ignore-scripts")),
+        ("api", ("uv", "sync", "--frozen", "--no-install-project")),
+    ]

@@ -150,3 +150,46 @@ def test_explicit_profile_selection_survives_refresh(tmp_path: Path) -> None:
 
     assert "python" in config.targets["next-repo"].profiles
     assert profile_diff(config).changed is False
+
+
+def test_refresh_drops_stale_detected_profiles_without_project_override(tmp_path: Path) -> None:
+    repository = _next_repository(tmp_path)
+    report = initialize(_options(repository), LocalExecutor())
+    (repository / "package.json").write_text(
+        json.dumps(
+            {
+                "name": "next-repo",
+                "devDependencies": {"typescript": "5.8.0"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    diff = profile_diff(load(report.root))
+    profiles = diff.materialized.data["target"]["next-repo"]["profiles"]
+
+    assert profiles == ["javascript", "typescript"]
+    assert "react" not in diff.expected_text
+    assert "nextjs" not in diff.expected_text
+
+
+def test_monorepo_records_package_manager_per_target(tmp_path: Path) -> None:
+    repository = tmp_path / "mixed"
+    repository.mkdir()
+    (repository / "package.json").write_text(
+        '{"private":true,"workspaces":["apps/*","services/*"]}', encoding="utf-8"
+    )
+    (repository / "package-lock.json").write_text("{}\n", encoding="utf-8")
+    web = repository / "apps" / "web"
+    api = repository / "services" / "api"
+    web.mkdir(parents=True)
+    api.mkdir(parents=True)
+    (web / "package.json").write_text('{"name":"web"}', encoding="utf-8")
+    (api / "pyproject.toml").write_text('[project]\nname="api"\n', encoding="utf-8")
+    (api / "uv.lock").write_text("version = 1\n", encoding="utf-8")
+
+    report = initialize(_options(repository), LocalExecutor())
+    config = load(report.root)
+
+    assert config.targets["web"].package_managers == ("npm",)
+    assert config.targets["api"].package_managers == ("uv",)

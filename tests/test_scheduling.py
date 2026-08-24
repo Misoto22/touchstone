@@ -54,11 +54,27 @@ def test_systemd_install_is_idempotent_and_skips_unscheduled_loops(tmp_path: Pat
     assert first.files == second.files
     assert second.changed == ()
     service = (target / "touchstone-wake.service").read_text(encoding="utf-8")
-    assert "WorkingDirectory=" + str((tmp_path / "project").resolve()) in service
+    assert f'WorkingDirectory="{(tmp_path / "project").resolve()}"' in service
     assert 'Environment="PATH=' in service
     assert "GH_TOKEN" not in service
     assert "SECRET" not in service
-    assert service.rstrip().endswith("run-due")
+    assert service.rstrip().endswith('"run-due"')
+
+
+def test_systemd_unit_escapes_spaces_quotes_and_specifiers(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config.repo_path = (tmp_path / 'project % "quoted"').resolve()
+    config.source.path = (tmp_path / "touchstone config.toml").resolve()
+    target = tmp_path / "rendered"
+    scheduler = SystemdScheduler(LocalExecutor(), executable=Path("/absolute/bin/touchstone"))
+
+    scheduler.install(config, target=target)
+    service = (target / "touchstone-wake.service").read_text(encoding="utf-8")
+
+    assert 'WorkingDirectory="' in service
+    assert 'project %% \\"quoted\\"' in service
+    assert 'ExecStart="/absolute/bin/touchstone" "--config" "' in service
+    assert 'touchstone config.toml" "run-due"' in service
 
 
 def test_scheduler_dry_run_writes_and_executes_nothing(tmp_path: Path) -> None:

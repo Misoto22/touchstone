@@ -30,11 +30,11 @@ Touchstone turns agent findings into reviewable, PR-only changes.
 ### Features
 
 - **Stack detection before configuration** — identifies Targets and composes `generic`, `javascript`, `node`, `typescript`, `react`, `nextjs`, `python`, `fastapi`, and `django` Profiles from repository evidence.
-- **Monorepo-aware scope** — discovers npm, Yarn, pnpm, uv, and PDM workspaces, records dependency edges, and expands a changed Target to affected dependents.
+- **Monorepo-aware scope** — discovers npm, Yarn, pnpm, uv, and PDM workspaces, records a package manager per Target, tracks dependency edges, and expands a changed Target to affected dependents.
 - **Owned configuration** — keeps deliberate settings in `touchstone.toml` and reproducible stack evidence in `.touchstone/generated.toml`; Profile refresh never replaces project overrides.
 - **Structured validation** — runs argv-based gates in bounded Target directories with timeouts, secret-scrubbed environments, locked preparation, and tracked-file mutation checks. Detected validation candidates start disabled.
 - **Two execution backends** — runs from native launchd/systemd wake signals or a generated, repository-owned GitHub Actions workflow.
-- **Split hosted trust stages** — Prepare, Analysis, Publish, and Snapshot jobs never place model credentials and publishing credentials in the same job.
+- **Split hosted trust stages** — Prepare, Analysis, credential-free Verify, mutation-only Publish, and Snapshot keep model credentials out of every publication step and mint the repository-scoped App token only after validation.
 - **PR-only lifecycle** — low-risk approved candidates open ready pull requests; higher-risk or rejected candidates open drafts. Auto-merge remains disabled.
 - **Durable recovery** — transactional Due Slot claims, encrypted state snapshots, stable run outcomes, explicit change states, and exact-candidate resume decisions survive retries and missed wake signals.
 
@@ -68,7 +68,7 @@ src/touchstone/
 ├── lifecycle.py            PR publication, reconciliation, reaping, and resume
 ├── config.py               Versioned, project-neutral configuration
 └── cli.py                  Installed command surface
-action.yml                  Pinned composite Action with four explicit stages
+action.yml                  Pinned composite Action with five explicit stages
 docs/adr/                   Architecture decisions
 tests/fixtures/acceptance/  Next.js, Django, and mixed-monorepo wheel fixtures
 ```
@@ -103,8 +103,12 @@ touchstone init --non-interactive \
   --model YOUR_MODEL_ID \
   --workflow ci.yml \
   --schedule hourly@00 \
-  --timezone Australia/Sydney
+  --timezone Australia/Sydney \
+  --visibility public \
+  --wake-minutes 15
 ```
+
+Use `--visibility private` for a private repository. Hosted wake cadence accepts `5`, `10`, `15`, `20`, `30`, or `60` minutes; defaults are 15 minutes for public repositories and 60 minutes for private repositories.
 
 ---
 
@@ -134,7 +138,7 @@ git commit -m "ci: add touchstone audit loop"
 `actions init` resolves Touchstone's default branch to a 40-character commit SHA. Automation may instead pass an audited revision with `--action-sha`. `--check` is read-only and exits `3` when the committed workflow has drifted.
 
 > [!WARNING]
-> `touchstone actions setup` opens GitHub twice: first to review and create an owner-controlled GitHub App, then to install it for the selected repository. Read the owner, repository, and permissions on both GitHub pages before confirming. The one-time private key is piped directly to `gh secret set`; Touchstone never writes it to disk.
+> `touchstone actions setup` opens GitHub twice: first to review and create an owner-controlled GitHub App, then to install it for only the selected repository. Read the owner, repository, repository scope, and permissions on both GitHub pages before confirming. The one-time private key is piped directly to `gh secret set`; Touchstone never writes it to disk.
 
 Run the guided setup from a trusted local terminal:
 
@@ -145,7 +149,7 @@ touchstone actions setup --check
 touchstone doctor
 ```
 
-For Claude, set `ANTHROPIC_API_KEY` instead. Organization-owned repositories use `touchstone actions setup --organization`. If loopback callback delivery is unavailable, use `touchstone actions setup --manual-code` and paste the one-time manifest code at the hidden prompt.
+For Claude, set `ANTHROPIC_API_KEY` instead. Organization-owned repositories use `touchstone actions setup --organization`. If loopback callback delivery is unavailable, use `touchstone actions setup --manual-code` and paste the one-time manifest code at the hidden prompt. Setup records non-secret progress, repairs recoverable App ID and state-key secret writes on rerun, and gives an explicit replacement-key command when the one-time private key can no longer be recovered.
 
 The standard repository secrets are:
 
@@ -153,11 +157,11 @@ The standard repository secrets are:
 |---|---|
 | `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` | Analysis only |
 | `TOUCHSTONE_APP_ID` and `TOUCHSTONE_APP_PRIVATE_KEY` | Publish only |
-| `TOUCHSTONE_STATE_KEY` | Analysis, Publish, and Snapshot |
+| `TOUCHSTONE_STATE_KEY` | Analysis, Verify, Publish, and Snapshot |
 
-The workflow has only `schedule` and `workflow_dispatch` triggers. It does not run on pull requests. Public repositories wake at off-hour 15-minute intervals; private repositories default to one off-hour wake per hour. Each wake evaluates durable schedules, so frequent wake signals do not imply frequent model calls.
+The workflow has only `schedule` and `workflow_dispatch` triggers. It does not run on pull requests. Public repositories default to off-hour 15-minute wake signals; private repositories default to one off-hour wake per hour. Configure a supported interval with `actions.wake_minutes`, then rerun `touchstone actions init`. Each wake evaluates durable schedules, so frequent wake signals do not imply frequent model calls.
 
-Prepare restores the latest encrypted state envelope without a decryption key. Analysis decrypts state, claims one Due Slot, runs the model, and emits an authenticated candidate. Publish has no model key; it verifies repository, configuration, Profile digest, lineage, base SHA, and patch digest before using a short-lived App token. Snapshot has neither model nor publishing credentials and retains encrypted state for 90 days by default.
+Prepare restores the latest encrypted state envelope without a decryption key. Analysis decrypts state, claims one Due Slot, runs the model, and emits an authenticated candidate whose unique ID binds the stable finding, base SHA, patch digest, and run. Inside the Publish job, Verify receives only a read token: it checks repository, effective non-secret configuration, Profile digest, independently exported Loop and candidate lineage, base SHA, patch digest, health gates, and Validation Gates in a staged worktree. Only then does the workflow mint a short-lived App token scoped to the current repository and run mutation-only Publish. Snapshot has neither model nor publishing credentials, finalizes the Due Slot in the encrypted state, and retains that state for 90 days by default.
 
 Hosted operator decisions use the exact candidate ID:
 
@@ -176,10 +180,10 @@ GitHub disables scheduled workflows after 60 days without activity in a public r
 New repositories use schema v2:
 
 - `touchstone.toml` is project-owned. It holds repository identity, engine, schedule, Actions policy, Loop choices, and explicit overrides.
-- `.touchstone/generated.toml` is machine-owned. It records package/Profile versions, source digest, package managers, Targets, evidence, dependencies, protected/source paths, and validation candidates.
+- `.touchstone/generated.toml` is machine-owned. It records package/Profile versions, source digest, per-Target package managers, Targets, evidence, dependencies, protected/source paths, and validation candidates.
 - `.touchstone/profiles/*.toml` may add repository-local declarative Profiles. Profile files cannot import or execute project code.
 
-Detection distinguishes confirmed evidence, candidates requiring explicit confirmation, and unsupported version ranges. In non-interactive mode, unresolved candidates or ambiguous lockfile families stop initialization instead of guessing. Select deliberately with `--profile NAME` or `--package-manager NAME`.
+Detection distinguishes confirmed evidence, candidates requiring explicit confirmation, and unsupported version ranges. Floating or unresolvable framework versions remain candidates instead of being treated as confirmed. Repository-local declarative Profile detectors participate in the same bounded detection pass. In non-interactive mode, unresolved candidates or ambiguous lockfile families stop initialization instead of guessing. Select deliberately with `--profile NAME` or `--package-manager NAME`.
 
 ```bash
 touchstone profile detect --json
@@ -189,7 +193,7 @@ touchstone profile refresh --write
 touchstone validate code
 ```
 
-`profile refresh --check` and `profile diff` are read-only and exit `3` on drift. `--write` replaces only generated configuration. Enable a generated Validation Gate in a project-owned Target override after reviewing its argv, capability, preparation, timeout, and working directory.
+`profile refresh --check` and `profile diff` are read-only and exit `3` on drift. `--write` replaces only generated configuration, removes stale auto-detected Profiles, and retains Profiles explicitly declared in the project-owned Target override. Enable a generated Validation Gate in that override after reviewing its argv, capability, preparation, timeout, and working directory.
 
 Unknown configuration keys fail closed. Relative paths resolve from the configuration file. Secrets do not belong in TOML; secret-shaped SSH environment keys are rejected. When `state_dir` is omitted, Touchstone uses an isolated per-repository directory under `$XDG_STATE_HOME/touchstone` or `~/.local/state/touchstone`.
 
@@ -243,7 +247,7 @@ Touchstone owns configuration validation, bounded discovery, isolated worktrees,
 
 The target repository owns its tests, branch protection, required checks, deployment verification, audit policy, credentials, and final merge. Touchstone creates pull requests; it does not merge them. It does not install remote Profiles, request a broad personal access token, turn on GitHub auto-merging, trigger from pull requests, or treat missing/malformed model output as a clean run.
 
-A dry run prevents publication, not model access. Use only repositories, hosts, models, GitHub accounts, and credentials you are authorised to use. Never include secrets, private repository content, model transcripts, encrypted-state keys, or unredacted diagnostics in public issues.
+A dry run prevents publication, not model access. It still runs the configured locked preparation and Validation Gates against the candidate worktree. Use only repositories, hosts, models, GitHub accounts, and credentials you are authorised to use. Never include secrets, private repository content, model transcripts, encrypted-state keys, or unredacted diagnostics in public issues.
 
 Report vulnerabilities privately through [GitHub Security Advisories](https://github.com/Misoto22/touchstone/blob/main/SECURITY.md).
 

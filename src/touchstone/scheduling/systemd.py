@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import shlex
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -103,21 +102,22 @@ class SystemdScheduler:
         if not any(loop.schedule for loop in config.loops.values()):
             return {}
         unit = "touchstone-wake"
-        command = shlex.join(
-            [
+        command = " ".join(
+            _systemd_quote(value)
+            for value in (
                 str(self._executable),
                 "--config",
                 str(Path(config.source.path).resolve()),
                 "run-due",
-            ]
+            )
         )
         service = (
             "[Unit]\n"
             "Description=Wake due Touchstone loops\n\n"
             "[Service]\n"
             "Type=oneshot\n"
-            f"WorkingDirectory={Path(config.repo_path).resolve()}\n"
-            f'Environment="PATH={command_path(self._executable)}"\n'
+            f"WorkingDirectory={_systemd_quote(str(Path(config.repo_path).resolve()))}\n"
+            f"Environment={_systemd_quote(f'PATH={command_path(self._executable)}')}\n"
             f"ExecStart={command}\n"
         )
         timer = (
@@ -146,6 +146,13 @@ class SystemdScheduler:
                     )
                 )
         return tuple(files)
+
+
+def _systemd_quote(value: str) -> str:
+    if any(character in value for character in "\r\n\0"):
+        raise ValueError("systemd unit values must be single-line strings")
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%")
+    return f'"{escaped}"'
 
 
 __all__ = ["SystemdScheduler"]

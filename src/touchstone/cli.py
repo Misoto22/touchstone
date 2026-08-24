@@ -59,6 +59,8 @@ def _init(args: argparse.Namespace) -> int:
             workflows=workflows,
             schedule=schedule or "hourly@00",
             timezone=args.timezone,
+            visibility=args.visibility,
+            wake_minutes=args.wake_minutes,
             profiles=tuple(args.profile or ()),
             package_manager=package_manager,
             output=args.output,
@@ -296,7 +298,10 @@ def _reconcile(args: argparse.Namespace) -> int:
                 f"{name}={len(values)}" for name, values in fields.items() if values
             )
             print(f"{loop}: {summary or 'no lifecycle changes'}")
-    failed = any(fields["failed"] or fields["inconclusive"] for fields in report.values())
+    failed = any(
+        fields["failed"] or fields["inconclusive"] or fields["partial_unresolved"]
+        for fields in report.values()
+    )
     return 1 if failed else 0
 
 
@@ -492,6 +497,18 @@ def main(argv: list[str] | None = None) -> int:
     init.add_argument("--workflow", action="append", help="required default-branch workflow")
     init.add_argument("--schedule", help="hourly@MM, daily@HH:MM, or weekly@DAY,HH:MM")
     init.add_argument("--timezone", default="UTC", help="repository IANA timezone")
+    init.add_argument(
+        "--visibility",
+        choices=("public", "private"),
+        default="public",
+        help="repository visibility used by hosted diagnostics",
+    )
+    init.add_argument(
+        "--wake-minutes",
+        type=int,
+        choices=(5, 10, 15, 20, 30, 60),
+        help="GitHub Actions wake cadence (default: public 15, private 60)",
+    )
     init.add_argument("--profile", action="append", help="explicit Profile selection")
     init.add_argument("--package-manager", help="resolve ambiguous lockfile evidence")
     init.add_argument("--force", action="store_true", help="replace an existing config")
@@ -553,7 +570,7 @@ def main(argv: list[str] | None = None) -> int:
     actions_setup.set_defaults(handler=_actions_setup)
 
     hosted = sub.add_parser("hosted", help="run an internal GitHub-hosted trust stage")
-    hosted.add_argument("stage", choices=("prepare", "analysis", "publish", "snapshot"))
+    hosted.add_argument("stage", choices=("prepare", "analysis", "verify", "publish", "snapshot"))
     hosted.set_defaults(handler=_hosted)
 
     status = sub.add_parser("status", help="read repository lifecycle state without mutation")

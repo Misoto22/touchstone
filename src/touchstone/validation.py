@@ -254,9 +254,6 @@ def prepare(
     repository: Path | None = None,
 ) -> PreparationReport:
     root = (repository or config.repo_path).expanduser().resolve()
-    managers = (
-        config.generated_metadata.package_managers if config.generated_metadata is not None else ()
-    )
     selected = targets or tuple(config.targets)
     results: list[ValidationResult] = []
     for target_id in selected:
@@ -271,7 +268,7 @@ def prepare(
         if not requirements:
             continue
         command = _preparation_command(
-            managers,
+            target.package_managers,
             target_id,
             allow_scripts=any(gate.allow_scripts for gate in requirements),
             allow_build_hooks=any(gate.allow_build_hooks for gate in requirements),
