@@ -1,0 +1,7 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "loop": "./src/harness_loop/graph.py:build"
+  },
+  "env": ".env"
+}

@@ -1,0 +1,81 @@
+# A worked configuration. Copy to ~/.config/harness-loop/config.toml and edit.
+#
+# Every value here is a decision this code refuses to make for you. The
+# implementation it replaces hardcoded a repository path, a model, an effort
+# level, and the assumption that the machine holding the git clone was also the
+# machine running the model — and each of those turned out to be wrong at least
+# once.
+
+repo_path = "/Users/macbook01/local-projects/personal-projects/kioku"
+state_dir = "~/.local/state/harness-loop"
+
+[forge]
+slug = "Misoto22/kioku"
+default_branch = "main"
+audit_label = "auto:audit"
+harness_label = "auto:harness"
+escalation_label = "blocked:needs-henry"
+# A pull request CI has turned red never merges. Without reaping it would hold
+# the single slot forever and stop the loop dead.
+reap_after_hours = 6
+
+[engine]
+name = "codex"            # codex | claude
+model = "gpt-5.6-sol"
+# Pinned, not inherited. The default is undocumented on both engines and free
+# to move, and effort drives both what a run costs and whether a finding is
+# real.
+audit_effort = "high"
+review_effort = "high"
+# A wedged session otherwise holds the lock for as long as its process lives,
+# and a stale-lock check only breaks a lock whose pid is gone.
+timeout_seconds = 2700
+
+[engine.budget]
+# Claude only: Codex reports no cost and has no budget flag, so on that engine
+# the clock is the only ceiling and the spend is invisible. Derived from what
+# has been observed rather than picked round — audits at $7.62 and $9.55,
+# reviews at $1.13 — at roughly twice the worst real run.
+audit = 20.0
+review = 4.0
+
+[execution]
+# local | ssh
+#
+# `ssh` is the right answer for a scheduled loop. A laptop sleeps, so `local`
+# there means "whenever the lid opens"; and telling a latent defect from a live
+# one needs the production database, which only the server can reach.
+target = "local"
+
+[execution.ssh]
+host = "my-server"
+workdir = "/srv/harness-loop/kioku"
+state_dir = "/srv/harness-loop/state"
+# ssh gives a non-login shell whose PATH has neither Homebrew nor ~/.local/bin.
+env = { PATH = "/usr/local/bin:/usr/bin:/bin", ECC_GATEGUARD = "off" }
+
+[loop.code]
+brief = "briefs/code-audit.md"
+label = "auto:audit"
+# Enforced on the finished diff, because a permission layer models tools rather
+# than intent — and on Codex, whose sandbox grants the whole worktree, this is
+# the only check there is.
+protected_paths = [
+    ".github/", "justfile", "alembic.ini", "migrations/",
+    "docs/agent-delivery/", "docs/engineering/rules.md", ".claude/", "AGENTS.md",
+]
+
+[loop.harness]
+brief = "briefs/harness-review.md"
+label = "auto:harness"
+protected_paths = [
+    ".github/", "justfile", "alembic.ini", "migrations/",
+    "docs/engineering/rules.md", ".claude/", "AGENTS.md",
+]
+# A run leaving nothing here opens no pull request at all. Two merge-triggering
+# loops on one branch with required checks otherwise invalidate each other's
+# runs every day.
+require_change_under = ["docs/engineering/"]
+# Anything outside is escalated. A loop that edits code while claiming to audit
+# paperwork is not the loop anyone agreed to run.
+confine_to = ["docs/engineering/"]
