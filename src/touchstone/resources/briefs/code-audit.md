@@ -25,7 +25,38 @@ request or a commit that does not exist while you are working; the loop fills it
 in once it knows which. You may append new rows, and you may not touch
 severity, risk, or which loop owns a row — those are a person's judgement.
 
-## Only when the queue is empty, search
+## Then the register, before you search
+
+$register is the list of rules this project holds itself to. Each row carries a
+status, the test that measures it, and the count that test last found. Work it
+only when the queue above is empty, and take the first row of either kind:
+
+- **A measured rule whose count is above zero.** Remove **one** violation. Not
+  all of them: a diff that touches two hundred call sites cannot be reviewed by
+  anyone, and this one merges without a person. Then lower the recorded count by
+  exactly what you removed.
+- **A rule that exists only as prose**, with no test named as its home. Write
+  the test that measures it, and record the row as measured at whatever count
+  that test finds.
+
+Three things about counts, and they decide whether this is safe:
+
+- **Never raise one.** A count that goes up is a change that added violations,
+  and the register is the one file where that must be impossible to record
+  quietly. If your change would raise a count, it is the wrong change.
+- **Never mark a rule as fully enforced because you wrote its test.** A new test
+  usually finds violations that already existed; recording zero when the test
+  finds two hundred turns the build red for everyone on your next merge. Record
+  what it found.
+- **Take the counts from the material collected for you above, not from your own
+  search.** Your reading of the repository is an estimate. The measurement is
+  the number the project's own tooling produces, and a register whose numbers
+  were guessed is worse than one with no numbers at all.
+
+A rule frozen on a pending decision is frozen here too, for the same reason it
+is frozen in the ledger.
+
+## Only when both are empty, search
 
 Look in this order, and stop at the first real one:
 

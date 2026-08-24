@@ -409,6 +409,17 @@ def test_the_briefs_keep_the_constraints_that_were_paid_for() -> None:
     assert "latent" in audit and "past tense" in audit
     # A translated document left on its seed version, drifting daily.
     assert "twin" in audit and "twin" in harness
+    # The register became a work queue, and these three sentences are the whole
+    # reason that is safe: one violation at a time so the diff can be read, a
+    # count that can only fall, and a new enforcer recorded at what it actually
+    # finds rather than at zero.
+    # Collapsed, because these are sentences and a sentence wraps wherever the
+    # line ends. An assertion that breaks on a reflow tests the margin, not the
+    # constraint.
+    flowed = " ".join(audit.split())
+    assert "Remove **one** violation" in flowed
+    assert "Never raise one" in flowed
+    assert "Record what it found" in flowed
     # A ceiling raised instead of a regression reported.
     assert "never raised" in harness
     # A date stamped in UTC by a schedule that runs on local time.
