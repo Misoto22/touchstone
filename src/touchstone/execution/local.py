@@ -10,6 +10,7 @@ from touchstone.execution.base import Result
 
 class LocalExecutor:
     where = "local"
+    replaces_environment = True
 
     def run(
         self,

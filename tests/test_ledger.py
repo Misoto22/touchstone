@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from touchstone.ledger import Ledger, LifecycleEvent, finding_id
+from touchstone.ledger import Ledger, LifecycleEvent, candidate_id, finding_id
 
 
 def _event(state: str, *, title: str = "Broken invariant") -> LifecycleEvent:
@@ -37,7 +37,7 @@ def test_live_or_completed_publication_suppresses_rediscovery(tmp_path: Path, st
     assert "Broken invariant" in ledger.suppressed_titles()[0]
 
 
-def test_legacy_merging_row_projects_as_armed(tmp_path: Path) -> None:
+def test_legacy_merging_row_projects_as_awaiting_checks(tmp_path: Path) -> None:
     path = tmp_path / "ledger.jsonl"
     path.write_text(
         json.dumps({"status": "merging", "title": "Old finding", "pr": 7}) + "\n",
@@ -46,7 +46,7 @@ def test_legacy_merging_row_projects_as_armed(tmp_path: Path) -> None:
 
     projection = next(iter(Ledger(path).projections().values()))
 
-    assert projection.state == "armed"
+    assert projection.state == "awaiting_checks"
     assert projection.pr == 7
 
 
@@ -58,5 +58,14 @@ def test_projection_keeps_the_latest_event_for_each_finding(tmp_path: Path) -> N
     projection = ledger.projection(finding_id("code", "Broken invariant"))
 
     assert projection is not None
-    assert projection.state == "parked"
+    assert projection.state == "awaiting_human"
     assert projection.head_sha == "abc123"
+
+
+def test_candidate_identity_binds_finding_base_patch_and_run() -> None:
+    stable = finding_id("code", "Broken invariant")
+    first = candidate_id(stable, "a" * 40, "sha256:" + "b" * 64, "run-1")
+
+    assert first == candidate_id(stable, "a" * 40, "sha256:" + "b" * 64, "run-1")
+    assert first != candidate_id(stable, "a" * 40, "sha256:" + "c" * 64, "run-1")
+    assert first != candidate_id(stable, "a" * 40, "sha256:" + "b" * 64, "run-2")

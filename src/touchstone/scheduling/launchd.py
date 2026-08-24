@@ -16,7 +16,6 @@ from touchstone.scheduling.base import (
     find_touchstone_executable,
     write_files,
 )
-from touchstone.scheduling.model import parse_schedule
 
 
 def _not_loaded(result: Any) -> bool:
@@ -64,13 +63,26 @@ class LaunchdScheduler:
             if not loaded.ok:
                 raise RuntimeError(f"could not enable {label}: {loaded.tail()}")
             commands.append(f"launchctl print {domain}/{label}")
+        for path in self._legacy_files(config, destination):
+            if path in report.files or not path.exists():
+                continue
+            active = self._executor.run(["launchctl", "print", f"{domain}/{path.stem}"], timeout=30)
+            if active.ok:
+                unloaded = self._executor.run(
+                    ["launchctl", "bootout", f"{domain}/{path.stem}"], timeout=30
+                )
+                if not unloaded.ok:
+                    raise RuntimeError(f"could not disable legacy {path.stem}: {unloaded.tail()}")
+            elif not _not_loaded(active):
+                raise RuntimeError(f"could not inspect legacy {path.stem}: {active.tail()}")
+            path.unlink()
         return replace(report, commands=tuple(commands))
 
     def uninstall(
         self, config: Any, *, target: Path | None = None, dry_run: bool = False
     ) -> InstallReport:
         destination = (target or self._home / "Library" / "LaunchAgents").resolve()
-        files = tuple(self._render(config, destination))
+        files = self._wake_files(destination)
         if target is None and not dry_run:
             domain = f"gui/{os.getuid()}"
             for path in files:
@@ -93,46 +105,47 @@ class LaunchdScheduler:
 
     def status(self, config: Any) -> SchedulerStatus:
         destination = self._home / "Library" / "LaunchAgents"
-        files = tuple(self._render(config, destination))
+        owned = self._wake_files(destination)
+        expected = tuple(self._render(config, destination))
         return SchedulerStatus(
             adapter=self.name,
             supported=True,
-            installed=tuple(path for path in files if path.exists()),
-            missing=tuple(path for path in files if not path.exists()),
+            installed=tuple(path for path in owned if path.exists()),
+            missing=tuple(path for path in expected if not path.exists()),
         )
 
     def _render(self, config: Any, destination: Path) -> dict[Path, str]:
-        rendered: dict[Path, str] = {}
-        for name, loop in sorted(config.loops.items()):
-            if not loop.schedule:
-                continue
-            label = f"io.touchstone.agent.{name}"
-            schedule = parse_schedule(loop.schedule)
-            payload: dict[str, Any] = {
-                "Label": label,
-                "ProgramArguments": [
-                    str(self._executable),
-                    "--config",
-                    str(Path(config.source.path).resolve()),
-                    "run",
-                    name,
-                ],
-                "WorkingDirectory": str(Path(config.repo_path).resolve()),
-                "ProcessType": "Background",
-                "EnvironmentVariables": {"PATH": command_path(self._executable)},
-                "StandardOutPath": str(Path(config.state_dir).resolve() / "logs" / f"{name}.log"),
-                "StandardErrorPath": str(
-                    Path(config.state_dir).resolve() / "logs" / f"{name}.error.log"
-                ),
-            }
-            calendar = schedule.launchd_calendar()
-            if calendar is None:
-                payload["StartInterval"] = 3600
-            else:
-                payload["StartCalendarInterval"] = calendar
-            content = plistlib.dumps(payload, fmt=plistlib.FMT_XML, sort_keys=True).decode()
-            rendered[destination / f"{label}.plist"] = content
-        return rendered
+        if not any(loop.schedule for loop in config.loops.values()):
+            return {}
+        label = "io.touchstone.agent.wake"
+        payload: dict[str, Any] = {
+            "Label": label,
+            "ProgramArguments": [
+                str(self._executable),
+                "--config",
+                str(Path(config.source.path).resolve()),
+                "run-due",
+            ],
+            "WorkingDirectory": str(Path(config.repo_path).resolve()),
+            "ProcessType": "Background",
+            "EnvironmentVariables": {"PATH": command_path(self._executable)},
+            "StandardOutPath": str(Path(config.state_dir).resolve() / "logs" / "wake.log"),
+            "StandardErrorPath": str(Path(config.state_dir).resolve() / "logs" / "wake.error.log"),
+            "StartInterval": 900,
+        }
+        content = plistlib.dumps(payload, fmt=plistlib.FMT_XML, sort_keys=True).decode()
+        return {destination / f"{label}.plist": content}
+
+    def _wake_files(self, destination: Path) -> tuple[Path, ...]:
+        """The agent path this adapter owns, whether or not a schedule exists."""
+        return (destination / "io.touchstone.agent.wake.plist",)
+
+    def _legacy_files(self, config: Any, destination: Path) -> tuple[Path, ...]:
+        return tuple(
+            destination / f"io.touchstone.agent.{name}.plist"
+            for name, loop in sorted(config.loops.items())
+            if loop.schedule
+        )
 
 
 __all__ = ["LaunchdScheduler"]

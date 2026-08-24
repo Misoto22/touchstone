@@ -1,0 +1,17 @@
+name = "python"
+version = "1"
+category = "language"
+supported = ""
+audit_context = "Inspect Python package boundaries, typing, and error handling."
+protected_paths = ["uv.lock", "poetry.lock", "requirements.lock"]
+source_paths = ["src/", "tests/"]
+
+[[detect]]
+kind = "python-project"
+path = "pyproject.toml"
+
+[[validation]]
+argv = ["python", "-m", "pytest"]
+timeout_seconds = 900
+capability = "application-test"
+enabled = false

@@ -31,12 +31,13 @@ def test_launchd_file_has_absolute_paths_and_no_environment_secrets(tmp_path: Pa
 
     report = scheduler.install(_config(tmp_path), target=target)
 
-    assert len(report.files) == 2
+    assert len(report.files) == 1
     with report.files[0].open("rb") as handle:
         plist = plistlib.load(handle)
     arguments = plist["ProgramArguments"]
     assert arguments[0] == "/absolute/bin/touchstone"
     assert str((tmp_path / "touchstone.toml").resolve()) in arguments
+    assert arguments[-1] == "run-due"
     text = report.files[0].read_text(encoding="utf-8")
     assert "GH_TOKEN" not in text
     assert "SECRET" not in text
@@ -49,14 +50,31 @@ def test_systemd_install_is_idempotent_and_skips_unscheduled_loops(tmp_path: Pat
     first = scheduler.install(_config(tmp_path), target=target)
     second = scheduler.install(_config(tmp_path), target=target)
 
-    assert len(first.files) == 4
+    assert len(first.files) == 2
     assert first.files == second.files
     assert second.changed == ()
-    service = (target / "touchstone-code.service").read_text(encoding="utf-8")
-    assert "WorkingDirectory=" + str((tmp_path / "project").resolve()) in service
+    service = (target / "touchstone-wake.service").read_text(encoding="utf-8")
+    assert f'WorkingDirectory="{(tmp_path / "project").resolve()}"' in service
     assert 'Environment="PATH=' in service
     assert "GH_TOKEN" not in service
     assert "SECRET" not in service
+    assert service.rstrip().endswith('"run-due"')
+
+
+def test_systemd_unit_escapes_spaces_quotes_and_specifiers(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config.repo_path = (tmp_path / 'project % "quoted"').resolve()
+    config.source.path = (tmp_path / "touchstone config.toml").resolve()
+    target = tmp_path / "rendered"
+    scheduler = SystemdScheduler(LocalExecutor(), executable=Path("/absolute/bin/touchstone"))
+
+    scheduler.install(config, target=target)
+    service = (target / "touchstone-wake.service").read_text(encoding="utf-8")
+
+    assert 'WorkingDirectory="' in service
+    assert 'project %% \\"quoted\\"' in service
+    assert 'ExecStart="/absolute/bin/touchstone" "--config" "' in service
+    assert 'touchstone config.toml" "run-due"' in service
 
 
 def test_scheduler_dry_run_writes_and_executes_nothing(tmp_path: Path) -> None:
@@ -65,7 +83,7 @@ def test_scheduler_dry_run_writes_and_executes_nothing(tmp_path: Path) -> None:
 
     report = scheduler.install(_config(tmp_path), target=target, dry_run=True)
 
-    assert len(report.files) == 4
+    assert len(report.files) == 2
     assert not target.exists()
 
 
@@ -137,3 +155,50 @@ def test_systemd_uninstall_refuses_to_hide_a_disable_failure(tmp_path: Path) -> 
 
     with pytest.raises(RuntimeError, match="disable"):
         scheduler.uninstall(_config(tmp_path))
+
+
+def _unscheduled(tmp_path: Path):  # type: ignore[no-untyped-def]
+    config = _config(tmp_path)
+    config.loops = {
+        name: SimpleNamespace(name=loop.name, schedule=None) for name, loop in config.loops.items()
+    }
+    return config
+
+
+def test_a_wake_unit_stays_visible_after_the_last_schedule_is_removed(tmp_path: Path) -> None:
+    """Removing every Loop schedule must not hide an installed, still-firing unit."""
+    for scheduler in (
+        LaunchdScheduler(LocalExecutor(), executable=Path("/absolute/bin/touchstone")),
+        SystemdScheduler(LocalExecutor(), executable=Path("/absolute/bin/touchstone")),
+    ):
+        target = tmp_path / f"{scheduler.name}-units"
+        target.mkdir()
+        scheduler.install(_config(tmp_path), target=target)
+        assert sorted(path.name for path in target.iterdir()), scheduler.name
+
+        unscheduled = _unscheduled(tmp_path)
+        report = scheduler.uninstall(unscheduled, target=target)
+
+        assert report.changed, f"{scheduler.name} left its wake unit behind"
+        assert sorted(path.name for path in target.iterdir()) == []
+
+
+def test_status_reports_a_leaked_wake_unit_without_demanding_one(
+    tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    scheduler = SystemdScheduler(LocalExecutor(), executable=Path("/absolute/bin/touchstone"))
+    home = tmp_path / "home"
+    units = home / ".config" / "systemd" / "user"
+    units.mkdir(parents=True)
+    monkeypatch.setattr(scheduler, "_home", home)
+    scheduler.install(_config(tmp_path), target=units)
+
+    leaked = scheduler.status(_unscheduled(tmp_path))
+
+    # The unit is still on disk and still enabled; nothing is "missing" because
+    # no schedule asks for one.
+    assert [path.name for path in leaked.installed] == [
+        "touchstone-wake.service",
+        "touchstone-wake.timer",
+    ]
+    assert leaked.missing == ()

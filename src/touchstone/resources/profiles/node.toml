@@ -1,0 +1,11 @@
+name = "node"
+version = "1"
+category = "runtime"
+supported = ">=18,<25"
+audit_context = "Inspect Node.js runtime boundaries and process behavior."
+protected_paths = []
+source_paths = ["src/", "lib/"]
+
+[[detect]]
+kind = "node-engine"
+path = "package.json"

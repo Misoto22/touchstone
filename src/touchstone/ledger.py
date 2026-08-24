@@ -8,60 +8,66 @@ import json
 import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
-LifecycleState = Literal[
-    "proposed",
-    "armed",
-    "parked",
-    "merged",
-    "failed",
-    "reaped",
-    "closed",
-    "held",
-    "rehearsed",
-]
+from touchstone.outcomes import ChangeState
 
-SUPPRESSED = frozenset({"armed", "parked", "merged"})
-LEGACY_STATES: dict[str, LifecycleState] = {
-    "merging": "armed",
-    "escalated": "parked",
-    "reaped": "reaped",
-    "held": "held",
-    "rehearsed": "rehearsed",
-    "reverted": "failed",
-    "closed": "closed",
+LifecycleState = ChangeState
+
+SUPPRESSED = frozenset(
+    {ChangeState.AWAITING_CHECKS, ChangeState.AWAITING_HUMAN, ChangeState.MERGED}
+)
+LEGACY_STATES: dict[str, ChangeState] = {
+    "armed": ChangeState.AWAITING_CHECKS,
+    "merging": ChangeState.AWAITING_CHECKS,
+    "parked": ChangeState.AWAITING_HUMAN,
+    "escalated": ChangeState.AWAITING_HUMAN,
+    "reaped": ChangeState.REAPED,
+    "held": ChangeState.FAILED,
+    "rehearsed": ChangeState.FAILED,
+    "reverted": ChangeState.FAILED,
+    "closed": ChangeState.CLOSED,
 }
 
 
 @dataclass(frozen=True, slots=True)
 class LifecycleEvent:
     finding_id: str
-    state: LifecycleState
+    state: ChangeState | str
     title: str
     loop: str
     risk: str | None = None
     pr: int | None = None
     head_sha: str | None = None
     detail: str = ""
+    branch: str = ""
+    partial: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class FindingProjection:
     finding_id: str
-    state: LifecycleState
+    state: ChangeState
     title: str
     loop: str
     risk: str | None
     pr: int | None
     head_sha: str | None
     detail: str
+    branch: str
+    partial: bool
     ts: str
 
 
 def finding_id(loop: str, title: str) -> str:
     normalized = re.sub(r"\s+", " ", title.strip().casefold())
     return hashlib.sha256(f"{loop}\0{normalized}".encode()).hexdigest()[:16]
+
+
+def candidate_id(finding: str, base_sha: str, patch_digest: str, run_id: str) -> str:
+    """Bind a publication identity to one exact analyzed change."""
+    material = "\0".join((finding, base_sha, patch_digest, run_id))
+    return hashlib.sha256(material.encode()).hexdigest()[:24]
 
 
 class Ledger:
@@ -71,10 +77,19 @@ class Ledger:
         self._path.touch(exist_ok=True)
 
     def append(self, event: LifecycleEvent) -> None:
-        self._write({"ts": _now(), **asdict(event)})
+        row = asdict(event)
+        state = _canonical_state(str(row["state"]))
+        if state is None:
+            raise ValueError(f"unknown Change Lifecycle state {row['state']!r}")
+        row["state"] = state.value
+        self._write({"ts": _now(), **row})
 
     def record(self, **fields: Any) -> None:
         """Write one legacy-shaped row while older callers are migrated."""
+        status = str(fields.pop("status", ""))
+        state = _canonical_state(status)
+        if state is not None:
+            fields["state"] = state.value
         self._write({"ts": _now(), **fields})
 
     def rows(self) -> list[dict[str, Any]]:
@@ -110,6 +125,8 @@ class Ledger:
                 pr=int(row["pr"]) if row.get("pr") is not None else None,
                 head_sha=str(row["head_sha"]) if row.get("head_sha") else None,
                 detail=str(row.get("detail") or ""),
+                branch=str(row.get("branch") or ""),
+                partial=bool(row.get("partial", False)),
                 ts=str(row.get("ts") or ""),
             )
         return projected
@@ -133,21 +150,15 @@ class Ledger:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
-def _state(row: dict[str, Any]) -> LifecycleState | None:
-    raw = row.get("state")
-    if raw in {
-        "proposed",
-        "armed",
-        "parked",
-        "merged",
-        "failed",
-        "reaped",
-        "closed",
-        "held",
-        "rehearsed",
-    }:
-        return raw
-    return LEGACY_STATES.get(str(row.get("status") or ""))
+def _state(row: dict[str, Any]) -> ChangeState | None:
+    return _canonical_state(str(row.get("state") or row.get("status") or ""))
+
+
+def _canonical_state(raw: str) -> ChangeState | None:
+    try:
+        return ChangeState(raw)
+    except ValueError:
+        return LEGACY_STATES.get(raw)
 
 
 def _now() -> str:
@@ -160,5 +171,6 @@ __all__ = [
     "Ledger",
     "LifecycleEvent",
     "LifecycleState",
+    "candidate_id",
     "finding_id",
 ]

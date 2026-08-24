@@ -1,0 +1,12 @@
+name = "fastapi"
+version = "1"
+category = "framework"
+supported = ">=0.100,<1"
+audit_context = "Inspect FastAPI routes, dependency injection, validation, and async behavior."
+protected_paths = []
+source_paths = ["app/", "src/"]
+
+[[detect]]
+kind = "dependency"
+ecosystem = "python"
+name = "fastapi"

@@ -7,6 +7,7 @@ import pytest
 
 from touchstone import runner
 from touchstone.execution.base import Result
+from touchstone.ledger import Ledger, LifecycleEvent
 
 
 class FetchFailingExecutor:
@@ -36,12 +37,9 @@ def test_worktree_creation_refuses_to_use_a_stale_base_after_fetch_failure(
         runner._worktree(config)
 
 
-def test_dry_run_skips_reconciliation_that_can_close_pull_requests() -> None:
+def test_run_never_implicitly_reconciles_or_closes_pull_requests() -> None:
     source = inspect.getsource(runner.execute)
-    reconcile = source.index(").reconcile(")
-    dry_run_guard = source.rfind("if not dry_run", 0, reconcile)
-
-    assert dry_run_guard >= 0
+    assert ".reconcile(" not in source
 
 
 def test_teardown_returns_every_cleanup_failure(monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -65,3 +63,26 @@ def test_slot_gate_holds_when_open_pull_state_is_unavailable(monkeypatch, tmp_pa
 
     with pytest.raises(runner.Held, match="could not verify the open pull request slot"):
         runner._gates(config, "code", dry_run=False)
+
+
+def test_partial_remote_write_blocks_new_analysis_until_reconciled(monkeypatch, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    ledger.append(
+        LifecycleEvent(
+            finding_id="candidate-1",
+            state="failed",
+            title="Partial publication",
+            loop="code",
+            branch="touchstone/candidate-1",
+            partial=True,
+        )
+    )
+    context = SimpleNamespace(
+        ledger=ledger,
+        loop=lambda _name: SimpleNamespace(require_change_under=(), label="touchstone:audit"),
+    )
+    config = SimpleNamespace(state_dir=tmp_path)
+    monkeypatch.setattr(runner, "current", lambda: context)
+
+    with pytest.raises(runner.Held, match="partial remote publication"):
+        runner._gates(config, "code", dry_run=True)

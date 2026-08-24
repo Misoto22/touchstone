@@ -1,0 +1,7 @@
+{
+  "name": "@acme/web",
+  "dependencies": {
+    "@acme/ui": "workspace:*",
+    "next": "15.0.0"
+  }
+}

@@ -41,6 +41,7 @@ class PullState:
     closed: bool
     created_at: str
     url: str
+    labels: tuple[str, ...] = ()
 
 
 class Forge:
@@ -215,7 +216,8 @@ class Forge:
                 "view",
                 str(number),
                 "--json",
-                "number,headRefOid,headRefName,isDraft,state,mergedAt,createdAt,url,statusCheckRollup",
+                "number,headRefOid,headRefName,isDraft,state,mergedAt,"
+                "createdAt,url,statusCheckRollup,labels",
             ]
         )
         return _pull_state(payload) if isinstance(payload, dict) else None
@@ -232,7 +234,8 @@ class Forge:
                 "--limit",
                 "1",
                 "--json",
-                "number,headRefOid,headRefName,isDraft,state,mergedAt,createdAt,url,statusCheckRollup",
+                "number,headRefOid,headRefName,isDraft,state,mergedAt,"
+                "createdAt,url,statusCheckRollup,labels",
             ]
         )
         if not isinstance(payload, list):
@@ -245,6 +248,16 @@ class Forge:
         if pull is None:
             raise ForgeUnavailable("existing pull request response is malformed")
         return pull
+
+    def branch_exists(self, branch: str) -> bool | None:
+        endpoint = f"repos/{self._slug}/git/ref/heads/{quote(branch, safe='')}"
+        result = self._exec.run(["gh", "api", endpoint, "--silent"], timeout=120)
+        if result.ok:
+            return True
+        detail = (result.stderr or result.stdout).lower()
+        if "404" in detail or "not found" in detail:
+            return False
+        return None
 
     def arm_auto_merge(self, number: int) -> OperationResult:
         ok, detail = self._gh(["pr", "merge", str(number), "--auto", "--squash", "--delete-branch"])
@@ -294,7 +307,19 @@ def _pull_state(payload: dict[str, Any]) -> PullState | None:
         closed=state == "CLOSED" and not merged_at,
         created_at=str(payload.get("createdAt") or ""),
         url=str(payload.get("url") or ""),
+        labels=_labels(payload.get("labels")),
     )
+
+
+def _labels(raw: Any) -> tuple[str, ...]:
+    if not isinstance(raw, list):
+        return ()
+    names = [
+        row["name"]
+        for row in raw
+        if isinstance(row, dict) and isinstance(row.get("name"), str) and row["name"]
+    ]
+    return tuple(sorted(set(names)))
 
 
 def _check_state(raw: Any) -> str:

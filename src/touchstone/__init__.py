@@ -1,3 +1,8 @@
 """Scheduled agent loops that audit a repository, and the harness that judges it."""
 
-__version__ = "0.1.0"
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    __version__ = version("touchstone-agent")
+except PackageNotFoundError:  # pragma: no cover - only an unpackaged source tree
+    __version__ = "0+unknown"

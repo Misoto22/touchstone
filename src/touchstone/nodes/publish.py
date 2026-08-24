@@ -35,30 +35,66 @@ def _request(state: dict[str, Any], context: Any) -> PublicationRequest:
         rationale=finding.get("rationale", ""),
         review_reason=state.get("verdict_reason", ""),
         escalation=state.get("escalation", ""),
-        author_name=context.config.git.author_name,
-        author_email=context.config.git.author_email,
+        # A hosted run supplies the publishing App's own bot identity; a local
+        # run keeps the project's configured author.
+        author_name=state.get("author_name") or context.config.git.author_name,
+        author_email=state.get("author_email") or context.config.git.author_email,
+        pre_staged=bool(state.get("pre_staged", False)),
+        repository=context.config.forge.slug,
+        isolated_push=bool(state.get("isolated_push", False)),
     )
 
 
-def _publish(state: dict[str, Any]) -> dict[str, Any]:
+def _publish(state: dict[str, Any], *, validation_required: bool = True) -> dict[str, Any]:
     context = current()
+    if validation_required:
+        from touchstone.validation import validate_affected
+
+        loop = context.loop(state["loop"])
+        validation = validate_affected(
+            context.config,
+            loop.targets,
+            context.executor,
+            repository=Path(state["worktree"]),
+        )
+        if validation.blocked:
+            details = [
+                f"{' '.join(result.argv)}: {result.reason}"
+                for result in validation.results
+                if not result.ok
+            ]
+            return {
+                "outcome": "blocked",
+                "pr": None,
+                "notes": ["Validation blocked publication: " + "; ".join(details)],
+            }
     lifecycle = RepositoryLifecycle(
         context.forge,
         context.ledger,
         reap_after_hours=context.config.forge.reap_after_hours,
         executor=context.executor,
     )
-    result = lifecycle.publish(_request(state, context))
-    outcome = {"armed": "merging", "parked": "escalated"}.get(result.outcome, "held")
+    return _publication_payload(lifecycle.publish(_request(state, context)))
+
+
+def _publication_payload(result: Any) -> dict[str, Any]:
     payload: dict[str, Any] = {
-        "outcome": outcome,
+        "outcome": result.outcome,
         "pr": result.pr,
         "finding_id": result.finding_id,
         "reviewed_head_sha": result.head_sha,
+        "partial": result.partial,
+        "branch": result.branch,
     }
-    if result.outcome == "held" and result.detail:
+    if result.outcome == "failed" and result.detail:
         payload["notes"] = [result.detail]
     return payload
+
+
+def _publish_verified(state: dict[str, Any]) -> dict[str, Any]:
+    """Mutate the forge only after a credential-free stage validated and staged the patch."""
+
+    return _publish(state, validation_required=False)
 
 
 def merge(state: dict[str, Any]) -> dict[str, Any]:
@@ -72,13 +108,17 @@ def park(state: dict[str, Any]) -> dict[str, Any]:
 
 
 def arm_merge(state: dict[str, Any]) -> dict[str, Any]:
-    """A person said merge. Resumed here rather than re-audited from scratch."""
-    return _resume(state, "merge")
+    """A person approved. Resumed here rather than re-audited from scratch."""
+    return _resume(state, "approve")
 
 
 def record_closed(state: dict[str, Any]) -> dict[str, Any]:
     """A person said no. Recorded so the finding is not raised again."""
     return _resume(state, "close")
+
+
+def record_reanalysis(state: dict[str, Any]) -> dict[str, Any]:
+    return _resume(state, "reanalyze")
 
 
 def _resume(state: dict[str, Any], decision: str) -> dict[str, Any]:
@@ -88,7 +128,7 @@ def _resume(state: dict[str, Any], decision: str) -> dict[str, Any]:
     reviewed_head = state.get("reviewed_head_sha")
     if number is None or not identifier or not reviewed_head:
         return {
-            "outcome": "held",
+            "outcome": "blocked",
             "pr": number,
             "notes": ["the parked checkpoint is missing its pull request identity"],
         }
@@ -101,13 +141,14 @@ def _resume(state: dict[str, Any], decision: str) -> dict[str, Any]:
         ResumeRequest(
             finding_id=str(identifier),
             pr=int(number),
-            decision="merge" if decision == "merge" else "close",
+            decision=decision,
             reviewed_head_sha=str(reviewed_head),
+            lineage=str(identifier),
         )
     )
-    outcome = {"armed": "merging", "closed": "escalated"}.get(result.outcome, "held")
+    outcome = result.outcome
     payload: dict[str, Any] = {"outcome": outcome, "pr": result.pr}
-    if result.detail and result.outcome == "held":
+    if result.detail and result.outcome in {"held", "failed"}:
         payload["notes"] = [result.detail]
     return payload
 
@@ -121,6 +162,33 @@ def rehearse(state: dict[str, Any], *, would: str) -> dict[str, Any]:
     """
     context = current()
     worktree = state["worktree"]
+    loop = context.config.loop(state["loop"])
+    from touchstone.validation import prepare, validate_affected
+
+    preparation = prepare(
+        context.config,
+        loop.targets,
+        context.executor,
+        repository=Path(worktree),
+    )
+    if preparation.outcome == "blocked":
+        return {
+            "outcome": "blocked",
+            "pr": None,
+            "notes": ["Dry-run preparation blocked candidate validation."],
+        }
+    validation = validate_affected(
+        context.config,
+        loop.targets,
+        context.executor,
+        repository=Path(worktree),
+    )
+    if validation.blocked:
+        return {
+            "outcome": "blocked",
+            "pr": None,
+            "notes": ["Dry-run candidate failed configured Validation Gates."],
+        }
     base = f"origin/{context.config.forge.default_branch}"
 
     diff = context.executor.run(["git", "-C", worktree, "diff", base], timeout=180).stdout
@@ -130,18 +198,6 @@ def rehearse(state: dict[str, Any], *, would: str) -> dict[str, Any]:
     stat = context.executor.run(
         ["git", "-C", worktree, "diff", "--shortstat", base], timeout=60
     ).stdout.strip()
-
-    # Recorded, so the ledger is a complete account of what the loop did rather
-    # than only of what it published. `rehearsed` is deliberately not in the
-    # handled allowlist: a rehearsal disposes of nothing, and feeding its title
-    # back as already-seen would hide a defect nobody has fixed.
-    context.ledger.record(
-        status="rehearsed",
-        risk=state.get("risk"),
-        pr=None,
-        title=state.get("finding", {}).get("title", ""),
-        detail=f"would {would}; review {state.get('verdict', 'skipped')}",
-    )
 
     return {
         "outcome": "rehearsed",

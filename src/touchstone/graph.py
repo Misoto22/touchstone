@@ -52,12 +52,21 @@ class LoopState(TypedDict, total=False):
     verdict: Literal["approve", "reject", "skipped"]
     verdict_reason: str
     #: What a person answered at `await_person`, once they have.
-    decision: Literal["merge", "close"]
+    decision: Literal["approve", "close", "reanalyze"]
 
-    outcome: Literal["clean", "merging", "escalated", "held", "reaped", "inconclusive"]
+    outcome: Literal[
+        "clean",
+        "awaiting_checks",
+        "awaiting_human",
+        "blocked",
+        "failed",
+        "rehearsed",
+        "inconclusive",
+    ]
     pr: int | None
     finding_id: str
     reviewed_head_sha: str
+    partial: bool
     cost: Annotated[list[float | None], lambda a, b: a + b]
     notes: Annotated[list[str], lambda a, b: a + b]
 
@@ -119,17 +128,19 @@ def await_person(state: LoopState) -> LoopState:
             "risk": state.get("risk"),
             "verdict": state.get("verdict", "skipped"),
             "reason": state.get("verdict_reason", ""),
-            "question": "Merge this, or close it? Resume the thread with 'merge' or 'close'.",
+            "question": "Approve, close, or reanalyze this exact reviewed candidate?",
         }
     )
-    return {"decision": "merge" if decision == "merge" else "close"}
+    return {"decision": decision if decision in {"approve", "close", "reanalyze"} else "close"}
 
 
 def _after_person(state: LoopState) -> str:
-    if state.get("decision") == "merge":
+    if state.get("decision") == "approve":
         return "arm_merge"
     if state.get("decision") == "close":
         return "record_closed"
+    if state.get("decision") == "reanalyze":
+        return "record_reanalysis"
     return END
 
 
@@ -145,6 +156,7 @@ def build():  # type: ignore[no-untyped-def]
     graph.add_node("await_person", await_person)
     graph.add_node("arm_merge", publish.arm_merge)
     graph.add_node("record_closed", publish.record_closed)
+    graph.add_node("record_reanalysis", publish.record_reanalysis)
 
     graph.set_entry_point("audit")
     graph.add_conditional_edges("audit", _after_audit, {"classify": "classify", END: END})
@@ -157,10 +169,16 @@ def build():  # type: ignore[no-untyped-def]
     graph.add_conditional_edges(
         "await_person",
         _after_person,
-        {"arm_merge": "arm_merge", "record_closed": "record_closed", END: END},
+        {
+            "arm_merge": "arm_merge",
+            "record_closed": "record_closed",
+            "record_reanalysis": "record_reanalysis",
+            END: END,
+        },
     )
     graph.add_edge("arm_merge", END)
     graph.add_edge("record_closed", END)
+    graph.add_edge("record_reanalysis", END)
     return graph
 
 

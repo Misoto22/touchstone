@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from dataclasses import replace
 from pathlib import Path
 
 from touchstone.config import LoopConfig
@@ -12,15 +13,31 @@ NOW = dt.datetime(2026, 8, 24, 12, 0, tzinfo=dt.UTC)
 
 
 class MemoryForge:
-    def __init__(self) -> None:
+    def __init__(self, *, label_failure: str = "") -> None:
         self.pulls: dict[int, PullState] = {}
         self.closed: list[int] = []
+        self.labelled: list[tuple[int, str]] = []
+        self.label_failure = label_failure
 
     def pull(self, number: int) -> PullState | None:
         return self.pulls.get(number)
 
+    def pull_for_branch(self, branch: str) -> PullState | None:
+        return next((pull for pull in self.pulls.values() if pull.branch == branch), None)
+
+    def branch_exists(self, branch: str) -> bool:
+        return any(pull.branch == branch for pull in self.pulls.values())
+
     def close(self, number: int, comment: str) -> OperationResult:
         self.closed.append(number)
+        return OperationResult(True)
+
+    def add_label(self, number: int, label: str) -> OperationResult:
+        if label == self.label_failure:
+            return OperationResult(False, "could not add the label")
+        self.labelled.append((number, label))
+        pull = self.pulls[number]
+        self.pulls[number] = replace(pull, labels=tuple(sorted({*pull.labels, label})))
         return OperationResult(True)
 
 
@@ -57,9 +74,11 @@ def _pull(
     age_hours: int = 1,
     merged_at: str | None = None,
     closed: bool = False,
+    labels: tuple[str, ...] = ("touchstone:audit",),
 ) -> PullState:
     created = NOW - dt.timedelta(hours=age_hours)
     return PullState(
+        labels=labels,
         number=number,
         head_sha="abc123",
         branch="touchstone/run-1",
@@ -107,7 +126,7 @@ def test_reaper_never_closes_parked_drafts(tmp_path: Path) -> None:
 
     assert report.reaped == ()
     assert forge.closed == []
-    assert ledger.projection(identifier).state == "parked"  # type: ignore[union-attr]
+    assert ledger.projection(identifier).state == "awaiting_human"  # type: ignore[union-attr]
 
 
 def test_github_lookup_failure_is_inconclusive_and_mutates_nothing(tmp_path: Path) -> None:
@@ -117,4 +136,154 @@ def test_github_lookup_failure_is_inconclusive_and_mutates_nothing(tmp_path: Pat
     report = RepositoryLifecycle(MemoryForge(), ledger, reap_after_hours=6).reconcile(_loop(), NOW)
 
     assert report.inconclusive == (12,)
-    assert ledger.projection(identifier).state == "armed"  # type: ignore[union-attr]
+    assert ledger.projection(identifier).state == "awaiting_checks"  # type: ignore[union-attr]
+
+
+def test_reconcile_recovers_branch_only_partial_write_when_pull_exists(tmp_path: Path) -> None:
+    ledger = Ledger(tmp_path / "events.jsonl")
+    identifier = finding_id("code", "Partial publication")
+    ledger.append(
+        LifecycleEvent(
+            finding_id=identifier,
+            state="failed",
+            title="Partial publication",
+            loop="code",
+            risk="high",
+            branch="touchstone/run-1",
+            partial=True,
+        )
+    )
+    forge = MemoryForge()
+    forge.pulls[12] = _pull(
+        draft=True,
+        labels=("touchstone:audit", "touchstone:needs-review"),
+    )
+
+    report = RepositoryLifecycle(
+        forge,
+        ledger,
+        reap_after_hours=6,
+        escalation_label="touchstone:needs-review",
+    ).reconcile(_loop(), NOW)
+
+    projection = ledger.projection(identifier)
+    assert report.partial_resolved == ("touchstone/run-1",)
+    assert projection is not None
+    assert projection.state == "awaiting_human"
+    assert projection.pr == 12
+    assert projection.partial is False
+
+
+def test_reconcile_keeps_partial_write_blocked_when_remote_lookup_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    from touchstone.forge import ForgeUnavailable
+
+    ledger = Ledger(tmp_path / "events.jsonl")
+    identifier = finding_id("code", "Partial publication")
+    ledger.append(
+        LifecycleEvent(
+            finding_id=identifier,
+            state="failed",
+            title="Partial publication",
+            loop="code",
+            branch="touchstone/run-1",
+            partial=True,
+        )
+    )
+
+    class UnavailableForge(MemoryForge):
+        def pull_for_branch(self, branch: str) -> PullState | None:
+            raise ForgeUnavailable("offline")
+
+    report = RepositoryLifecycle(UnavailableForge(), ledger, reap_after_hours=6).reconcile(
+        _loop(), NOW
+    )
+
+    assert report.partial_unresolved == ("touchstone/run-1",)
+    assert ledger.projection(identifier).partial is True  # type: ignore[union-attr]
+
+
+def _partial(ledger: Ledger) -> str:
+    identifier = finding_id("code", "Partial publication")
+    ledger.append(
+        LifecycleEvent(
+            finding_id=identifier,
+            state="failed",
+            title="Partial publication",
+            loop="code",
+            risk="high",
+            branch="touchstone/run-1",
+            partial=True,
+        )
+    )
+    return identifier
+
+
+def _reconciler(forge: MemoryForge, ledger: Ledger) -> RepositoryLifecycle:
+    return RepositoryLifecycle(
+        forge,
+        ledger,
+        reap_after_hours=6,
+        escalation_label="touchstone:needs-review",
+    )
+
+
+def test_a_park_that_lost_its_escalation_label_is_not_a_resolved_publication(
+    tmp_path: Path,
+) -> None:
+    """A draft holds the Loop slot even when nothing put it in an operator queue."""
+    ledger = Ledger(tmp_path / "events.jsonl")
+    identifier = _partial(ledger)
+    forge = MemoryForge(label_failure="touchstone:needs-review")
+    forge.pulls[12] = _pull(draft=True, labels=("touchstone:audit",))
+
+    report = _reconciler(forge, ledger).reconcile(_loop(), NOW)
+
+    projection = ledger.projection(identifier)
+    assert report.partial_resolved == ()
+    assert report.partial_unresolved == ("touchstone/run-1",)
+    assert projection is not None
+    assert projection.state == "failed"
+    assert projection.partial is True
+
+
+def test_reconcile_finishes_the_labelling_step_publication_could_not(tmp_path: Path) -> None:
+    ledger = Ledger(tmp_path / "events.jsonl")
+    identifier = _partial(ledger)
+    forge = MemoryForge()
+    forge.pulls[12] = _pull(draft=True, labels=("touchstone:audit",))
+
+    report = _reconciler(forge, ledger).reconcile(_loop(), NOW)
+
+    projection = ledger.projection(identifier)
+    assert forge.labelled == [(12, "touchstone:needs-review")]
+    assert report.partial_resolved == ("touchstone/run-1",)
+    assert projection is not None
+    assert projection.state == "awaiting_human"
+
+
+def test_a_ready_pull_request_needs_no_escalation_label(tmp_path: Path) -> None:
+    ledger = Ledger(tmp_path / "events.jsonl")
+    identifier = _partial(ledger)
+    forge = MemoryForge(label_failure="touchstone:needs-review")
+    forge.pulls[12] = _pull(draft=False, labels=("touchstone:audit",))
+
+    report = _reconciler(forge, ledger).reconcile(_loop(), NOW)
+
+    projection = ledger.projection(identifier)
+    assert report.partial_resolved == ("touchstone/run-1",)
+    assert forge.labelled == []
+    assert projection is not None
+    assert projection.state == "awaiting_checks"
+
+
+def test_a_missing_loop_label_also_blocks_resolution(tmp_path: Path) -> None:
+    ledger = Ledger(tmp_path / "events.jsonl")
+    _partial(ledger)
+    forge = MemoryForge(label_failure="touchstone:audit")
+    forge.pulls[12] = _pull(draft=False, labels=())
+
+    report = _reconciler(forge, ledger).reconcile(_loop(), NOW)
+
+    assert report.partial_unresolved == ("touchstone/run-1",)

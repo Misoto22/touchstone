@@ -3,24 +3,25 @@
 <div align="center">
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Misoto22/touchstone/main/assets/brand/touchstone-readme-hero-dark.png">
-  <img src="https://raw.githubusercontent.com/Misoto22/touchstone/main/assets/brand/touchstone-readme-hero.png" alt="Touchstone repository audit lifecycle" width="900">
+  <source media="(prefers-color-scheme: dark)" srcset="assets/brand/touchstone-readme-hero-dark.png">
+  <img src="assets/brand/touchstone-readme-hero.png" alt="Touchstone repository audit lifecycle" width="900">
 </picture>
 
 <br />
 
-**Repository audit loops**
+**Stack-aware repository audit loops, locally or in GitHub Actions**
 
-Codex or Claude findings become reviewable GitHub pull requests.
+Touchstone turns agent findings into reviewable, PR-only changes.
 
 <br />
 
-[PyPI](https://pypi.org/project/touchstone-agent/) · [Install](#getting-started) · [Loop graph](https://github.com/Misoto22/touchstone/blob/main/docs/graph.md) · [Example config](https://github.com/Misoto22/touchstone/blob/main/touchstone.example.toml) · [Report issue](https://github.com/Misoto22/touchstone/issues)
+[PyPI](https://pypi.org/project/touchstone-agent/) · [Install](#getting-started) · [GitHub Actions](#github-actions) · [Architecture](https://github.com/Misoto22/touchstone/tree/main/docs/adr/) · [Report issue](https://github.com/Misoto22/touchstone/issues)
 
 <br />
 
 [![Python 3.12+](https://img.shields.io/badge/Python_3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![LangGraph 1.0+](https://img.shields.io/badge/LangGraph_1.0%2B-1C3C3C)](https://docs.langchain.com/oss/python/langgraph/overview)
+[![PyPI](https://img.shields.io/pypi/v/touchstone-agent)](https://pypi.org/project/touchstone-agent/)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](https://github.com/Misoto22/touchstone/blob/main/LICENSE)
 
 </div>
 
@@ -28,69 +29,64 @@ Codex or Claude findings become reviewable GitHub pull requests.
 
 ### Features
 
-- **Project discovery** (`touchstone init`) — derives the Git root, GitHub slug, and default branch instead of embedding repository values.
-- **Preflight diagnostics** (`touchstone doctor`) — checks the engine, GitHub access, workflows, labels, state storage, and native scheduler before a paid session starts.
-- **Independent release gate** — only a low-risk change approved by a separate read-only review can be armed for GitHub auto-merge.
-- **Park and resume** — medium-, high-, and rejected changes become checkpointed drafts; resume acts only on the reviewed head SHA.
-- **Live reconciliation** (`touchstone status`) — projects merged, closed, failed, reaped, armed, and parked pull requests from GitHub truth.
-- **Native scheduling** — installs per-user launchd jobs on macOS or systemd timers on Linux from the same portable schedule.
-
----
-
-### Safety Model
-
-Touchstone does not merge on a model's claim. The author writes a structured finding, deterministic checks can only raise its risk, and a separate read-only session reviews low-risk changes. GitHub auto-merge is considered armed only after GitHub accepts the request.
-
-Malformed or missing agent output is `inconclusive`, never `clean`. Drafts are never automatically reaped. A human resume is refused if the pull-request head differs from the independently reviewed commit.
-
-Repository policy files, Touchstone config, agent instructions, and environment files are always treated as protected. Project config may add more protected paths, but it cannot remove these built-in escalation rules.
-
-> [!IMPORTANT]
-> A dry run does not publish to GitHub, but it does run the configured model against a temporary worktree. Use only repositories, hosts, models, and credentials you are authorised to use.
+- **Stack detection before configuration** — identifies stable package-backed Targets and composes `generic`, `javascript`, `node`, `typescript`, `react`, `nextjs`, `python`, `fastapi`, and `django` Profiles from repository evidence.
+- **Monorepo-aware scope** — discovers npm, pnpm, Yarn, Bun, uv, Poetry, and PDM evidence, records a package manager per Target, tracks dependency edges, and validates a changed Target plus its dependents.
+- **Owned configuration** — keeps deliberate settings in `touchstone.toml` and reproducible stack evidence in `.touchstone/generated.toml`; Profile refresh never replaces project overrides.
+- **Structured validation** — runs argv-based gates in bounded Target directories with timeouts, scrubbed subprocess environments, hook-free locked preparation, and tracked-file mutation checks. Generated commands use the Target's own package manager. A Profile enables only side-effect-minimal Gates; every command that runs project code stays a disabled Candidate until the project override accepts it.
+- **Two execution backends** — runs from native launchd/systemd wake signals or a generated, repository-owned GitHub Actions workflow.
+- **Split hosted trust stages** — separate Prepare, Analysis, Verify, mutation-only Publish, and Snapshot jobs give each stage one credential domain, and mint the repository-scoped App token only after an independent stage has validated the candidate.
+- **Reproducible hosted runtime** — one credential-free Action step installs hash-locked Python dependencies, the exact Agent CLI named by the committed `npm` lockfile, and the project's own locked dependencies, then attests that environment to the repository HEAD, configuration, Targets, and lockfiles.
+- **PR-only lifecycle** — low-risk approved candidates open ready pull requests; higher-risk or rejected candidates open drafts. Auto-merge remains disabled.
+- **Durable recovery** — transactional Due Slot claims, encrypted state snapshots, stable run outcomes, explicit change states, and exact-candidate resume decisions survive retries, missed wake signals, and a Publish job that dies mid-publication.
 
 ---
 
 ### Tech Stack
 
 <table>
-<tr><td><b>Runtime</b></td><td>Python 3.12+ · LangGraph 1.0+ · SQLite checkpointer 2.0+</td></tr>
-<tr><td><b>Agent engines</b></td><td>Codex CLI · Claude CLI</td></tr>
-<tr><td><b>Forge</b></td><td>GitHub CLI · Git worktrees</td></tr>
-<tr><td><b>Scheduling</b></td><td>launchd · systemd user timers</td></tr>
-<tr><td><b>Quality</b></td><td>pytest 8.0+ · Ruff 0.9+</td></tr>
-<tr><td><b>Build</b></td><td>Hatchling</td></tr>
+<tr><td><b>Runtime</b></td><td>Python 3.12+ · LangGraph · SQLite</td></tr>
+<tr><td><b>Agents</b></td><td>Codex CLI · Claude Code CLI</td></tr>
+<tr><td><b>Stack model</b></td><td>Declarative TOML Profiles · Targets</td></tr>
+<tr><td><b>Local backend</b></td><td>launchd on macOS · systemd user timers on Linux</td></tr>
+<tr><td><b>Hosted backend</b></td><td>GitHub Actions · owner-controlled GitHub App · AES-256-GCM artifacts</td></tr>
+<tr><td><b>Quality</b></td><td>pytest · Ruff · Hatchling · isolated-wheel acceptance tests</td></tr>
 </table>
 
 ---
 
 ### Project Structure
 
-```
+```text
 src/touchstone/
-├── resources/briefs/       Built-in author and independent-review contracts
-├── nodes/                  Audit, classify, review, and graph adapters
+├── profiles/               Safe detection, workspace discovery, and materialization
+├── resources/profiles/     Nine built-in declarative stack Profiles
+├── hosted/                 Workflow, crypto, runtime stages, and GitHub App setup
+├── scheduling/             Portable schedules, durable Due Slots, launchd, systemd
+├── nodes/                  Audit, classify, independent review, and publication
 ├── engines/                Codex and Claude execution contracts
 ├── execution/              Local and SSH command runners
-├── scheduling/             Portable schedules, launchd, and systemd adapters
-├── lifecycle.py            Publication, reconciliation, reaping, and resume
-├── config.py               Versioned TOML discovery and validation
-├── runner.py               Locks, health gates, worktrees, and checkpoints
-└── cli.py                  Stable installed command surface
-docs/graph.md               Generated graph checked against source
-tests/                      Fast, integration, and distribution contracts
-touchstone.example.toml     Generic version-1 configuration
+├── validation.py           Structured preparation and Validation Gates
+├── lifecycle.py            PR publication, reconciliation, reaping, and resume
+├── config.py               Versioned, project-neutral configuration
+└── cli.py                  Installed command surface
+action.yml                  Pinned composite Action with five explicit stages
+action-requirements.lock    Hash-locked Python runtime for the composite Action
+agent-runtime/              Integrity-locked Codex and Claude CLI runtimes
+docs/adr/                   Architecture decisions
+tests/fixtures/acceptance/  Next.js, Django, and mixed-monorepo wheel fixtures
 ```
 
 ---
 
 ### Getting Started
 
-Install Touchstone, then run the first audited rehearsal inside a GitHub repository that Touchstone may audit:
+Install Touchstone, then rehearse one loop inside a GitHub repository you are authorised to audit:
 
 ```bash
 pipx install touchstone-agent
 cd /path/to/your/repository
 touchstone init
+touchstone profile detect
 touchstone doctor
 touchstone setup --dry-run
 touchstone setup
@@ -98,131 +94,199 @@ touchstone doctor
 touchstone run code --dry-run
 ```
 
-`touchstone init` asks for the engine, model, required default-branch workflow, and schedule. It discovers the repository values and writes `touchstone.toml`; relative paths in that file resolve from the file itself. The first `doctor` run may report missing labels; `setup` creates them, and the second `doctor` verifies the configured repository before any model work starts.
+`touchstone init` finds the Git root, GitHub slug, default branch, package managers, workspace Targets, and stack Profiles. A Target ID comes from the package name in `package.json` or `pyproject.toml`, so it survives renaming the checkout directory; a repository-relative path hash covers collisions and unnamed Targets. It asks for the engine, model, required default-branch workflow, Loop schedule, repository visibility, and hosted wake cadence, then writes the project-owned and generated configuration files. The rehearsal runs the configured model and validation path but does not publish.
 
-**Prerequisites** — Python 3.12+ · pipx · Git · authenticated GitHub CLI (`gh`) · authenticated Codex CLI or Claude CLI · macOS or Linux for native scheduling
+**Prerequisites** — Python 3.12+, pipx, Git, authenticated `gh`, and an authenticated Codex or Claude CLI. Native scheduling is supported on macOS and Linux.
 
-For automation, provide the decisions explicitly:
+For non-interactive initialization, provide every decision explicitly:
 
 ```bash
 touchstone init --non-interactive \
   --engine codex \
   --model YOUR_MODEL_ID \
   --workflow ci.yml \
-  --schedule hourly
+  --schedule hourly@00 \
+  --timezone Australia/Sydney \
+  --visibility public \
+  --wake-minutes 15
 ```
+
+Use `--visibility private` for a private repository. Hosted wake cadence accepts `5`, `10`, `15`, `20`, `30`, or `60` minutes; defaults are 15 minutes for public repositories and 60 minutes for private repositories.
 
 ---
 
-### Configuration
+### Documentation
 
-Configuration starts with `version = 1`. Unknown keys fail validation. Search order is `--config`, `TOUCHSTONE_CONFIG`, `touchstone.toml` from the current directory to the Git root, `$XDG_CONFIG_HOME/touchstone/config.toml`, then `~/.config/touchstone/config.toml`.
-
-The generated file separates project decisions from credentials:
-
-- `[project]` — target repository path.
-- `[forge]` — GitHub slug, default branch, required workflow names, labels, and reap threshold.
-- `[engine]` — Codex or Claude, model, effort, timeout, and optional budget.
-- `[execution]` — local or SSH execution; remote work and state paths must be absolute.
-- `[git]` — optional commit author override; omit it to inherit repository Git configuration.
-- `[loop.<name>]` — brief, label, schedule, protected paths, and project context.
-
-See the complete generic [`touchstone.example.toml`](https://github.com/Misoto22/touchstone/blob/main/touchstone.example.toml). Built-in briefs use `builtin:code-audit`; custom brief paths resolve relative to the configuration file.
-
-Secrets do not belong in TOML. Secret-shaped SSH environment keys are rejected; GitHub and engine authentication remain in their native CLI stores or the remote runtime environment. When `state_dir` is omitted, Touchstone creates an isolated per-repository directory under `$XDG_STATE_HOME/touchstone` (or `~/.local/state/touchstone`).
+- [Operator and design context](https://github.com/Misoto22/touchstone/blob/main/CONTEXT.md)
+- [Generated loop graph](https://github.com/Misoto22/touchstone/blob/main/docs/graph.md)
+- [Architecture Decision Records](https://github.com/Misoto22/touchstone/tree/main/docs/adr/)
+- [Stack Profiles and Actions design](https://github.com/Misoto22/touchstone/blob/main/docs/superpowers/specs/2026-08-24-stack-profiles-actions-design.md)
+- [Example project configuration](https://github.com/Misoto22/touchstone/blob/main/touchstone.example.toml)
+- [Example generated configuration](https://github.com/Misoto22/touchstone/blob/main/touchstone.generated.example.toml)
+- [Security policy](https://github.com/Misoto22/touchstone/blob/main/SECURITY.md)
 
 ---
 
-### Pull-Request Lifecycle
+### GitHub Actions
 
-```mermaid
-flowchart LR
-  P[proposed] -->|low + approved| A[armed]
-  P -->|medium, high, or rejected| K[parked draft]
-  A --> M[merged]
-  A --> F[failed or reaped]
-  K -->|reviewed SHA + human merge| A
-  K -->|human close| C[closed]
-```
-
-Only `armed`, `parked`, and `merged` suppress the same finding while it is live or complete. Closed, failed, and reaped findings remain in history and may be found again if the defect still exists.
-
-When a run parks, it prints the exact resume command:
+The hosted backend is generated into the repository being audited. The repository owns its triggers, permissions, concurrency, secret mappings, retention, and immutable Action references.
 
 ```bash
-touchstone resume <thread-id> merge
-touchstone resume <thread-id> close
+touchstone actions init
+touchstone actions init --check
+git add .github/workflows/touchstone.yml touchstone.toml .touchstone/generated.toml
+git commit -m "ci: add touchstone audit loop"
 ```
 
-`resume ... merge` is the operator's attestation that the printed parked head was reviewed. Touchstone reloads the live pull request and refuses the decision if that SHA has changed.
+`actions init` resolves the release tag matching the installed `touchstone-agent` version — `v0.1.2` today — to a 40-character commit SHA, so the generated workflow pins the revision this CLI documents rather than a moving branch. Automation may pass an audited revision with `--action-sha`, and must when a development build is installed. `--check` is read-only and exits `3` when the committed workflow has drifted.
 
----
+> [!WARNING]
+> `touchstone actions setup` opens GitHub twice: first to review and create an owner-controlled GitHub App, then to install it for only the selected repository. Read the owner, repository, repository scope, and permissions on both GitHub pages before confirming. The one-time private key is piped directly to `gh secret set`; Touchstone never writes it to disk.
 
-### Commands
-
-```
-touchstone init                         Discover a repository and write config
-touchstone doctor [--json]              Read-only prerequisite checks
-touchstone setup [--dry-run]            Create state and configured labels
-touchstone run <loop> [--dry-run]       Run one audited iteration
-touchstone status [--json]              Reconcile and project lifecycle state
-touchstone resume <thread> merge|close  Continue one checkpointed decision
-touchstone install-scheduler            Install native user timers
-touchstone uninstall-scheduler          Remove native user timers
-touchstone scheduler-status [--json]    Inspect scheduler files
-touchstone config migrate <path>        Back up and migrate legacy config
-touchstone graph                         Print the LangGraph Mermaid source
-```
-
-Every config-aware command accepts `--config PATH` before the subcommand.
-
----
-
-### Scheduling
-
-Each loop accepts one portable local-time schedule:
-
-```
-hourly
-daily@03:15
-weekly@MON,09:30
-```
-
-On macOS, Touchstone writes user agents under `~/Library/LaunchAgents`. On Linux, it writes user services and timers under `~/.config/systemd/user`. Generated jobs use the absolute `touchstone` executable, absolute config path, explicit working directory, a credential-free `PATH`, and no credentials. Scheduling remains local to the orchestrator even when repository and model work execute over SSH.
-
-Render scheduler files for review without enabling them:
+Run the guided setup from a trusted local terminal:
 
 ```bash
-touchstone install-scheduler --output ./scheduler-preview
+touchstone actions setup
+gh secret set OPENAI_API_KEY --app actions
+touchstone actions setup --check
+touchstone doctor
+```
+
+For Claude, set `ANTHROPIC_API_KEY` instead. Organization-owned repositories use `touchstone actions setup --organization`, which creates the App under the organization and stores its secrets as organization secrets restricted to the selected repository. If loopback callback delivery is unavailable, use `touchstone actions setup --manual-code` and paste the one-time manifest code at the hidden prompt. Setup uses the one-time App private key in memory to verify the live installation, selected-repository scope, and permissions before storing the key as an Actions secret, then zeroes its memory buffer. It records only a non-secret attestation and gives an explicit replacement-key command when the one-time key can no longer be recovered.
+
+Later `touchstone actions setup --check` and `touchstone doctor` can inspect only that cached attestation because Touchstone deliberately does not retain the private key. Doctor therefore reports a warning, not a live pass; a successful hosted Publish token-mint is the current end-to-end proof that the App installation still works.
+
+The standard repository secrets are:
+
+| Secret | Available to |
+|---|---|
+| `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` | Analysis only |
+| `TOUCHSTONE_APP_ID` and `TOUCHSTONE_APP_PRIVATE_KEY` | Publish only |
+| `TOUCHSTONE_STATE_KEY` | Analysis, Verify, Publish, and Snapshot |
+
+The workflow has only `schedule` and `workflow_dispatch` triggers. It does not run on pull requests. Public repositories default to off-hour 15-minute wake signals; private repositories default to one off-hour wake per hour. Configure a supported interval with `actions.wake_minutes`, then rerun `touchstone actions init`. Each wake evaluates durable schedules, so frequent wake signals do not imply frequent model calls.
+
+Each job runs the composite Action's credential-free install step first. That step maps no secret at all: it installs the hash-locked Python runtime, the locked Agent CLI, and the project's locked dependencies, then writes a non-secret attestation binding them to the repository HEAD, configuration digest, Target set, and lockfiles. A later stage reuses that exact environment; a mismatched or absent attestation fails closed unless the process still holds no model credential, so dependencies are only ever installed before model credentials exist.
+
+| Stage | Model credential | Publishing credential | Repository token | State key |
+|---|---|---|---|---|
+| Prepare | no | no | read | no |
+| Analysis | yes | no | no | yes |
+| Verify | no | no | read | yes |
+| Publish | no | App token | App token | yes |
+| Snapshot | no | no | no | yes |
+
+Prepare restores the latest encrypted state envelope without a decryption key. Analysis decrypts state, claims one Due Slot, runs the model, and emits an authenticated, candidate-named artifact whose unique ID binds the stable finding, base SHA, patch digest, and run. Verify runs on a separate runner that holds no model credential and no publishing credential; it does receive a repository read token and the state-decryption key. It checks repository, effective non-secret configuration, Profile digest, independently exported Loop and candidate lineage, base SHA, patch digest, health gates, and Validation Gates in a disposable worktree, then emits a versioned attestation. Publish starts on another clean runner, reconstructs the exact candidate from its authenticated artifact, checks the attestation, mints a short-lived App token scoped to the current repository, and performs only publication. Hosted commits are authored by the publishing App's own bot identity rather than the runner's synthesized one. Snapshot has neither model nor publishing credentials. It finalizes the Due Slot, retains state under the full configuration digest for 90 days by default, and — when Publish failed or was cancelled without recording an outcome — reconstructs a `failed` partial marker from the authenticated candidate so the next run is blocked until `touchstone reconcile` inspects that exact branch.
+
+Locked preparation and Validation Gates run as subprocesses with a scrubbed environment — an allowlist of locale, path, and cache variables, a throwaway `HOME`, and no inherited credential — so project code never sees the state key or any token. Model processes get a separate allowlist carrying only that engine's own credential. Health checks are the deliberate exception: they call `gh` and therefore do use the repository read token, which is why Verify holds one.
+
+Hosted operator decisions use the exact candidate ID:
+
+```bash
+gh workflow run touchstone.yml -f candidate_id=CANDIDATE_ID -f decision=approve
+gh workflow run touchstone.yml -f candidate_id=CANDIDATE_ID -f decision=close
+gh workflow run touchstone.yml -f candidate_id=CANDIDATE_ID -f decision=reanalyze
+```
+
+GitHub disables scheduled workflows after 60 days without activity in a public repository. `touchstone doctor` reports a disabled workflow and warns once the latest push is 45 days old; `workflow_dispatch` remains the explicit recovery path.
+
+---
+
+### Configuration and Profiles
+
+`touchstone init` writes schema v2. An existing schema-v1 configuration keeps loading unchanged — including one at `~/.config/touchstone/config.toml` — and upgrading is an explicit command, never something a Touchstone upgrade performs on its own. A v1 deployment that is already running does not need to migrate to keep working.
+
+Schema v2 splits ownership across two files:
+
+- `touchstone.toml` is project-owned. It holds repository identity, engine, schedule, Actions policy, Loop choices, and explicit overrides.
+- `.touchstone/generated.toml` is machine-owned. It records package/Profile versions, source digest, per-Target package managers, Targets, evidence, dependencies, protected/source paths, and validation candidates.
+- `.touchstone/profiles/*.toml` may add repository-local declarative Profiles. Profile files cannot import or execute project code.
+
+Detection distinguishes confirmed evidence, candidates requiring explicit confirmation, and unsupported version ranges. Floating or unresolvable framework versions remain candidates instead of being treated as confirmed. Repository-local declarative Profile detectors participate in the same bounded detection pass. In non-interactive mode, unresolved candidates or ambiguous lockfile families stop initialization instead of guessing. Select deliberately with `--profile NAME` or `--package-manager NAME`.
+
+```bash
+touchstone profile detect --json
+touchstone profile diff
+touchstone profile refresh --check
+touchstone profile refresh --write
+touchstone validate code
+```
+
+`profile refresh --check` and `profile diff` are read-only and exit `3` on drift. `--write` replaces only generated configuration, removes stale auto-detected Profiles, retains Profiles explicitly declared in the project-owned Target override, keeps an existing Target ID bound to its configured repository-relative path, and re-adopts a nested standalone project that the configuration already names. Enable a generated Validation Gate in that override after reviewing its argv, capability, preparation, timeout, and working directory.
+
+Only `git diff --check` — a read-only check that runs no project code — is enabled without review. Everything else, including `npm run test` and `npx tsc`, is materialized as a disabled Candidate; a repository-local Profile cannot enable one either. Generated commands follow the package manager recorded for that Target, so a `pnpm` Target gets `pnpm run test` and `pnpm exec tsc`, a Bun Target gets `bun run test` and `bun x tsc`, and Yarn gets `yarn run` for both. A gate with `preparation = "locked-install"` runs one hook-free install per ecosystem before the gate itself:
+
+| Package manager | Locked preparation |
+|---|---|
+| `npm` | `npm ci --ignore-scripts` |
+| `pnpm` | `pnpm install --frozen-lockfile --ignore-scripts` |
+| `yarn` (classic) | `yarn install --frozen-lockfile --ignore-scripts` |
+| `yarn` (Berry) | `yarn install --immutable --mode=skip-build` |
+| `bun` | `bun install --frozen-lockfile --ignore-scripts` |
+| `uv` | `uv sync --frozen --no-install-workspace --no-build` |
+| `pdm` | `PDM_ONLY_BINARY=:all: pdm sync --frozen-lockfile --no-self` |
+
+Berry is detected from `.yarnrc.yml` or a `packageManager` major version of 2 or above. Poetry has no switch that guarantees a hook-free install, so a hook-free Poetry gate reports `policy-unsupported` and blocks instead of installing; set `allow_build_hooks = true` on that gate to accept `poetry install` and its project build hooks.
+
+Unknown configuration keys fail closed. Relative paths resolve from the configuration file. Secrets do not belong in TOML; secret-shaped SSH environment keys are rejected. When `state_dir` is omitted, Touchstone uses an isolated per-repository directory under `$XDG_STATE_HOME/touchstone` or `~/.local/state/touchstone`.
+
+Upgrade an unversioned configuration to v1, then explicitly preview and apply v2:
+
+```bash
+touchstone config migrate touchstone.toml
+touchstone config migrate-v2 touchstone.toml --timezone UTC --hourly-minute 0 --check
+touchstone config migrate-v2 touchstone.toml --timezone UTC --hourly-minute 0 --write
+```
+
+Both migrations write a sibling backup before replacing project configuration. V2 migration refuses to overwrite an existing generated file. Stack Profiles, per-Target Validation Gates, and the GitHub Actions backend require v2; local scheduling, `run`, `run-due`, and `resume` do not.
+
+---
+
+### Scheduling and Recovery
+
+Loops accept `hourly@MM`, `daily@HH:MM`, or `weekly@DAY,HH:MM` in the configured IANA timezone. DST is resolved from local wall-clock intent.
+
+```bash
 touchstone install-scheduler --dry-run
 touchstone install-scheduler
 touchstone scheduler-status
+touchstone run-due
 ```
 
----
+The scheduler is only a Wake Signal. `run-due` transactionally claims a repository-global Due Slot, coalesces missed periods, runs at most one active change at a time, and retries retryable failures up to three times with bounded backoff. The same evaluator is used locally and in GitHub Actions.
 
-### Troubleshooting
+`status` is pure and never mutates lifecycle state. Use `reconcile` when you intentionally want to compare recorded candidates with GitHub and record merged, closed, failed, or reaped transitions. A partial publication is resolved only once the pull request actually carries the Loop and escalation labels a complete publication applies; `reconcile` adds a missing label itself and leaves the record unresolved when it cannot:
 
-- **A run stops before the model starts** — run `touchstone doctor`; repair every `FAIL`, then review each `WARN` before enabling unattended runs.
-- **GitHub preflight fails** — authenticate `gh`, run `touchstone setup`, enable auto-merge, and protect the configured default branch.
-- **`production not known good`** — every configured `forge.required_workflows` entry must have an explicit successful run on the default branch.
-- **A draft will not resume** — run `touchstone status`; if its head changed, review the new commit rather than approving the old checkpoint.
-- **The slot is held** — finish or close the current labelled pull request. Draft-slot behaviour differs by loop scope and is reported by the CLI.
-- **A config no longer loads** — run `touchstone config migrate touchstone.toml`; migration writes a sibling backup first.
+```bash
+touchstone status --json
+touchstone reconcile --json
+```
 
----
+Local parked checkpoints print this contract:
 
-### Security Boundary
+```bash
+touchstone resume <thread-id> approve|close|reanalyze
+```
 
-Touchstone owns configuration validation, isolated worktrees, model orchestration, deterministic risk gates, checkpoints, lifecycle events, GitHub pull-request transitions, and native timer files.
+Approval reruns health and publication gates and refuses a pull request whose reviewed head changed. Close records an operator decision. Reanalyze closes the old candidate and starts from current default-branch state.
 
-The target repository owns its tests, branch protection, required checks, deployment verification, audit policy, and credentials. `touchstone setup` creates only the state directory and configured labels; it does not weaken branch protection, create secrets, change Actions permissions, or authenticate tools.
-
-Report vulnerabilities privately through [GitHub Security Advisories](https://github.com/Misoto22/touchstone/blob/main/SECURITY.md). Do not include credentials, private repository content, model transcripts, or unredacted `doctor` output in a public issue.
+Stable exit codes are `0` for completed/no-change/rehearsed, `1` for failed, `3` for blocked or detected drift, and `78` for invalid configuration.
 
 ---
 
-### Development
+### Safety Boundary
+
+Touchstone owns configuration validation, bounded discovery, isolated worktrees, model orchestration, deterministic risk escalation, encrypted checkpoints, append-only lifecycle events, Due Slot claims, and pull-request transitions.
+
+The target repository owns its tests, branch protection, required checks, deployment verification, audit policy, credentials, and final merge. Touchstone creates pull requests; it does not merge them. It does not install remote Profiles, resolve mutable Agent CLI versions at runtime, accept a GitHub App installation whose permissions exceed the documented map, request a broad personal access token, turn on GitHub auto-merging, trigger from pull requests, or treat missing/malformed model output as a clean run.
+
+A dry run prevents publication, not model access. It still runs the configured locked preparation and the Validation Gates of every Target the change reaches. Gate selection uses the recorded dependency graph: the Targets owning the changed paths plus their dependents, widened to every Target the Loop configures whenever a shared or repository-root change cannot be attributed safely. Use only repositories, hosts, models, GitHub accounts, and credentials you are authorised to use. Never include secrets, private repository content, model transcripts, encrypted-state keys, or unredacted diagnostics in public issues.
+
+Report vulnerabilities privately through [GitHub Security Advisories](https://github.com/Misoto22/touchstone/blob/main/SECURITY.md).
+
+---
+
+### Development and Release
 
 ```bash
 git clone https://github.com/Misoto22/touchstone.git
@@ -232,26 +296,14 @@ uv run pytest
 uv run ruff check .
 uv run ruff format --check src tests
 uv run touchstone graph --check
+uv build
+uv run twine check dist/*
 ```
 
-See [CONTRIBUTING.md](https://github.com/Misoto22/touchstone/blob/main/CONTRIBUTING.md) for the TDD and pull-request workflow. User-facing changes are recorded in [CHANGELOG.md](https://github.com/Misoto22/touchstone/blob/main/CHANGELOG.md).
+The current release is [v0.1.2](https://github.com/Misoto22/touchstone/releases/tag/v0.1.2), published as [`touchstone-agent` on PyPI](https://pypi.org/project/touchstone-agent/). GitHub Releases publish through PyPI trusted publishing; the repository stores no PyPI API token.
+
+See [CONTRIBUTING.md](https://github.com/Misoto22/touchstone/blob/main/CONTRIBUTING.md) for the TDD and pull-request workflow and [CHANGELOG.md](https://github.com/Misoto22/touchstone/blob/main/CHANGELOG.md) for user-facing changes.
 
 ---
 
-### Release
-
-The current release is [v0.1.2](https://github.com/Misoto22/touchstone/releases/tag/v0.1.2), published as [`touchstone-agent` on PyPI](https://pypi.org/project/touchstone-agent/).
-
-GitHub Actions verifies Python 3.12 and 3.13, builds the wheel and source distribution, checks package metadata, and smoke-tests the installed wheel. Publishing is triggered by a GitHub Release and uses PyPI trusted publishing through the protected `pypi` environment; the repository stores no PyPI API token.
-
----
-
-### Documentation
-
-[`docs/graph.md`](https://github.com/Misoto22/touchstone/blob/main/docs/graph.md) is generated from the compiled LangGraph. `touchstone graph --check` keeps the committed diagram aligned with source. The approved architecture and implementation plans live under `docs/superpowers/`.
-
----
-
-### License
-
-Apache License 2.0. See [LICENSE](https://github.com/Misoto22/touchstone/blob/main/LICENSE).
+Apache License 2.0 · [LICENSE](https://github.com/Misoto22/touchstone/blob/main/LICENSE)

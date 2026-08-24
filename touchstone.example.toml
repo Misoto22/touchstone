@@ -1,14 +1,14 @@
-# Generated shape for a generic repository. `touchstone init` discovers the
-# repository and writes these values for the current project.
-version = 1
+# Project-owned schema-v2 example. `touchstone init` normally writes this file
+# and its generated companion from live repository evidence.
+version = 2
+generated = "touchstone.generated.example.toml"
+timezone = "Australia/Sydney"
 
 [project]
-# Relative paths resolve from this file, not from the invoking shell.
 path = "."
 
 [forge]
 provider = "github"
-# Optional when `origin` points at GitHub; discovery fills it during init.
 slug = "owner/repository"
 default_branch = "main"
 required_workflows = ["ci.yml"]
@@ -17,14 +17,13 @@ reap_after_hours = 6
 
 [engine]
 name = "codex" # codex | claude
-# Replace with a model identifier supported by the selected engine.
 model = "your-model-id"
 audit_effort = "high"
 review_effort = "high"
 timeout_seconds = 2700
 
 [engine.budget]
-# Enforced by Claude. Codex currently reports no cost, so its ceiling is time.
+# Enforced by Claude. Codex reports no cost, so its ceiling is time.
 audit = 20.0
 review = 4.0
 
@@ -38,20 +37,20 @@ workdir = "/srv/touchstone/repository"
 state_dir = "/srv/touchstone/state"
 env = { PATH = "/usr/local/bin:/usr/bin:/bin" }
 
+[actions]
+visibility = "public" # must match the live repository for doctor checks
+wake_minutes = 15
+artifact_retention_days = 90
+node_version = "24"
+auto_merge = false
+
 [loop.code]
 brief = "builtin:code-audit"
 label = "touchstone:audit"
-schedule = "hourly"
-protected_paths = [
-    ".github/",
-    ".env",
-    ".env.*",
-    "migrations/",
-    "AGENTS.md",
-]
+schedule = "hourly@00"
+targets = ["repository"]
+protected_paths = ["migrations/"]
 
 [loop.code.context]
 project = "this repository and its data model"
-ledger = "No project findings ledger is configured; treat the queue as empty."
-protected = "the configured protected paths"
 rules_clause = ""

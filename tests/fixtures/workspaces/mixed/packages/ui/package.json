@@ -1,0 +1,6 @@
+{
+  "name": "@acme/ui",
+  "peerDependencies": {
+    "react": "^19.0.0"
+  }
+}

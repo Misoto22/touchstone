@@ -1,0 +1,17 @@
+name = "javascript"
+version = "1"
+category = "language"
+supported = ""
+audit_context = "Inspect JavaScript package boundaries and browser-facing behavior."
+protected_paths = ["package-lock.json", "pnpm-lock.yaml", "yarn.lock"]
+source_paths = ["src/", "app/", "lib/"]
+
+[[detect]]
+kind = "file"
+path = "package.json"
+
+[[validation]]
+argv = ["npm", "test"]
+timeout_seconds = 900
+capability = "package-script"
+enabled = false

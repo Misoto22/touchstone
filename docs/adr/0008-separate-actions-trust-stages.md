@@ -1,0 +1,3 @@
+# Separate Actions Trust Stages
+
+The generated workflow separates model-powered analysis and review from publication: the Analysis Stage receives provider credentials but no write token, while the Publish Stage receives a short-lived GitHub App identity but no model credential and verifies the transferred output before use. Jobs, permissions, concurrency, and secret mappings remain explicit in the repository workflow; pinned composite Actions only encapsulate step mechanics and cannot define or elevate those boundaries. Hosted commits use the App bot identity, and publication remains blocked whenever a Validation Gate fails or times out.

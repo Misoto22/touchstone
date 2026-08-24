@@ -1,0 +1,5 @@
+# Use Durable Due Slots across Execution Backends
+
+Schema v2 makes wall-clock intent explicit with `hourly@MM`, `daily@HH:MM`, and `weekly@DAY,HH:MM` interpreted in the repository Schedule Timezone; an absent schedule remains manual-only, new repositories default to `hourly@00`, and v1 migration requires confirmation where the old backend-specific anchor cannot be preserved. launchd, systemd, and GitHub Actions each create one Wake Signal for the same `run-due` evaluator rather than directly starting individual Loops.
+
+Each Due Slot is identified by Loop, Schedule Generation, and UTC scheduled time and receives a Durable Claim before model work begins. A durably snapshotted `completed`, `no_change`, `rehearsed`, or `blocked` outcome consumes the slot; a failed slot retries with centrally configured backoff for at most three total attempts by default, then records terminal failure and advances, while Partial Failure must reconcile before any continuation and an expired claim may safely resume the same slot.
