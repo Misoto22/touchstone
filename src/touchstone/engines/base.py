@@ -8,11 +8,70 @@ a vendor, and only two steps ever talk to a model.
 
 from __future__ import annotations
 
+import os
+import tempfile
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 from touchstone.execution import Executor
+
+_RUNTIME_ENVIRONMENT = {
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "NO_PROXY",
+    "PATH",
+    "SSL_CERT_DIR",
+    "SSL_CERT_FILE",
+    "SYSTEMROOT",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+    "TZ",
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+}
+_ENGINE_ENVIRONMENT = {
+    "codex": {
+        "AZURE_OPENAI_API_KEY",
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "OPENAI_ORGANIZATION",
+        "OPENAI_PROJECT",
+    },
+    "claude": {
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_BASE_URL",
+    },
+}
+
+
+def engine_environment(
+    engine: str,
+    source: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """Return the minimal environment allowed to cross into a model process."""
+
+    environment = os.environ if source is None else source
+    allowed = _RUNTIME_ENVIRONMENT | _ENGINE_ENVIRONMENT.get(engine, set())
+    result = {key: value for key, value in environment.items() if key in allowed and value}
+    if environment.get("GITHUB_ACTIONS", "").lower() == "true":
+        runner_temp = Path(environment.get("RUNNER_TEMP", tempfile.gettempdir())).resolve()
+        home = runner_temp / "touchstone-model-home"
+        home.mkdir(parents=True, exist_ok=True)
+        result["HOME"] = str(home)
+    elif environment.get("HOME"):
+        result["HOME"] = environment["HOME"]
+        config_key = "CODEX_HOME" if engine == "codex" else "CLAUDE_CONFIG_DIR"
+        if environment.get(config_key):
+            result[config_key] = environment[config_key]
+    return result
+
 
 #: How an engine says it was present and thinking but could not act.
 #:

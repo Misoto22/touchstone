@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Protocol
 
 from touchstone.config import LoopConfig
 from touchstone.execution import Executor
 from touchstone.forge import ForgeUnavailable, OperationResult, PullState
 from touchstone.ledger import FindingProjection, Ledger, LifecycleEvent
+from touchstone.outcomes import ChangeState, ResumeDecision
 
 
 class LifecycleForge(Protocol):
@@ -39,6 +42,8 @@ class LifecycleForge(Protocol):
 
     def close(self, number: int, comment: str) -> OperationResult: ...
 
+    def branch_exists(self, branch: str) -> bool | None: ...
+
 
 @dataclass(frozen=True, slots=True)
 class ReconcileReport:
@@ -47,6 +52,8 @@ class ReconcileReport:
     failed: tuple[int, ...] = ()
     reaped: tuple[int, ...] = ()
     inconclusive: tuple[int, ...] = ()
+    partial_resolved: tuple[str, ...] = ()
+    partial_unresolved: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +75,9 @@ class PublicationRequest:
     escalation: str = ""
     author_name: str | None = None
     author_email: str | None = None
+    pre_staged: bool = False
+    repository: str = ""
+    isolated_push: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,14 +87,17 @@ class PublicationResult:
     pr: int | None
     head_sha: str | None
     detail: str = ""
+    partial: bool = False
+    branch: str = ""
 
 
 @dataclass(frozen=True, slots=True)
 class ResumeRequest:
     finding_id: str
     pr: int
-    decision: Literal["merge", "close"]
+    decision: ResumeDecision | str
     reviewed_head_sha: str
+    lineage: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,22 +115,30 @@ class RepositoryLifecycle:
         *,
         reap_after_hours: int,
         executor: Executor | None = None,
+        escalation_label: str = "",
     ) -> None:
         self._forge = forge
         self._ledger = ledger
         self._reap_after_hours = reap_after_hours
         self._executor = executor
+        self._escalation_label = escalation_label
 
     def resume(self, request: ResumeRequest) -> ResumeResult:
         """Apply an operator decision only to the exact commit they reviewed."""
         projection = self._ledger.projection(request.finding_id)
         if projection is None:
             return ResumeResult("held", request.pr, "the finding is absent from the ledger")
-        if projection.state != "parked" or projection.pr != request.pr:
+        if projection.state != ChangeState.AWAITING_HUMAN or projection.pr != request.pr:
             return ResumeResult(
                 "held",
                 request.pr,
                 f"the finding is {projection.state}, not the parked pull request #{request.pr}",
+            )
+        if not request.lineage or request.lineage != projection.finding_id:
+            return ResumeResult(
+                "held",
+                request.pr,
+                "the resume lineage does not match the exact parked candidate",
             )
 
         pull = self._forge.pull(request.pr)
@@ -136,14 +157,27 @@ class RepositoryLifecycle:
                 "the pull request head changed after it was parked; review the new commit first",
             )
 
-        if request.decision == "close":
-            closed = self._forge.close(request.pr, "Closed by the operator through Touchstone.")
+        try:
+            decision = ResumeDecision(request.decision)
+        except ValueError:
+            return ResumeResult("failed", request.pr, "unsupported resume decision")
+
+        if decision in {ResumeDecision.CLOSE, ResumeDecision.REANALYZE}:
+            comment = (
+                "Closed for reanalysis from current default-branch state."
+                if decision == ResumeDecision.REANALYZE
+                else "Closed by the operator through Touchstone."
+            )
+            closed = self._forge.close(request.pr, comment)
             if not closed.ok:
                 return ResumeResult(
                     "held", request.pr, closed.detail or "could not close the pull request"
                 )
             self._transition(projection, "closed", "the operator closed the parked draft")
-            return ResumeResult("closed", request.pr)
+            return ResumeResult(
+                "reanalyze" if decision == ResumeDecision.REANALYZE else "closed",
+                request.pr,
+            )
 
         if pull.draft:
             ready = self._forge.mark_ready(request.pr)
@@ -151,11 +185,12 @@ class RepositoryLifecycle:
                 return ResumeResult(
                     "held", request.pr, ready.detail or "could not mark the draft ready"
                 )
-        armed = self._forge.arm_auto_merge(request.pr)
-        if not armed.ok:
-            return ResumeResult("held", request.pr, armed.detail or "could not enable auto-merge")
-        self._transition(projection, "armed", "the operator approved the reviewed commit")
-        return ResumeResult("armed", request.pr)
+        self._transition(
+            projection,
+            "awaiting_checks",
+            "the operator approved the reviewed commit; auto-merge remains disabled",
+        )
+        return ResumeResult("awaiting_checks", request.pr)
 
     def publish(self, request: PublicationRequest) -> PublicationResult:
         """Publish once, and project only forge operations that succeeded."""
@@ -164,22 +199,59 @@ class RepositoryLifecycle:
 
         error = self._commit_and_push(request)
         if error:
-            self._record(request, "proposed", detail=error)
-            return PublicationResult("held", request.finding_id, None, None, error)
+            self._record(request, "failed", branch=request.branch, partial=True, detail=error)
+            return PublicationResult(
+                "failed",
+                request.finding_id,
+                None,
+                None,
+                error,
+                partial=True,
+                branch=request.branch,
+            )
 
         head = self._git(request.worktree, ["rev-parse", "HEAD"])
         if not head:
             detail = "could not resolve the published commit"
-            self._record(request, "proposed", detail=detail)
-            return PublicationResult("held", request.finding_id, None, None, detail)
+            self._record(
+                request,
+                "failed",
+                branch=request.branch,
+                partial=True,
+                detail=detail,
+            )
+            return PublicationResult(
+                "failed",
+                request.finding_id,
+                None,
+                None,
+                detail,
+                partial=True,
+                branch=request.branch,
+            )
 
         park = request.risk != "low" or request.verdict != "approve"
         try:
             pull = self._forge.pull_for_branch(request.branch)
         except ForgeUnavailable:
             detail = "could not verify existing pull requests for the published branch"
-            self._record(request, "proposed", head_sha=head, detail=detail)
-            return PublicationResult("held", request.finding_id, None, head, detail)
+            self._record(
+                request,
+                "failed",
+                head_sha=head,
+                branch=request.branch,
+                partial=True,
+                detail=detail,
+            )
+            return PublicationResult(
+                "failed",
+                request.finding_id,
+                None,
+                head,
+                detail,
+                partial=True,
+                branch=request.branch,
+            )
         number = (
             pull.number
             if pull is not None
@@ -194,33 +266,107 @@ class RepositoryLifecycle:
         )
         if number is None:
             detail = "could not open or find the pull request"
-            self._record(request, "proposed", head_sha=head, detail=detail)
-            return PublicationResult("held", request.finding_id, None, head, detail)
+            self._record(
+                request,
+                "failed",
+                head_sha=head,
+                branch=request.branch,
+                partial=True,
+                detail=detail,
+            )
+            return PublicationResult(
+                "failed",
+                request.finding_id,
+                None,
+                head,
+                detail,
+                partial=True,
+                branch=request.branch,
+            )
 
         if park:
             if pull is not None and not pull.draft:
                 drafted = self._forge.to_draft(number)
                 if not drafted.ok:
                     detail = drafted.detail or "could not convert the pull request to a draft"
-                    self._record(request, "proposed", pr=number, head_sha=head, detail=detail)
-                    return PublicationResult("held", request.finding_id, number, head, detail)
+                    self._record(
+                        request,
+                        "failed",
+                        pr=number,
+                        head_sha=head,
+                        branch=request.branch,
+                        partial=True,
+                        detail=detail,
+                    )
+                    return PublicationResult(
+                        "failed",
+                        request.finding_id,
+                        number,
+                        head,
+                        detail,
+                        partial=True,
+                        branch=request.branch,
+                    )
             labelled = self._forge.add_label(number, request.escalation_label)
             if not labelled.ok:
                 detail = labelled.detail or "could not add the escalation label"
-                self._record(request, "proposed", pr=number, head_sha=head, detail=detail)
-                return PublicationResult("held", request.finding_id, number, head, detail)
+                self._record(
+                    request,
+                    "failed",
+                    pr=number,
+                    head_sha=head,
+                    branch=request.branch,
+                    partial=True,
+                    detail=detail,
+                )
+                return PublicationResult(
+                    "failed",
+                    request.finding_id,
+                    number,
+                    head,
+                    detail,
+                    partial=True,
+                    branch=request.branch,
+                )
             detail = f"{request.risk} / {request.verdict}: {request.review_reason}"
-            self._record(request, "parked", pr=number, head_sha=head, detail=detail)
-            return PublicationResult("parked", request.finding_id, number, head, detail)
+            # The branch is part of the record, not just of a failure. A resume
+            # verifies the live pull request against the branch and head it was
+            # parked with, so omitting it here made every normally parked draft
+            # impossible to approve.
+            self._record(
+                request,
+                "awaiting_human",
+                pr=number,
+                head_sha=head,
+                branch=request.branch,
+                detail=detail,
+            )
+            return PublicationResult(
+                "awaiting_human",
+                request.finding_id,
+                number,
+                head,
+                detail,
+                branch=request.branch,
+            )
 
-        armed = self._forge.arm_auto_merge(number)
-        if not armed.ok:
-            detail = armed.detail or "could not enable auto-merge"
-            self._record(request, "proposed", pr=number, head_sha=head, detail=detail)
-            return PublicationResult("held", request.finding_id, number, head, detail)
-        detail = "independent review approved; auto-merge armed"
-        self._record(request, "armed", pr=number, head_sha=head, detail=detail)
-        return PublicationResult("armed", request.finding_id, number, head, detail)
+        detail = "independent review approved; pull request awaits checks and human merge"
+        self._record(
+            request,
+            "awaiting_checks",
+            pr=number,
+            head_sha=head,
+            branch=request.branch,
+            detail=detail,
+        )
+        return PublicationResult(
+            "awaiting_checks",
+            request.finding_id,
+            number,
+            head,
+            detail,
+            branch=request.branch,
+        )
 
     def reconcile(self, loop: LoopConfig, now: dt.datetime) -> ReconcileReport:
         merged: list[int] = []
@@ -228,11 +374,71 @@ class RepositoryLifecycle:
         failed: list[int] = []
         reaped: list[int] = []
         inconclusive: list[int] = []
+        partial_resolved: list[str] = []
+        partial_unresolved: list[str] = []
 
         for projection in self._ledger.projections().values():
             if projection.loop not in {loop.name, "legacy"}:
                 continue
-            if projection.state not in {"armed", "parked"} or projection.pr is None:
+            if projection.partial and projection.state == ChangeState.FAILED:
+                try:
+                    pull = (
+                        self._forge.pull(projection.pr)
+                        if projection.pr is not None
+                        else self._forge.pull_for_branch(projection.branch)
+                        if projection.branch
+                        else None
+                    )
+                except ForgeUnavailable:
+                    partial_unresolved.append(projection.branch or projection.finding_id)
+                    continue
+                if pull is not None:
+                    missing = self._missing_publication_labels(loop, pull)
+                    if missing:
+                        # The pull request exists but publication stopped before
+                        # it reached an operator's queue. Finish that exact step
+                        # rather than recording a park that nobody can see.
+                        missing = self._apply_missing_labels(pull, missing)
+                    if missing:
+                        partial_unresolved.append(projection.branch or str(pull.number))
+                        continue
+                    self._ledger.append(
+                        LifecycleEvent(
+                            finding_id=projection.finding_id,
+                            state=(
+                                ChangeState.AWAITING_HUMAN
+                                if pull.draft
+                                else ChangeState.AWAITING_CHECKS
+                            ),
+                            title=projection.title,
+                            loop=projection.loop,
+                            risk=projection.risk,
+                            pr=pull.number,
+                            head_sha=pull.head_sha,
+                            detail="reconciled a partial remote publication",
+                            branch=pull.branch,
+                        )
+                    )
+                    partial_resolved.append(projection.branch or str(pull.number))
+                    continue
+                if projection.branch and self._forge.branch_exists(projection.branch) is False:
+                    self._transition(
+                        projection,
+                        "closed",
+                        "the partial remote branch no longer exists",
+                    )
+                    partial_resolved.append(projection.branch)
+                else:
+                    partial_unresolved.append(projection.branch or projection.finding_id)
+                continue
+            if (
+                projection.state
+                not in {
+                    ChangeState.AWAITING_CHECKS,
+                    ChangeState.AWAITING_HUMAN,
+                }
+                or projection.pr is None
+            ):
                 continue
             pull = self._forge.pull(projection.pr)
             if pull is None:
@@ -247,7 +453,7 @@ class RepositoryLifecycle:
                 closed.append(projection.pr)
                 continue
             if (
-                projection.state == "armed"
+                projection.state == ChangeState.AWAITING_CHECKS
                 and not pull.draft
                 and pull.check_state == "failure"
                 and _age_hours(pull.created_at, now) >= self._reap_after_hours
@@ -272,7 +478,37 @@ class RepositoryLifecycle:
             tuple(failed),
             tuple(reaped),
             tuple(inconclusive),
+            tuple(partial_resolved),
+            tuple(partial_unresolved),
         )
+
+    def _missing_publication_labels(
+        self,
+        loop: LoopConfig,
+        pull: PullState,
+    ) -> tuple[str, ...]:
+        """Name the labels a complete publication would have applied.
+
+        An existing pull request is not proof of a finished publication. A park
+        that failed at its labelling step leaves a draft that carries the Loop
+        label and holds the slot, but not the escalation label that puts it in
+        an operator's queue.
+        """
+
+        expected = [loop.label]
+        if pull.draft:
+            expected.append(self._escalation_label)
+        present = set(pull.labels)
+        return tuple(name for name in expected if name and name not in present)
+
+    def _apply_missing_labels(self, pull: PullState, missing: tuple[str, ...]) -> tuple[str, ...]:
+        """Add the labels publication could not, and report what still failed."""
+
+        remaining = []
+        for name in missing:
+            if not self._forge.add_label(pull.number, name).ok:
+                remaining.append(name)
+        return tuple(remaining)
 
     def _transition(self, projection: FindingProjection, state: str, detail: str) -> None:
         self._ledger.append(
@@ -291,9 +527,10 @@ class RepositoryLifecycle:
     def _commit_and_push(self, request: PublicationRequest) -> str:
         assert self._executor is not None
         worktree = str(request.worktree)
-        added = self._executor.run(["git", "-C", worktree, "add", "-A"], timeout=180)
-        if not added.ok:
-            return f"could not stage changes: {added.tail()}"
+        if not request.pre_staged:
+            added = self._executor.run(["git", "-C", worktree, "add", "-A"], timeout=180)
+            if not added.ok:
+                return f"could not stage changes: {added.tail()}"
 
         staged = self._executor.run(
             ["git", "-C", worktree, "diff", "--cached", "--quiet"], timeout=60
@@ -302,6 +539,10 @@ class RepositoryLifecycle:
             return f"could not inspect staged changes: {staged.tail()}"
         if staged.code == 1:
             argv = ["git", "-C", worktree]
+            environment = None
+            if request.isolated_push:
+                argv += ["-c", "core.hooksPath=/dev/null"]
+                environment = _isolated_git_environment()
             if request.author_name and request.author_email:
                 argv += [
                     "-c",
@@ -309,17 +550,42 @@ class RepositoryLifecycle:
                     "-c",
                     f"user.email={request.author_email}",
                 ]
-            argv += ["commit", "--quiet", "-m", request.commit_subject]
+            argv += ["commit", "--quiet", "--no-verify", "-m", request.commit_subject]
             if request.summary:
                 argv += ["-m", request.summary]
-            committed = self._executor.run(argv, timeout=180)
+            committed = self._executor.run(argv, timeout=180, env=environment)
             if not committed.ok:
                 return f"could not commit changes: {committed.tail()}"
 
-        pushed = self._executor.run(
-            ["git", "-C", worktree, "push", "--quiet", "-u", "origin", request.branch],
-            timeout=180,
-        )
+        push = ["git", "-C", worktree]
+        environment = None
+        destination = "origin"
+        refspec = request.branch
+        if request.isolated_push:
+            if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", request.repository):
+                return "could not push the branch: repository identity is invalid"
+            push += [
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-c",
+                "protocol.ext.allow=never",
+                "-c",
+                "credential.helper=",
+                "-c",
+                "credential.helper=!gh auth git-credential",
+            ]
+            environment = _isolated_git_environment()
+            destination = f"https://github.com/{request.repository}.git"
+            refspec = f"HEAD:refs/heads/{request.branch}"
+        push += [
+            "push",
+            "--quiet",
+            "--no-verify",
+            "-u",
+            destination,
+            refspec,
+        ]
+        pushed = self._executor.run(push, timeout=180, env=environment)
         return "" if pushed.ok else f"could not push the branch: {pushed.tail()}"
 
     def _git(self, worktree: Path, argv: list[str]) -> str:
@@ -335,6 +601,8 @@ class RepositoryLifecycle:
         pr: int | None = None,
         head_sha: str | None = None,
         detail: str = "",
+        branch: str = "",
+        partial: bool = False,
     ) -> None:
         self._ledger.append(
             LifecycleEvent(
@@ -346,8 +614,30 @@ class RepositoryLifecycle:
                 pr=pr,
                 head_sha=head_sha,
                 detail=detail,
+                branch=branch,
+                partial=partial,
             )
         )
+
+
+def _isolated_git_environment() -> dict[str, str]:
+    allowed = {
+        "GH_TOKEN",
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "PATH",
+        "SYSTEMROOT",
+        "TEMP",
+        "TMP",
+        "TMPDIR",
+        "TZ",
+    }
+    result = {key: value for key, value in os.environ.items() if key in allowed and value}
+    result["GIT_CONFIG_NOSYSTEM"] = "1"
+    result["GIT_TERMINAL_PROMPT"] = "0"
+    return result
 
 
 def _age_hours(created_at: str, now: dt.datetime) -> float:

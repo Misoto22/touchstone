@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import PurePosixPath
 
-from touchstone.engines.base import Session, blocked_reason, keep
+from touchstone.engines.base import Session, blocked_reason, engine_environment, keep
 from touchstone.execution import Executor
 
 
@@ -49,6 +49,19 @@ class CodexEngine:
             blocked=blocked,
         )
 
+    def _model_environment(self) -> dict[str, str] | None:
+        """The environment for a model call, when this executor can replace one.
+
+        Over ssh it cannot: assignments would be appended to the remote command,
+        overriding the configured remote `PATH` and `HOME` and putting a local
+        API key on a remote command line. The remote environment is configured
+        by `execution.ssh.env`, which is where an ssh installation's credentials
+        already belong.
+        """
+        if not self._exec.replaces_environment:
+            return None
+        return engine_environment(self.name)
+
     def author(self, brief: str, *, worktree: str, denied: tuple[str, ...]) -> Session:
         # `denied` is accepted and not used, deliberately. Codex has no
         # per-path deny list, and pretending otherwise by filtering the brief
@@ -60,7 +73,11 @@ class CodexEngine:
             sandbox=self._config.engine.sandbox,
         )
         argv.append(brief)
-        result = self._exec.run(argv, timeout=self._config.engine.timeout_seconds)
+        result = self._exec.run(
+            argv,
+            timeout=self._config.engine.timeout_seconds,
+            env=self._model_environment(),
+        )
         transcript = result.stdout + result.stderr
         keep(self._config.state_dir, "engine-author.log", transcript)
         return self._session(result, transcript)
@@ -76,7 +93,11 @@ class CodexEngine:
             sandbox="read-only",
         )
         argv += ["--output-schema", schema_path, "--output-last-message", answer_path, brief]
-        result = self._exec.run(argv, timeout=self._config.engine.timeout_seconds)
+        result = self._exec.run(
+            argv,
+            timeout=self._config.engine.timeout_seconds,
+            env=self._model_environment(),
+        )
         answer = self._exec.read_text(answer_path) or ""
         transcript = result.stdout + result.stderr
         keep(self._config.state_dir, "engine-review.log", transcript)

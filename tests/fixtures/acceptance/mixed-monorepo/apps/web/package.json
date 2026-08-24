@@ -1,0 +1,13 @@
+{
+  "name": "@acceptance/web",
+  "private": true,
+  "engines": {"node": ">=20"},
+  "dependencies": {
+    "@acceptance/ui": "workspace:*",
+    "next": "15.2.0",
+    "react": "19.0.0"
+  },
+  "devDependencies": {
+    "typescript": "5.8.0"
+  }
+}

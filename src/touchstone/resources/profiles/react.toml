@@ -1,0 +1,12 @@
+name = "react"
+version = "1"
+category = "framework"
+supported = ">=16,<20"
+audit_context = "Inspect React component, state, rendering, and accessibility behavior."
+protected_paths = []
+source_paths = ["src/", "app/"]
+
+[[detect]]
+kind = "dependency"
+ecosystem = "node"
+name = "react"

@@ -1,0 +1,7 @@
+{
+  "name": "node-cli",
+  "bin": "./cli.js",
+  "engines": {
+    "node": ">=20"
+  }
+}

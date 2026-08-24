@@ -46,6 +46,18 @@ class Executor(Protocol):
     #: For logs. `local`, or `ssh my-server`.
     where: str
 
+    #: Whether `env` replaces the command's environment rather than adding to it.
+    #:
+    #: A local subprocess is handed exactly the mapping it is given. An ssh
+    #: command cannot be: its environment belongs to the far side, and the best
+    #: this end can do is prepend assignments — which add to the remote
+    #: environment instead of replacing it, override whatever
+    #: `execution.ssh.env` configured, and put every value on a remote command
+    #: line. A caller that passes `env` to scrub or isolate must check this
+    #: first; passing a locally derived environment to a remote command
+    #: achieves neither.
+    replaces_environment: bool
+
     def run(
         self,
         argv: list[str],

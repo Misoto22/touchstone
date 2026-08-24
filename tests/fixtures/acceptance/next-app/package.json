@@ -1,0 +1,12 @@
+{
+  "name": "acceptance-next-app",
+  "private": true,
+  "engines": {"node": ">=20"},
+  "dependencies": {
+    "next": "15.2.0",
+    "react": "19.0.0"
+  },
+  "devDependencies": {
+    "typescript": "5.8.0"
+  }
+}

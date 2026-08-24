@@ -1,0 +1,5 @@
+{
+  "name": "acceptance-mixed-monorepo",
+  "private": true,
+  "workspaces": ["apps/*", "packages/*"]
+}

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import tomllib
 from dataclasses import dataclass
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +20,25 @@ class MigrationReport:
     backup: Path
     from_version: int
     to_version: int
+
+
+@dataclass(frozen=True, slots=True)
+class MigrationPreview:
+    path: Path
+    generated_path: Path
+    backup: Path
+    root_text: str
+    generated_text: str
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class V2MigrationReport:
+    path: Path
+    generated: Path
+    backup: Path
+    from_version: int = 1
+    to_version: int = 2
 
 
 def migrate_config(path: Path) -> MigrationReport:
@@ -43,6 +64,92 @@ def migrate_config(path: Path) -> MigrationReport:
         temporary.unlink(missing_ok=True)
         raise
     return MigrationReport(source, backup, 0, 1)
+
+
+def preview_v2_migration(path: Path, *, timezone: str, hourly_minute: int) -> MigrationPreview:
+    source = path.expanduser().resolve()
+    if not timezone.strip():
+        raise ConfigError("timezone must be a non-empty IANA timezone string")
+    if hourly_minute < 0 or hourly_minute > 59:
+        raise ConfigError("hourly minute must be between 0 and 59")
+    try:
+        original = source.read_bytes()
+        raw = tomllib.loads(original.decode("utf-8"))
+    except FileNotFoundError:
+        raise ConfigError(f"no configuration at {source}") from None
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+        raise ConfigError(f"{source} is not valid UTF-8 TOML: {exc}") from None
+    if raw.get("version") != 1:
+        raise ConfigError("v2 migration requires a version 1 configuration")
+
+    migrated = dict(raw)
+    migrated["version"] = 2
+    migrated["generated"] = ".touchstone/generated.toml"
+    migrated["timezone"] = timezone
+    warnings: list[str] = []
+    loops = {name: dict(table) for name, table in dict(raw.get("loop", {})).items()}
+    for name, table in loops.items():
+        if table.get("schedule") == "hourly":
+            table["schedule"] = f"hourly@{hourly_minute:02d}"
+            warnings.append(
+                f"loop.{name}.schedule changed from hourly to hourly@{hourly_minute:02d}"
+            )
+    migrated["loop"] = loops
+
+    generated = {
+        "metadata": {
+            "package_version": _package_version(),
+            "profile_versions": {"generic": "1"},
+            "source_digest": f"sha256:{hashlib.sha256(original).hexdigest()}",
+        },
+        "target": {
+            "repository": {
+                "path": ".",
+                "profiles": ["generic"],
+                "dependencies": [],
+            }
+        },
+    }
+    generated_path = source.parent / ".touchstone/generated.toml"
+    if generated_path.exists():
+        raise ConfigError(
+            f"v2 generated configuration already exists: {generated_path}; move it before migration"
+        )
+    return MigrationPreview(
+        path=source,
+        generated_path=generated_path,
+        backup=_available_version_backup(source, 1),
+        root_text=tomli_w.dumps(migrated),
+        generated_text=tomli_w.dumps(generated),
+        warnings=tuple(warnings),
+    )
+
+
+def apply_v2_migration(preview: MigrationPreview) -> V2MigrationReport:
+    try:
+        original = preview.path.read_bytes()
+    except FileNotFoundError:
+        raise ConfigError(f"no configuration at {preview.path}") from None
+    preview.backup.write_bytes(original)
+    preview.generated_path.parent.mkdir(parents=True, exist_ok=True)
+    generated_temporary = preview.generated_path.with_name(
+        f".{preview.generated_path.name}.migrating"
+    )
+    root_temporary = preview.path.with_name(f".{preview.path.name}.migrating")
+    try:
+        generated_temporary.write_text(preview.generated_text, encoding="utf-8")
+        root_temporary.write_text(preview.root_text, encoding="utf-8")
+        generated_temporary.replace(preview.generated_path)
+        root_temporary.replace(preview.path)
+    except Exception:
+        generated_temporary.unlink(missing_ok=True)
+        root_temporary.unlink(missing_ok=True)
+        raise
+    return V2MigrationReport(
+        path=preview.path,
+        generated=preview.generated_path,
+        backup=preview.backup,
+    )
 
 
 def _migrate_v0(raw: dict[str, Any]) -> dict[str, Any]:
@@ -95,4 +202,30 @@ def _available_backup(path: Path) -> Path:
         counter += 1
 
 
-__all__ = ["MigrationReport", "migrate_config"]
+def _available_version_backup(path: Path, source_version: int) -> Path:
+    first = path.with_name(f"{path.name}.v{source_version}.bak")
+    if not first.exists():
+        return first
+    counter = 1
+    while True:
+        candidate = path.with_name(f"{path.name}.v{source_version}.{counter}.bak")
+        if not candidate.exists():
+            return candidate
+        counter += 1
+
+
+def _package_version() -> str:
+    try:
+        return version("touchstone-agent")
+    except PackageNotFoundError:
+        return "0+unknown"
+
+
+__all__ = [
+    "MigrationPreview",
+    "MigrationReport",
+    "V2MigrationReport",
+    "apply_v2_migration",
+    "migrate_config",
+    "preview_v2_migration",
+]

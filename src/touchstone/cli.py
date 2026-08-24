@@ -17,40 +17,161 @@ from touchstone.config import ConfigError, load
 def _init(args: argparse.Namespace) -> int:
     from touchstone.execution.local import LocalExecutor
     from touchstone.initialize import InitOptions, initialize
+    from touchstone.profiles.materialize import (
+        ambiguous_package_managers,
+        detect_package_managers,
+    )
 
+    executor = LocalExecutor()
+    from touchstone.discovery import discover_project
+
+    discovered = discover_project(args.path, executor)
     engine = args.engine
     model = args.model
     workflows = tuple(args.workflow or ())
     schedule = args.schedule
+    package_manager = args.package_manager
+    visibility = args.visibility
+    wake_minutes = args.wake_minutes
     if args.non_interactive:
         if not engine or not model or not workflows or not schedule:
             raise ConfigError(
                 "non-interactive init requires --engine, --model, --schedule, "
                 "and at least one --workflow"
             )
+        visibility = visibility or "public"
     else:
         engine = engine or input("Engine (codex or claude) [codex]: ").strip() or "codex"
         model = model or input("Model: ").strip()
         if not workflows:
             workflow = input("Required workflow [ci.yml]: ").strip() or "ci.yml"
             workflows = (workflow,)
-        schedule = schedule or input("Schedule [hourly]: ").strip() or "hourly"
+        schedule = schedule or input("Schedule [hourly@00]: ").strip() or "hourly@00"
+        visibility = (
+            visibility
+            or input("Repository visibility (public or private) [public]: ").strip()
+            or "public"
+        )
+        default_wake = 15 if visibility == "public" else 60
+        if wake_minutes is None:
+            wake_raw = input(f"GitHub Actions wake minutes [{default_wake}]: ").strip()
+            try:
+                wake_minutes = int(wake_raw) if wake_raw else default_wake
+            except ValueError:
+                raise ConfigError("GitHub Actions wake minutes must be an integer") from None
+        managers = detect_package_managers(discovered.root)
+        ambiguous = ambiguous_package_managers(managers)
+        if package_manager is None and ambiguous:
+            choices = "/".join(ambiguous[0])
+            package_manager = input(f"Package manager ({choices}): ").strip() or None
     if engine not in ("codex", "claude"):
         raise ConfigError("engine must be 'codex' or 'claude'")
-    path = initialize(
+    report = initialize(
         InitOptions(
             start=args.path,
             engine=engine,
             model=model or "",
             workflows=workflows,
-            schedule=schedule or "hourly",
+            schedule=schedule or "hourly@00",
+            timezone=args.timezone,
+            visibility=visibility,
+            wake_minutes=wake_minutes,
+            profiles=tuple(args.profile or ()),
+            package_manager=package_manager,
             output=args.output,
             force=args.force,
+            discovered=discovered,
         ),
-        LocalExecutor(),
+        executor,
     )
-    print(f"wrote {path}")
+    print(f"wrote {report.root}")
+    print(f"generated {report.generated}")
     return 0
+
+
+def _profile_detect(args: argparse.Namespace) -> int:
+    import json
+    from dataclasses import asdict
+
+    from touchstone.profiles.materialize import detect_repository
+
+    discovery, matches, _catalog = detect_repository(args.path)
+    payload = {
+        "targets": [
+            {
+                "id": target.id,
+                "path": target.path.as_posix(),
+                "profiles": [
+                    match.profile for match in matches[target.id] if match.verdict == "confirmed"
+                ],
+                "matches": [asdict(match) for match in matches[target.id]],
+                "dependencies": list(target.dependencies),
+            }
+            for target in discovery.targets
+        ],
+        "candidates": [candidate.path.as_posix() for candidate in discovery.candidates],
+        "excluded": [path.as_posix() for path in discovery.excluded],
+        "warnings": list(discovery.warnings),
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        for target in payload["targets"]:
+            print(f"{target['id']}: {', '.join(target['profiles'])}")
+        for candidate in payload["candidates"]:
+            print(f"candidate: {candidate}")
+        for warning in payload["warnings"]:
+            print(f"warning: {warning}")
+    return 0
+
+
+def _profile_diff(args: argparse.Namespace) -> int:
+    from touchstone.profiles.materialize import profile_diff
+
+    report = profile_diff(load(args.config))
+    print(report.diff if report.changed else "generated Profile configuration is current")
+    return 3 if report.changed else 0
+
+
+def _profile_refresh(args: argparse.Namespace) -> int:
+    from touchstone.profiles.materialize import refresh_profiles
+
+    config = load(args.config)
+    report = refresh_profiles(config.source.path, write=args.write)
+    if report.diff:
+        print(report.diff)
+    if report.written:
+        print(f"wrote {report.path}")
+    elif not report.changed:
+        print("generated Profile configuration is current")
+    return 3 if report.changed and not args.write else 0
+
+
+def _validate(args: argparse.Namespace) -> int:
+    from touchstone import execution
+    from touchstone.validation import prepare, validate
+
+    config = load(args.config)
+    if args.target:
+        targets = tuple(args.target)
+    elif args.loop:
+        targets = config.loop(args.loop).targets
+    else:
+        targets = tuple(config.targets)
+    executor = execution.build(config)
+    preparation = prepare(config, targets, executor)
+    for result in preparation.results:
+        print(f"prepare {result.target}: {result.reason} — {' '.join(result.argv)}")
+    if preparation.outcome == "blocked":
+        return 3
+    report = validate(config, targets, executor)
+    for result in report.results:
+        print(f"validate {result.target}: {result.reason} — {' '.join(result.argv)}")
+        if result.reason not in {"passed", "disabled"}:
+            detail = (result.stderr or result.stdout).strip()
+            if detail:
+                print(f"  {detail[-400:]}")
+    return 3 if report.blocked else 0
 
 
 def _doctor(args: argparse.Namespace) -> int:
@@ -86,6 +207,76 @@ def _setup(args: argparse.Namespace) -> int:
     return 0
 
 
+def _actions_init(args: argparse.Namespace) -> int:
+    from touchstone.hosted.workflow import (
+        ActionPins,
+        actions_diff,
+        render_workflow,
+        resolve_action_sha,
+    )
+
+    config = load(args.config)
+    action_sha = args.action_sha or resolve_action_sha(config)
+    report = actions_diff(
+        config.repo_path,
+        render_workflow(config, ActionPins(), action_sha=action_sha),
+    )
+    if report.changed:
+        print(report.diff)
+        if args.check:
+            return 3
+        report.write()
+        print(f"wrote {report.path}")
+    else:
+        print("GitHub Actions workflow is current")
+    return 0
+
+
+def _actions_setup(args: argparse.Namespace) -> int:
+    import getpass
+
+    from touchstone.hosted.app_setup import ActionsSetup, SetupOptions
+
+    config = load(args.config)
+    manual_code = getpass.getpass("One-time GitHub App manifest code: ") if args.manual_code else ""
+    report = ActionsSetup(config).run(
+        SetupOptions(
+            check=args.check,
+            owner_type="organization" if args.organization else "user",
+            callback_port=args.callback_port,
+            callback_timeout_seconds=args.callback_timeout,
+            manual_code=manual_code,
+        )
+    )
+    print(f"GitHub Actions setup: {report.state} ({report.step})")
+    if report.repair:
+        print(f"repair: {report.repair}")
+    return 0 if report.state == "complete" else 3
+
+
+def _hosted(args: argparse.Namespace) -> int:
+    from touchstone.hosted.runtime import (
+        CandidateIntegrityError,
+        install_stage,
+        run_stage,
+    )
+
+    config = load(args.config)
+    try:
+        if args.stage == "install":
+            install_stage(config, for_stage=args.for_stage)
+            return 0
+        result = run_stage(config, args.stage)
+    except CandidateIntegrityError as exc:
+        print(f"touchstone hosted: {exc}", file=sys.stderr)
+        return 3
+    if result.outcome == "blocked":
+        return 3
+    if result.outcome == "failed":
+        return 1
+    return 0
+
+
 def _status(args: argparse.Namespace) -> int:
     import json
 
@@ -111,6 +302,29 @@ def _status(args: argparse.Namespace) -> int:
             f"scheduler: {report.scheduler['adapter']} ({installed} installed, {missing} missing)"
         )
     return 0
+
+
+def _reconcile(args: argparse.Namespace) -> int:
+    import json
+
+    from touchstone.nodes.context import configure
+    from touchstone.status import reconcile_status
+
+    config = load(args.config)
+    report = reconcile_status(config, configure(config))
+    if args.json:
+        print(json.dumps(report, indent=2))
+    else:
+        for loop, fields in report.items():
+            summary = ", ".join(
+                f"{name}={len(values)}" for name, values in fields.items() if values
+            )
+            print(f"{loop}: {summary or 'no lifecycle changes'}")
+    failed = any(
+        fields["failed"] or fields["inconclusive"] or fields["partial_unresolved"]
+        for fields in report.values()
+    )
+    return 1 if failed else 0
 
 
 def _scheduler(config):  # type: ignore[no-untyped-def]
@@ -202,12 +416,70 @@ def _migrate_config(args: argparse.Namespace) -> int:
     return 0
 
 
+def _migrate_config_v2(args: argparse.Namespace) -> int:
+    import difflib
+
+    from touchstone.migrate import apply_v2_migration, preview_v2_migration
+
+    preview = preview_v2_migration(
+        args.path,
+        timezone=args.timezone,
+        hourly_minute=args.hourly_minute,
+    )
+    current = preview.path.read_text(encoding="utf-8")
+    root_diff = difflib.unified_diff(
+        current.splitlines(keepends=True),
+        preview.root_text.splitlines(keepends=True),
+        fromfile=str(preview.path),
+        tofile=str(preview.path),
+    )
+    generated_diff = difflib.unified_diff(
+        (),
+        preview.generated_text.splitlines(keepends=True),
+        fromfile="/dev/null",
+        tofile=str(preview.generated_path),
+    )
+    print("".join((*root_diff, *generated_diff)))
+    for warning in preview.warnings:
+        print(f"warning: {warning}", file=sys.stderr)
+    if not args.write:
+        return 3
+    report = apply_v2_migration(preview)
+    print(f"migrated {report.path} from version 1 to version 2")
+    print(f"generated: {report.generated}")
+    print(f"backup: {report.backup}")
+    return 0
+
+
 def _run(args: argparse.Namespace) -> int:
     from touchstone.runner import execute
 
     config = load(args.config)
     print(f"touchstone: {config.describe()}", file=sys.stderr)
     return execute(config, loop=args.loop, dry_run=args.dry_run)
+
+
+def _run_due(args: argparse.Namespace) -> int:
+    import datetime as dt
+
+    from touchstone.runner import run_due
+
+    config = load(args.config)
+    try:
+        report = run_due(
+            config,
+            now=dt.datetime.now(dt.UTC),
+            loop=args.loop,
+            force=args.force,
+        )
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from None
+    for name, result in zip(report.started, report.results, strict=True):
+        lifecycle = f" / {result.lifecycle.value}" if result.lifecycle else ""
+        print(f"{name}: {result.outcome.value}{lifecycle}")
+    if report.remaining_due:
+        print(f"remaining due: {', '.join(report.remaining_due)}")
+    return report.exit_code
 
 
 def _resume(args: argparse.Namespace) -> int:
@@ -245,9 +517,42 @@ def main(argv: list[str] | None = None) -> int:
     init.add_argument("--engine", choices=("codex", "claude"))
     init.add_argument("--model")
     init.add_argument("--workflow", action="append", help="required default-branch workflow")
-    init.add_argument("--schedule", help="hourly, daily@HH:MM, or weekly@DAY,HH:MM")
+    init.add_argument("--schedule", help="hourly@MM, daily@HH:MM, or weekly@DAY,HH:MM")
+    init.add_argument("--timezone", default="UTC", help="repository IANA timezone")
+    init.add_argument(
+        "--visibility",
+        choices=("public", "private"),
+        help="repository visibility used by hosted diagnostics",
+    )
+    init.add_argument(
+        "--wake-minutes",
+        type=int,
+        choices=(5, 10, 15, 20, 30, 60),
+        help="GitHub Actions wake cadence (default: public 15, private 60)",
+    )
+    init.add_argument("--profile", action="append", help="explicit Profile selection")
+    init.add_argument("--package-manager", help="resolve ambiguous lockfile evidence")
     init.add_argument("--force", action="store_true", help="replace an existing config")
     init.set_defaults(handler=_init)
+
+    profile = sub.add_parser("profile", help="inspect or refresh detected stack Profiles")
+    profile_sub = profile.add_subparsers(dest="profile_command", required=True)
+    profile_detect = profile_sub.add_parser("detect", help="detect Targets and Profiles")
+    profile_detect.add_argument("--path", type=Path, default=Path.cwd())
+    profile_detect.add_argument("--json", action="store_true")
+    profile_detect.set_defaults(handler=_profile_detect)
+    profile_diff = profile_sub.add_parser("diff", help="show generated Profile drift")
+    profile_diff.set_defaults(handler=_profile_diff)
+    profile_refresh = profile_sub.add_parser("refresh", help="regenerate Profile configuration")
+    refresh_mode = profile_refresh.add_mutually_exclusive_group()
+    refresh_mode.add_argument("--check", action="store_true", help="report drift without writing")
+    refresh_mode.add_argument("--write", action="store_true", help="replace generated config")
+    profile_refresh.set_defaults(handler=_profile_refresh)
+
+    validate = sub.add_parser("validate", help="run enabled structured Validation Gates")
+    validate.add_argument("loop", nargs="?", help="use this Loop's configured Targets")
+    validate.add_argument("--target", action="append", help="validate only this Target")
+    validate.set_defaults(handler=_validate)
 
     doctor = sub.add_parser("doctor", help="check prerequisites without changing them")
     doctor.add_argument("--json", action="store_true")
@@ -259,9 +564,51 @@ def main(argv: list[str] | None = None) -> int:
     setup.add_argument("--json", action="store_true")
     setup.set_defaults(handler=_setup)
 
-    status = sub.add_parser("status", help="reconcile and report repository lifecycle state")
+    actions = sub.add_parser("actions", help="manage the GitHub-hosted execution backend")
+    actions_sub = actions.add_subparsers(dest="actions_command", required=True)
+    actions_init = actions_sub.add_parser("init", help="render the repository-owned workflow")
+    actions_init.add_argument(
+        "--action-sha", help="immutable Touchstone Action commit (40 hexadecimal characters)"
+    )
+    actions_init.add_argument(
+        "--check", action="store_true", help="report drift without writing (exit 3 on drift)"
+    )
+    actions_init.set_defaults(handler=_actions_init)
+    actions_setup = actions_sub.add_parser(
+        "setup", help="create and install the owner-controlled publishing App"
+    )
+    actions_setup.add_argument("--check", action="store_true", help="inspect without mutation")
+    actions_setup.add_argument(
+        "--organization", action="store_true", help="create the App under the repository owner org"
+    )
+    actions_setup.add_argument("--callback-port", type=int, default=8917)
+    actions_setup.add_argument("--callback-timeout", type=int, default=300)
+    actions_setup.add_argument(
+        "--manual-code",
+        action="store_true",
+        help="prompt for a one-time manifest code instead of using loopback callback",
+    )
+    actions_setup.set_defaults(handler=_actions_setup)
+
+    hosted = sub.add_parser("hosted", help="run an internal GitHub-hosted trust stage")
+    hosted.add_argument(
+        "stage", choices=("install", "prepare", "analysis", "verify", "publish", "snapshot")
+    )
+    hosted.add_argument(
+        "--for-stage",
+        choices=("prepare", "analysis", "verify", "publish", "snapshot"),
+        default="analysis",
+        help="the credential-mapped stage this credential-free install prepares",
+    )
+    hosted.set_defaults(handler=_hosted)
+
+    status = sub.add_parser("status", help="read repository lifecycle state without mutation")
     status.add_argument("--json", action="store_true")
     status.set_defaults(handler=_status)
+
+    reconcile = sub.add_parser("reconcile", help="compare lifecycle state with GitHub")
+    reconcile.add_argument("--json", action="store_true")
+    reconcile.set_defaults(handler=_reconcile)
 
     install_scheduler = sub.add_parser(
         "install-scheduler", help="install native per-user loop timers"
@@ -290,6 +637,18 @@ def main(argv: list[str] | None = None) -> int:
     migrate = config_sub.add_parser("migrate", help="migrate an unversioned config")
     migrate.add_argument("path", type=Path)
     migrate.set_defaults(handler=_migrate_config)
+    migrate_v2 = config_sub.add_parser(
+        "migrate-v2", help="preview or apply schema-v1 to schema-v2 migration"
+    )
+    migrate_v2.add_argument("path", type=Path)
+    migrate_v2.add_argument("--timezone", default="UTC", help="repository IANA timezone")
+    migrate_v2.add_argument(
+        "--hourly-minute", type=int, default=0, help="anchor legacy hourly schedules (0-59)"
+    )
+    migrate_mode = migrate_v2.add_mutually_exclusive_group()
+    migrate_mode.add_argument("--check", action="store_true", help="preview without writing")
+    migrate_mode.add_argument("--write", action="store_true", help="back up and migrate")
+    migrate_v2.set_defaults(handler=_migrate_config_v2)
 
     run = sub.add_parser("run", help="one iteration of a loop")
     run.add_argument("loop", help="which loop, by its [loop.*] name")
@@ -300,9 +659,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     run.set_defaults(handler=_run)
 
+    run_due = sub.add_parser("run-due", help="claim and run currently due Loops")
+    run_due.add_argument("--loop", help="restrict evaluation to one Loop")
+    run_due.add_argument("--force", action="store_true", help="create a manual Due Slot")
+    run_due.set_defaults(handler=_run_due)
+
     resume = sub.add_parser("resume", help="answer a parked draft and continue that thread")
     resume.add_argument("thread", help="the thread id the parked run reported")
-    resume.add_argument("answer", choices=("merge", "close"))
+    resume.add_argument("answer", choices=("approve", "close", "reanalyze"))
     resume.set_defaults(handler=_resume)
 
     graph = sub.add_parser("graph", help="draw the graph")

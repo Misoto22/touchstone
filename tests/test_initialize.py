@@ -22,15 +22,16 @@ def test_non_interactive_init_writes_a_loadable_generic_config(tmp_path: Path) -
         schedule="hourly",
     )
 
-    path = initialize(options, LocalExecutor())
-    config = load_config(path)
+    report = initialize(options, LocalExecutor())
+    config = load_config(report.root)
 
-    assert path == repo / "touchstone.toml"
+    assert report.root == repo / "touchstone.toml"
+    assert report.generated == repo / ".touchstone/generated.toml"
     assert config.repo_path == repo.resolve()
     assert config.forge.slug == "acme/widgets"
     assert config.forge.default_branch == "trunk"
     assert config.loop("code").schedule == "hourly"
-    text = path.read_text(encoding="utf-8")
+    text = report.root.read_text(encoding="utf-8")
     assert "/Users/" not in text
     assert "api_key" not in text.lower()
 
@@ -52,12 +53,31 @@ def test_discovery_result_can_be_reused_by_init(tmp_path: Path) -> None:
     executor = LocalExecutor()
     discovered = discover_project(repo, executor)
 
-    path = initialize(
+    report = initialize(
         InitOptions(start=repo, engine="claude", model="claude-test", discovered=discovered),
         executor,
     )
 
-    assert 'name = "claude"' in path.read_text(encoding="utf-8")
+    assert 'name = "claude"' in report.root.read_text(encoding="utf-8")
+
+
+def test_init_records_explicit_hosted_visibility_and_cadence(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path, remote="git@github.com:acme/widgets.git")
+
+    report = initialize(
+        InitOptions(
+            start=repo,
+            engine="codex",
+            model="gpt-test",
+            visibility="private",
+            wake_minutes=30,
+        ),
+        LocalExecutor(),
+    )
+    config = load_config(report.root)
+
+    assert config.actions.visibility == "private"
+    assert config.actions.wake_minutes == 30
 
 
 def test_non_interactive_init_is_available_from_the_cli(tmp_path: Path) -> None:

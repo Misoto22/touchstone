@@ -4,8 +4,9 @@ from pathlib import Path
 
 import pytest
 
+from touchstone.cli import main
 from touchstone.config import ConfigError, load_config
-from touchstone.migrate import migrate_config
+from touchstone.migrate import apply_v2_migration, migrate_config, preview_v2_migration
 
 LEGACY = """\
 repo_path = "/tmp/repository"
@@ -54,3 +55,66 @@ def test_migration_refuses_to_replace_a_versioned_config(tmp_path: Path) -> None
 
     with pytest.raises(ConfigError, match="already versioned"):
         migrate_config(source)
+
+
+def test_v2_migration_preview_is_read_only_and_apply_is_backup_first(tmp_path: Path) -> None:
+    source = tmp_path / "touchstone.toml"
+    source.write_text(
+        """\
+version = 1
+[project]
+path = "."
+[forge]
+slug = "acme/widgets"
+[engine]
+name = "codex"
+model = "gpt-test"
+[loop.code]
+brief = "builtin:code-audit"
+label = "touchstone:audit"
+schedule = "hourly"
+""",
+        encoding="utf-8",
+    )
+    original = source.read_text(encoding="utf-8")
+
+    preview = preview_v2_migration(source, timezone="UTC", hourly_minute=15)
+
+    assert source.read_text(encoding="utf-8") == original
+    assert not preview.generated_path.exists()
+    assert "version = 2" in preview.root_text
+    assert 'schedule = "hourly@15"' in preview.root_text
+    assert preview.warnings
+
+    report = apply_v2_migration(preview)
+
+    assert report.backup.read_text(encoding="utf-8") == original
+    assert report.generated == tmp_path / ".touchstone/generated.toml"
+    assert report.generated.exists()
+    assert load_config(source).source.schema_version == 2
+
+
+def test_v2_migration_cli_previews_then_requires_explicit_write(tmp_path: Path) -> None:
+    source = tmp_path / "touchstone.toml"
+    source.write_text(
+        """\
+version = 1
+[project]
+path = "."
+[forge]
+slug = "acme/widgets"
+[engine]
+name = "codex"
+model = "gpt-test"
+[loop.code]
+brief = "builtin:code-audit"
+label = "touchstone:audit"
+schedule = "hourly"
+""",
+        encoding="utf-8",
+    )
+
+    assert main(["config", "migrate-v2", str(source), "--check"]) == 3
+    assert "version = 1" in source.read_text(encoding="utf-8")
+    assert main(["config", "migrate-v2", str(source), "--write"]) == 0
+    assert load_config(source).source.schema_version == 2

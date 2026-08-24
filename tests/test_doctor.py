@@ -7,9 +7,11 @@ from pathlib import Path
 from tests.test_config import _valid_config, _write
 from touchstone.cli import main
 from touchstone.config import load_config
+from touchstone.discovery import ProjectDiscovery
 from touchstone.doctor import DoctorContext, run_doctor
 from touchstone.execution.base import Result
 from touchstone.execution.local import LocalExecutor
+from touchstone.initialize import InitOptions, initialize
 from touchstone.scheduling.base import SchedulerStatus
 
 
@@ -280,3 +282,126 @@ def test_doctor_reports_scheduler_inspection_failure(tmp_path: Path) -> None:
 
     assert check.level == "WARN"
     assert "could not inspect" in check.summary
+
+
+def _v2_config(tmp_path: Path):  # type: ignore[no-untyped-def]
+    repo = tmp_path / "v2-repo"
+    repo.mkdir()
+    (repo / "package.json").write_text(
+        '{"name":"v2-repo","dependencies":{"next":"15.0.0","react":"19.0.0"}}',
+        encoding="utf-8",
+    )
+    report = initialize(
+        InitOptions(
+            start=repo,
+            engine="codex",
+            model="gpt-test",
+            workflows=("ci.yml",),
+            discovered=ProjectDiscovery(repo, "acme/v2-repo", "main", ("codex",), "launchd"),
+        ),
+        LocalExecutor(),
+    )
+    config = load_config(report.root)
+    object.__setattr__(config, "state_dir", tmp_path / "touchstone-state")
+    return report, config
+
+
+def _v2_context() -> DoctorContext:
+    return DoctorContext(
+        commands=frozenset({"git", "gh", "codex"}),
+        forge=MemoryForge(labels={"touchstone:audit", "touchstone:needs-review"}),
+        scheduler="launchd",
+    )
+
+
+def test_doctor_checks_generated_profile_provenance(tmp_path: Path) -> None:
+    report, config = _v2_config(tmp_path)
+
+    assert run_doctor(config, _v2_context()).by_id("profile.provenance").level == "PASS"
+
+    report.generated.write_text(
+        report.generated.read_text(encoding="utf-8") + "\n# edited\n", encoding="utf-8"
+    )
+    edited = load_config(report.root)
+    check = run_doctor(edited, _v2_context()).by_id("profile.generated")
+    assert check.level == "FAIL"
+    assert "refresh" in check.repair
+
+
+def test_doctor_reports_missing_targets_and_unsupported_versions(tmp_path: Path) -> None:
+    report, config = _v2_config(tmp_path)
+    object.__setattr__(config.targets["v2-repo"], "path", Path("missing"))
+    assert run_doctor(config, _v2_context()).by_id("target.v2-repo.path").level == "FAIL"
+
+    (report.root.parent / "package.json").write_text(
+        '{"name":"v2-repo","dependencies":{"next":"99.0.0","react":"19.0.0"}}',
+        encoding="utf-8",
+    )
+    fresh = load_config(report.root)
+    unsupported = run_doctor(fresh, _v2_context()).by_id("profile.unsupported")
+    assert unsupported.level == "WARN"
+    assert "nextjs" in unsupported.summary
+
+
+def test_doctor_reports_unresolved_package_manager_evidence(tmp_path: Path) -> None:
+    report, config = _v2_config(tmp_path)
+    (report.root.parent / "package-lock.json").write_text("{}\n", encoding="utf-8")
+    (report.root.parent / "yarn.lock").write_text("# yarn\n", encoding="utf-8")
+
+    check = run_doctor(config, _v2_context()).by_id("profile.package_manager")
+
+    assert check.level == "WARN"
+    assert "npm/yarn" in check.summary
+
+
+class _GhExecutor:
+    """Answer only the version probe doctor makes."""
+
+    def __init__(self, output: str, *, ok: bool = True) -> None:
+        self.output = output
+        self.ok = ok
+
+    def run(self, argv, **_kwargs):  # type: ignore[no-untyped-def]
+        from types import SimpleNamespace
+
+        assert argv == ["gh", "--version"]
+        return SimpleNamespace(ok=self.ok, stdout=self.output, stderr="", code=0 if self.ok else 1)
+
+
+def _gh_check(output: str, *, ok: bool = True):  # type: ignore[no-untyped-def]
+    from touchstone.doctor import DoctorContext, _gh_version_check
+
+    context = DoctorContext(
+        commands=frozenset({"gh"}),
+        forge=MemoryForge(),
+        scheduler="launchd",
+        executor=_GhExecutor(output, ok=ok),
+    )
+    return _gh_version_check(context)
+
+
+def test_a_gh_that_cannot_label_a_pull_request_fails_doctor() -> None:
+    check = _gh_check("gh version 2.63.2 (2024-12-05)\n")
+
+    assert check.level == "FAIL"
+    assert "2.63.2" in check.summary
+    assert "pr edit" in check.summary
+    assert check.repair is not None and "gh" in check.repair
+
+
+def test_a_supported_gh_passes_without_promising_future_versions() -> None:
+    check = _gh_check("gh version 2.98.0 (2026-08-20)\n")
+
+    assert check.level == "PASS"
+    # A version floor cannot promise the next API sunset will not break something.
+    assert "future GitHub API sunset" in check.summary
+
+
+def test_an_unreadable_gh_version_warns_rather_than_passing() -> None:
+    assert _gh_check("", ok=False).level == "WARN"
+    assert _gh_check("something unexpected\n").level == "WARN"
+
+
+def test_the_floor_is_the_first_release_that_completes_pr_edit() -> None:
+    assert _gh_check("gh version 2.64.0 (2025-01-01)\n").level == "PASS"
+    assert _gh_check("gh version 2.63.99 (2024-12-31)\n").level == "FAIL"

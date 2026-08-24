@@ -10,7 +10,10 @@ from dataclasses import dataclass, field
 from importlib.resources import files
 from pathlib import Path, PurePosixPath
 from string import Template
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from touchstone.config_v2 import GeneratedMetadata, TargetConfig
 
 EngineName = Literal["codex", "claude"]
 Target = Literal["local", "ssh"]
@@ -24,6 +27,7 @@ class ConfigError(ValueError):
 class ConfigSource:
     path: Path
     schema_version: int
+    generated_path: Path | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,15 +122,28 @@ class ForgeConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class ActionsConfig:
+    visibility: Literal["public", "private"] = "public"
+    wake_minutes: int = 15
+    artifact_retention_days: int = 90
+    node_version: str = "24"
+    action_sha: str = ""
+    approval_environment: str = ""
+    auto_merge: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class LoopConfig:
     name: str
     brief: str
     label: str
     config_dir: Path
     schedule: str | None = None
+    priority: int = 100
     protected_paths: tuple[str, ...] = ()
     require_change_under: tuple[str, ...] = ()
     confine_to: tuple[str, ...] = ()
+    targets: tuple[str, ...] = ()
     context: tuple[tuple[str, str], ...] = ()
 
     def prompt(self) -> str:
@@ -164,6 +181,10 @@ class Config:
     execution: ExecutionConfig
     git: GitConfig
     loops: dict[str, LoopConfig]
+    timezone: str = "UTC"
+    targets: dict[str, TargetConfig] = field(default_factory=dict)
+    generated_metadata: GeneratedMetadata | None = None
+    actions: ActionsConfig = field(default_factory=ActionsConfig)
 
     def loop(self, name: str) -> LoopConfig:
         try:
@@ -195,7 +216,17 @@ class Config:
         )
 
 
-_TOP_LEVEL = {"version", "project", "state_dir", "forge", "engine", "execution", "git", "loop"}
+_TOP_LEVEL = {
+    "version",
+    "project",
+    "state_dir",
+    "forge",
+    "engine",
+    "execution",
+    "git",
+    "loop",
+    "actions",
+}
 _PROJECT = {"path"}
 _FORGE = {
     "provider",
@@ -223,11 +254,40 @@ _LOOP = {
     "brief",
     "label",
     "schedule",
+    "priority",
     "protected_paths",
     "require_change_under",
     "confine_to",
+    "targets",
     "context",
 }
+_ACTIONS = {
+    "visibility",
+    "wake_minutes",
+    "artifact_retention_days",
+    "node_version",
+    "action_sha",
+    "approval_environment",
+    "auto_merge",
+}
+
+
+_RETIRED_ACTIONS = ("codex_cli_version", "claude_code_version")
+
+
+def _retired_actions_keys(actions: dict[str, Any]) -> None:
+    """Name the exact removed keys instead of reporting a bare unknown key.
+
+    A repository initialized before these were retired still carries them, and
+    "unknown configuration key" alone does not tell the operator that the Agent
+    CLI version now comes from the Action's own committed lockfile.
+    """
+    present = [key for key in _RETIRED_ACTIONS if key in actions]
+    if present:
+        raise ConfigError(
+            f"actions.{present[0]} was removed; the hosted Agent CLI version now comes from "
+            "the Action's committed npm lockfile. Delete this key from [actions]."
+        )
 
 
 def _unknown(table: dict[str, Any], known: set[str], where: str) -> None:
@@ -297,6 +357,7 @@ def _validate(raw: dict[str, Any]) -> None:
     execution = _table(raw, "execution")
     git = _table(raw, "git")
     loops = _table(raw, "loop")
+    actions = _table(raw, "actions")
     _unknown(project, _PROJECT, "project")
     _unknown(forge, _FORGE, "forge")
     _unknown(engine, _ENGINE, "engine")
@@ -304,6 +365,8 @@ def _validate(raw: dict[str, Any]) -> None:
     _unknown(execution, _EXECUTION, "execution")
     _unknown(_table(execution, "ssh"), _SSH, "execution.ssh")
     _unknown(git, _GIT, "git")
+    _retired_actions_keys(actions)
+    _unknown(actions, _ACTIONS, "actions")
     _string(project, "path", "project", required=True)
     if "state_dir" in raw and not isinstance(raw["state_dir"], str):
         raise ConfigError("state_dir must be a string")
@@ -330,6 +393,26 @@ def _validate(raw: dict[str, Any]) -> None:
         raise ConfigError("execution.ssh.env must be a table of string values")
     for key in ("author_name", "author_email"):
         _string(git, key, "git")
+    for key in (
+        "visibility",
+        "node_version",
+        "action_sha",
+        "approval_environment",
+    ):
+        _string(actions, key, "actions")
+    for key in ("wake_minutes", "artifact_retention_days"):
+        _positive_int(actions, key, "actions")
+    if actions.get("wake_minutes", 15) not in {5, 10, 15, 20, 30, 60}:
+        raise ConfigError("actions.wake_minutes must be one of 5, 10, 15, 20, 30, or 60")
+    if actions.get("artifact_retention_days", 90) > 90:
+        raise ConfigError("actions.artifact_retention_days must be at most 90")
+    if "auto_merge" in actions and not isinstance(actions["auto_merge"], bool):
+        raise ConfigError("actions.auto_merge must be a boolean")
+    if actions.get("visibility", "public") not in {"public", "private"}:
+        raise ConfigError("actions.visibility must be 'public' or 'private'")
+    node_version = actions.get("node_version", "24")
+    if not re.fullmatch(r"[0-9]+(?:\.[0-9]+(?:\.[0-9]+)?)?", node_version):
+        raise ConfigError("actions.node_version must be a numeric Node.js release")
     for name, value in loops.items():
         if not isinstance(value, dict):
             raise ConfigError(f"[loop.{name}] must be a table")
@@ -339,7 +422,8 @@ def _validate(raw: dict[str, Any]) -> None:
             raise ConfigError(f"[loop.{name}.context] must be a table")
         for key in ("brief", "label", "schedule"):
             _string(value, key, f"loop.{name}", required=key in {"brief", "label"})
-        for key in ("protected_paths", "require_change_under", "confine_to"):
+        _positive_int(value, "priority", f"loop.{name}")
+        for key in ("protected_paths", "require_change_under", "confine_to", "targets"):
             _string_array(value, key, f"loop.{name}")
         if any(
             not isinstance(key, str) or not isinstance(item, str) for key, item in context.items()
@@ -378,9 +462,11 @@ def _loops(raw: dict[str, Any], base_dir: Path) -> dict[str, LoopConfig]:
             label=str(_required(table, "label", f"loop.{name}")),
             config_dir=base_dir,
             schedule=str(schedule) if schedule is not None else None,
+            priority=int(table.get("priority", 100)),
             protected_paths=tuple(table.get("protected_paths", ())),
             require_change_under=tuple(table.get("require_change_under", ())),
             confine_to=tuple(table.get("confine_to", ())),
+            targets=tuple(table.get("targets", ())),
             context=tuple(sorted(dict(table.get("context", {})).items())),
         )
     if not result:
@@ -388,20 +474,16 @@ def _loops(raw: dict[str, Any], base_dir: Path) -> dict[str, LoopConfig]:
     return result
 
 
-def load_config(path: Path | None = None) -> Config:
-    chosen = (path or discover_config_path()).expanduser().resolve()
-    try:
-        raw = tomllib.loads(chosen.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        raise ConfigError(f"no configuration at {chosen}") from None
-    except tomllib.TOMLDecodeError as exc:
-        raise ConfigError(f"{chosen} is not valid TOML: {exc}") from None
-
-    version = raw.get("version")
-    if version is None:
-        raise ConfigError("unversioned configuration; run 'touchstone config migrate'")
-    if version != 1:
-        raise ConfigError(f"unsupported configuration version {version!r}; expected 1")
+def _build_config(
+    chosen: Path,
+    raw: dict[str, Any],
+    *,
+    schema_version: int,
+    generated_path: Path | None = None,
+    timezone: str = "UTC",
+    targets: dict[str, TargetConfig] | None = None,
+    generated_metadata: GeneratedMetadata | None = None,
+) -> Config:
     _validate(raw)
 
     base_dir = chosen.parent
@@ -412,6 +494,7 @@ def load_config(path: Path | None = None) -> Config:
     execution_raw = _table(raw, "execution")
     ssh_raw = _table(execution_raw, "ssh")
     git_raw = _table(raw, "git")
+    actions_raw = _table(raw, "actions")
 
     engine_name = os.environ.get("TOUCHSTONE_ENGINE", engine_raw.get("name", "codex"))
     if engine_name not in ("codex", "claude"):
@@ -458,7 +541,11 @@ def load_config(path: Path | None = None) -> Config:
         Path.cwd() if repo_override else base_dir,
     )
     return Config(
-        source=ConfigSource(path=chosen, schema_version=1),
+        source=ConfigSource(
+            path=chosen,
+            schema_version=schema_version,
+            generated_path=generated_path,
+        ),
         repo_path=repo_path,
         state_dir=_state_dir(
             raw,
@@ -479,7 +566,45 @@ def load_config(path: Path | None = None) -> Config:
             author_name=git_raw.get("author_name"), author_email=git_raw.get("author_email")
         ),
         loops=_loops(_table(raw, "loop"), base_dir),
+        timezone=timezone,
+        targets=dict(targets or {}),
+        generated_metadata=generated_metadata,
+        actions=ActionsConfig(
+            visibility=actions_raw.get("visibility", "public"),
+            wake_minutes=int(
+                actions_raw.get(
+                    "wake_minutes",
+                    15 if actions_raw.get("visibility", "public") == "public" else 60,
+                )
+            ),
+            artifact_retention_days=int(actions_raw.get("artifact_retention_days", 90)),
+            node_version=str(actions_raw.get("node_version", "24")),
+            action_sha=str(actions_raw.get("action_sha", "")),
+            approval_environment=str(actions_raw.get("approval_environment", "")),
+            auto_merge=bool(actions_raw.get("auto_merge", False)),
+        ),
     )
+
+
+def load_config(path: Path | None = None) -> Config:
+    chosen = (path or discover_config_path()).expanduser().resolve()
+    try:
+        raw = tomllib.loads(chosen.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise ConfigError(f"no configuration at {chosen}") from None
+    except tomllib.TOMLDecodeError as exc:
+        raise ConfigError(f"{chosen} is not valid TOML: {exc}") from None
+
+    version = raw.get("version")
+    if version is None:
+        raise ConfigError("unversioned configuration; run 'touchstone config migrate'")
+    if version == 2:
+        from touchstone.config_v2 import load_v2
+
+        return load_v2(chosen, raw)
+    if version != 1:
+        raise ConfigError(f"unsupported configuration version {version!r}; expected 1 or 2")
+    return _build_config(chosen, raw, schema_version=1)
 
 
 def discover_config_path(start: Path | None = None) -> Path:
@@ -509,6 +634,7 @@ def load(path: Path | None = None) -> Config:
 
 
 __all__ = [
+    "ActionsConfig",
     "Budget",
     "Config",
     "ConfigError",

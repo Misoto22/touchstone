@@ -1,0 +1,62 @@
+# Example of the machine-owned file produced by `touchstone init`.
+# Regenerate this data with `touchstone profile refresh --write`.
+# source_digest is a placeholder here; a real file records the digest of its own
+# generated data.
+
+[metadata]
+package_version = "0.1.2"
+package_managers = []
+source_digest = "sha256:example"
+
+[metadata.profile_versions]
+generic = "1"
+
+[target.root]
+path = "."
+profiles = [
+    "generic",
+]
+dependencies = []
+package_managers = []
+audit_context = [
+    "Audit repository-owned behavior without framework assumptions.",
+]
+protected_paths = [
+    ".github/",
+    ".env",
+    ".env.*",
+    "AGENTS.md",
+]
+source_paths = []
+
+[[target.root.evidence]]
+profile = "generic"
+verdict = "confirmed"
+kind = "fallback"
+path = "."
+detail = "no supported stack evidence"
+
+[[target.root.validation]]
+argv = [
+    "git",
+    "diff",
+    "--check",
+]
+timeout_seconds = 120
+capability = "source-read"
+enabled = true
+
+[loop.code]
+protected_paths = [
+    ".github/",
+    ".env",
+    ".env.*",
+    "AGENTS.md",
+]
+require_change_under = []
+
+[loop.code.context]
+project = "root at . (generic)"
+ledger = "No project findings ledger is configured; treat the queue as empty."
+protected = "the generated and project-owned protected paths"
+rules_clause = ""

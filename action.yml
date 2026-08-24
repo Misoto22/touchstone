@@ -1,0 +1,100 @@
+name: Touchstone hosted stage
+description: Run one credential-isolated Touchstone hosted stage
+inputs:
+  stage:
+    description: One of prepare, analysis, verify, publish, or snapshot
+    required: true
+  openai-api-key:
+    description: OpenAI credential mapped only into the runtime step
+    required: false
+  anthropic-api-key:
+    description: Anthropic credential mapped only into the runtime step
+    required: false
+  state-key:
+    description: Touchstone state encryption key mapped only into the runtime step
+    required: false
+  github-token:
+    description: Stage-scoped GitHub token mapped only into the runtime step
+    required: false
+  app-slug:
+    description: Publishing App slug used only to author hosted commits
+    required: false
+  candidate-id:
+    description: Existing candidate to resume
+    required: false
+  expected-candidate-id:
+    description: Candidate identity exported independently by Analysis
+    required: false
+  expected-loop:
+    description: Loop identity exported independently by Analysis
+    required: false
+  decision:
+    description: Resume decision
+    required: false
+  final-outcome:
+    description: Final hosted outcome used only by Snapshot
+    required: false
+  final-candidate-id:
+    description: Final candidate identity used only by Snapshot
+    required: false
+  final-loop:
+    description: Loop identity exported by Analysis and used only by Snapshot
+    required: false
+  final-change-state:
+    description: Final lifecycle state used only by Snapshot
+    required: false
+  final-reason-code:
+    description: Final reason code used only by Snapshot
+    required: false
+  final-partial:
+    description: Whether publication left a partial remote write
+    required: false
+  publish-job-result:
+    description: GitHub result for the Publish job
+    required: false
+outputs:
+  run_id:
+    value: ${{ steps.runtime.outputs.run_id }}
+  outcome:
+    value: ${{ steps.runtime.outputs.outcome }}
+  loop:
+    value: ${{ steps.runtime.outputs.loop }}
+  candidate_id:
+    value: ${{ steps.runtime.outputs.candidate_id }}
+  change_state:
+    value: ${{ steps.runtime.outputs.change_state }}
+  reason_code:
+    value: ${{ steps.runtime.outputs.reason_code }}
+  clean_start_reason:
+    value: ${{ steps.runtime.outputs.clean_start_reason }}
+  should_run:
+    value: ${{ steps.runtime.outputs.should_run }}
+  partial:
+    value: ${{ steps.runtime.outputs.partial }}
+runs:
+  using: composite
+  steps:
+    - name: Install pinned Touchstone source
+      shell: bash
+      run: '$GITHUB_ACTION_PATH/scripts/action-entrypoint.sh install "${{ inputs.stage }}"'
+    - name: Run Touchstone stage
+      id: runtime
+      shell: bash
+      env:
+        OPENAI_API_KEY: ${{ inputs.openai-api-key }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        TOUCHSTONE_STATE_KEY: ${{ inputs.state-key }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        TOUCHSTONE_APP_SLUG: ${{ inputs.app-slug }}
+        TOUCHSTONE_CANDIDATE_ID: ${{ inputs.candidate-id }}
+        TOUCHSTONE_EXPECTED_CANDIDATE_ID: ${{ inputs.expected-candidate-id }}
+        TOUCHSTONE_EXPECTED_LOOP: ${{ inputs.expected-loop }}
+        TOUCHSTONE_DECISION: ${{ inputs.decision }}
+        TOUCHSTONE_FINAL_OUTCOME: ${{ inputs.final-outcome }}
+        TOUCHSTONE_FINAL_CANDIDATE_ID: ${{ inputs.final-candidate-id }}
+        TOUCHSTONE_FINAL_LOOP: ${{ inputs.final-loop }}
+        TOUCHSTONE_FINAL_CHANGE_STATE: ${{ inputs.final-change-state }}
+        TOUCHSTONE_FINAL_REASON_CODE: ${{ inputs.final-reason-code }}
+        TOUCHSTONE_FINAL_PARTIAL: ${{ inputs.final-partial }}
+        TOUCHSTONE_PUBLISH_JOB_RESULT: ${{ inputs.publish-job-result }}
+      run: '$GITHUB_ACTION_PATH/scripts/action-entrypoint.sh "${{ inputs.stage }}"'

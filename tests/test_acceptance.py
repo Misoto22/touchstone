@@ -11,7 +11,9 @@ If this rewrite is to replace the shell version, it has to keep every one.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -29,6 +31,7 @@ class _Spy:
     """Records the argv an executor would have run."""
 
     where = "local"
+    replaces_environment = True
 
     def __init__(self) -> None:
         self.sent: list[list[str]] = []
@@ -126,6 +129,74 @@ def test_each_engine_declares_what_it_cannot_do() -> None:
     assert ClaudeEngine.enforces_paths is True
 
 
+@pytest.mark.parametrize(
+    ("engine_type", "name", "credential"),
+    (
+        (CodexEngine, "codex", "OPENAI_API_KEY"),
+        (ClaudeEngine, "claude", "ANTHROPIC_API_KEY"),
+    ),
+)
+def test_model_process_receives_only_its_runtime_and_model_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    engine_type,
+    name: str,
+    credential: str,
+) -> None:  # type: ignore[no-untyped-def]
+    class EnvironmentSpy(_Spy):
+        def __init__(self) -> None:
+            super().__init__()
+            self.environments: list[dict[str, str]] = []
+
+        def run(self, argv, **kwargs):  # type: ignore[no-untyped-def]
+            self.sent.append(argv)
+            self.environments.append(kwargs.get("env") or {})
+            return Result(0, '{"result":"ok"}', "")
+
+        def write_text(self, _path: str, _text: str) -> None:
+            return None
+
+        def read_text(self, _path: str) -> str:
+            return '{"result":"ok"}'
+
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    monkeypatch.setenv("PATH", os.environ["PATH"])
+    monkeypatch.setenv(credential, "model-secret")
+    monkeypatch.setenv("TOUCHSTONE_STATE_KEY", "state-secret")
+    monkeypatch.setenv("GH_TOKEN", "publish-secret")
+    spy = EnvironmentSpy()
+    config = SimpleNamespace(
+        engine=SimpleNamespace(
+            name=name,
+            model="model",
+            audit_effort="medium",
+            review_effort="medium",
+            timeout_seconds=30,
+            extra_args=(),
+            budget=SimpleNamespace(audit=1.0, review=1.0),
+            sandbox="workspace-write",
+        ),
+        state_dir=str(tmp_path / "state"),
+    )
+    engine = engine_type(config, spy)
+
+    engine.author("brief", worktree=str(tmp_path), denied=())
+    engine.review("review", worktree=str(tmp_path), schema={"type": "object"})
+
+    model_environments = [
+        environment
+        for argv, environment in zip(spy.sent, spy.environments, strict=True)
+        if argv[0] == name
+    ]
+    assert len(model_environments) == 2
+    for model_environment in model_environments:
+        assert model_environment[credential] == "model-secret"
+        assert model_environment["HOME"].startswith(str(tmp_path))
+        assert "TOUCHSTONE_STATE_KEY" not in model_environment
+        assert "GH_TOKEN" not in model_environment
+
+
 def test_a_malformed_envelope_yields_no_cost_rather_than_a_wrong_one() -> None:
     assert _payload("not json") == (None, "")
     assert _payload('{"total_cost_usd": 7.62, "result": "ok"}') == (7.62, "ok")
@@ -169,24 +240,27 @@ def test_the_diff_is_truncated_without_a_pipe() -> None:
     """`| head -c` closes the pipe, git takes SIGPIPE, and under `pipefail` the
     whole run dies — silently, twenty-two minutes and one correct finding in.
     It survived every earlier test because only a low-risk finding reaches this
-    line, and every finding until then had been medium."""
-    import ast
+    line, and every finding until then had been medium.
 
-    tree = ast.parse(Path(review.__file__).read_text(encoding="utf-8"))
-    # The truncation is a slice in Python, not an argument to another process.
-    # Asserting on the source text would only prove the comment explaining this
-    # still mentions `head -c`, which is how this test failed when it was first
-    # written — testing the prose rather than the behaviour.
-    slices = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Slice)
-    ]
-    assert slices, "the diff is not sliced anywhere"
-    assert any(
-        isinstance(node.slice.upper, ast.Name) and node.slice.upper.id == "DIFF_LIMIT"
-        for node in slices
-    ), "the diff is not bounded by DIFF_LIMIT"
+    The bound is now a refusal rather than a slice, which answers the same
+    concern more completely: nothing is piped, and nothing is reviewed in
+    part."""
+
+    from touchstone.execution import Result
+    from touchstone.nodes.review import _reviewable_diff
+
+    class _Executor:
+        def run(self, argv, timeout=None):  # type: ignore[no-untyped-def]
+            if "--intent-to-add" in argv:
+                return Result(code=0, stdout="", stderr="")
+            return Result(code=0, stdout="x" * (review.DIFF_LIMIT + 1), stderr="")
+
+    class _Context:
+        executor = _Executor()
+
+    reviewable = _reviewable_diff(_Context(), "/nowhere", "base-ref")
+    assert not reviewable.diff, "an oversized diff was handed to the reviewer anyway"
+    assert str(review.DIFF_LIMIT) in reviewable.refusal
     assert review.DIFF_LIMIT == 60_000
 
 
@@ -281,7 +355,10 @@ def test_the_shipped_example_still_has_its_protected_paths() -> None:
     import tomllib
 
     root = Path(__file__).resolve().parents[1]
-    raw = tomllib.loads((root / "touchstone.example.toml").read_text(encoding="utf-8"))
+    example = root / "touchstone.example.toml"
+    raw = tomllib.loads(example.read_text(encoding="utf-8"))
+    assert raw["version"] == 2
+    assert (root / raw["generated"]).is_file()
     for name, table in raw["loop"].items():
         assert table.get("protected_paths"), f"[loop.{name}] has no protected paths"
         assert "protected_paths" not in table.get("context", {}), (
@@ -298,7 +375,9 @@ def test_every_placeholder_a_brief_uses_is_supplied() -> None:
     import tomllib
 
     root = Path(__file__).resolve().parents[1]
-    raw = tomllib.loads((root / "touchstone.example.toml").read_text(encoding="utf-8"))
+    example = root / "touchstone.example.toml"
+    raw = tomllib.loads(example.read_text(encoding="utf-8"))
+    loaded = load(example)
     brief_root = root / "src" / "touchstone" / "resources" / "briefs"
     shared = re.findall(r"\$(\w+)", (brief_root / "review.md").read_text(encoding="utf-8"))
 
@@ -311,7 +390,7 @@ def test_every_placeholder_a_brief_uses_is_supplied() -> None:
         )
         assert brief.exists(), f"[loop.{name}] points at a brief that is not there: {brief}"
         used = set(re.findall(r"\$(\w+)", brief.read_text(encoding="utf-8"))) | set(shared)
-        missing = used - set(table.get("context", {}))
+        missing = used - set(dict(loaded.loop(name).context))
         assert not missing, f"[loop.{name}.context] is missing {sorted(missing)}"
 
 
@@ -411,15 +490,11 @@ def test_the_runner_asks_the_graph_whether_it_paused() -> None:
     source = inspect.getsource(runner.execute)
     assert "get_state(thread).next" in source
 
-    # The nodes own the rows for anything that reached them; recording again
-    # after the graph returned made two rows for one run that disagreed with
-    # each other. A gate hold is the exception and keeps its row here, because
-    # a run stopped at a gate never reaches a node at all, so nothing else
-    # would ever write it down.
+    # Change lifecycle rows belong only to actual candidates. Gate holds and
+    # rehearsals are Run Outcomes in events.jsonl, not fake candidate states.
     records = [line for line in source.splitlines() if "ledger.record" in line]
-    assert len(records) == 1, f"expected only the gate-hold row, found {len(records)}"
-    held_at = source.index("except Held")
-    assert source.index("ledger.record") > held_at, "the surviving row is not the gate-hold one"
+    assert records == []
+    assert "RunOutcome.BLOCKED" in source
 
 
 def test_the_checks_see_everything_the_commit_will_carry() -> None:
@@ -472,7 +547,7 @@ def test_answering_a_parked_thread_does_not_open_a_second_pull_request(
 
     from touchstone import graph as G
 
-    for answer, expected in (("merge", "merging"), ("close", "escalated")):
+    for answer, expected in (("approve", "awaiting_checks"), ("close", "closed")):
         calls: list[str] = []
         monkeypatch.setattr(
             G.publish, "park", lambda s, c=calls: (c.append("park"), {"pr": 999})[1]
@@ -480,12 +555,12 @@ def test_answering_a_parked_thread_does_not_open_a_second_pull_request(
         monkeypatch.setattr(
             G.publish,
             "arm_merge",
-            lambda s, c=calls: (c.append("merge"), {"outcome": "merging"})[1],
+            lambda s, c=calls: (c.append("approve"), {"outcome": "awaiting_checks"})[1],
         )
         monkeypatch.setattr(
             G.publish,
             "record_closed",
-            lambda s, c=calls: (c.append("close"), {"outcome": "escalated"})[1],
+            lambda s, c=calls: (c.append("close"), {"outcome": "closed"})[1],
         )
         monkeypatch.setattr(
             G.audit,
@@ -531,9 +606,163 @@ def test_every_ending_leaves_a_row_in_the_ledger() -> None:
         )
 
     # Publishing routes through the lifecycle service, which appends one event
-    # for each successful forge transition. Rehearsals keep their own row, and
-    # the runner independently records every run's terminal outcome.
+    # for each candidate transition. Rehearsals are Run Outcomes only, while
+    # the runner records every terminal outcome.
     assert "RepositoryLifecycle" in inspect.getsource(publish._publish)
     assert "RepositoryLifecycle" in inspect.getsource(publish._resume)
-    assert "ledger.record" in inspect.getsource(publish.rehearse)
+    assert "ledger.record" not in inspect.getsource(publish.rehearse)
     assert 'kind="finished"' in inspect.getsource(runner.execute)
+
+
+def test_the_reviewer_sees_the_files_the_commit_will_create(tmp_path) -> None:
+    """`git diff` omits untracked files; `git add -A` commits them.
+
+    Two pull requests were rejected for "including neither the implementation
+    nor the claimed test" while both were in the diff — as new files, invisible
+    to the reviewer. The wrong reject is the cheap direction. The same gap
+    approves a change whose entire risk is in a file the reviewer never read.
+    """
+    import subprocess
+
+    from touchstone.execution import LocalExecutor
+    from touchstone.nodes.review import _reviewable_diff
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*argv: str) -> None:
+        subprocess.run(["git", "-C", str(repo), *argv], check=True, capture_output=True)
+
+    git("init", "-q", ".")
+    git("config", "user.email", "t@example.com")
+    git("config", "user.name", "t")
+    (repo / "existing.py").write_text("value = 1\n", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-qm", "base")
+    git("branch", "-q", "base-ref")
+
+    (repo / "existing.py").write_text("value = 2\n", encoding="utf-8")
+    (repo / "brand_new.py").write_text("def helper() -> int:\n    return 1\n", encoding="utf-8")
+
+    class _Context:
+        executor = LocalExecutor()
+
+    reviewable = _reviewable_diff(_Context(), str(repo), "base-ref")
+
+    assert not reviewable.refusal
+    diff = reviewable.diff
+    assert "existing.py" in diff, "the tracked change is missing"
+    assert "brand_new.py" in diff, "a file the commit will create is missing from the review"
+    assert "def helper() -> int:" in diff, "the new file's contents never reach the reviewer"
+
+
+def test_an_incomplete_diff_is_refused_rather_than_narrowed(monkeypatch, tmp_path) -> None:
+    """Falling back to the tracked-only diff would review a subset and return a
+    verdict on the whole, which is the failure the staging step removes."""
+    from touchstone.execution import Result
+    from touchstone.nodes.review import _reviewable_diff
+
+    class _Executor:
+        def run(self, argv, timeout=None):  # type: ignore[no-untyped-def]
+            if "--intent-to-add" in argv:
+                return Result(code=1, stdout="", stderr="index.lock exists")
+            raise AssertionError("the diff was read after staging failed")
+
+    class _Context:
+        executor = _Executor()
+
+    reviewable = _reviewable_diff(_Context(), str(tmp_path), "base-ref")
+    assert not reviewable.diff
+    assert reviewable.refusal
+
+
+def test_a_large_new_file_cannot_push_a_tracked_edit_out_of_the_review(tmp_path) -> None:
+    """The exact case the size bound had to become a refusal to answer.
+
+    Git emits patches in path order. A generated `a_generated.txt` therefore
+    sorts ahead of `z.py`, and while the bound was a slice the reviewer got the
+    generated file and returned a verdict on a change that also edited `z.py`.
+    Before new files were included at all the tracked edit was always visible,
+    so including them without this would have traded one blindness for a worse
+    one.
+    """
+    import subprocess
+
+    from touchstone.execution import LocalExecutor
+    from touchstone.nodes.review import DIFF_LIMIT, _reviewable_diff
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*argv: str) -> None:
+        subprocess.run(["git", "-C", str(repo), *argv], check=True, capture_output=True)
+
+    git("init", "-q", ".")
+    git("config", "user.email", "t@example.com")
+    git("config", "user.name", "t")
+    (repo / "z.py").write_text("SECRET = read_from_env()\n", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-qm", "base")
+    git("branch", "-q", "base-ref")
+
+    (repo / "z.py").write_text("SECRET = 'hardcoded'\n", encoding="utf-8")
+    (repo / "a_generated.txt").write_text("x\n" * DIFF_LIMIT, encoding="utf-8")
+
+    class _Context:
+        executor = LocalExecutor()
+
+    reviewable = _reviewable_diff(_Context(), str(repo), "base-ref")
+
+    assert reviewable.refusal, "an oversized change was reviewed on whatever fit"
+    assert not reviewable.diff
+
+
+def test_an_ssh_engine_keeps_the_remote_environment_it_was_configured_with() -> None:
+    """An ssh command cannot have its environment replaced, only added to.
+
+    Prepending a locally derived environment would override the configured
+    remote PATH and HOME and put a local API key on a remote command line.
+    """
+
+    class _RemoteSpy(_Spy):
+        where = "ssh my-server"
+        replaces_environment = False
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.environments: list[dict[str, str] | None] = []
+
+        def run(self, argv, **kwargs):  # type: ignore[no-untyped-def]
+            self.sent.append(argv)
+            self.environments.append(kwargs.get("env"))
+            return Result(0, '{"result":"ok"}', "")
+
+        def read_text(self, _path: str) -> str:
+            return '{"result":"ok"}'
+
+        def write_text(self, _path: str, _text: str) -> None:
+            return None
+
+    spy = _RemoteSpy()
+    config = SimpleNamespace(
+        engine=SimpleNamespace(
+            name="codex",
+            model="model",
+            audit_effort="medium",
+            review_effort="medium",
+            timeout_seconds=30,
+            extra_args=(),
+            budget=SimpleNamespace(audit=1.0, review=1.0),
+            sandbox="workspace-write",
+        ),
+        state_dir="/tmp/touchstone-remote-test",
+    )
+
+    CodexEngine(config, spy).author("brief", worktree="/remote/worktree", denied=())
+
+    model_calls = [
+        environment
+        for argv, environment in zip(spy.sent, spy.environments, strict=True)
+        if argv[0] == "codex"
+    ]
+    assert model_calls == [None]
