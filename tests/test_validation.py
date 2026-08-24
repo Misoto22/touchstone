@@ -173,3 +173,39 @@ def test_preparation_uses_each_targets_confirmed_package_manager(monkeypatch) ->
         ("web", ("npm", "ci", "--ignore-scripts")),
         ("api", ("uv", "sync", "--frozen", "--no-install-project")),
     ]
+
+
+def test_polyglot_target_runs_one_locked_preparation_per_ecosystem(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from types import SimpleNamespace
+
+    commands: list[tuple[str, ...]] = []
+
+    def capture(_root, _path, command, _executor):  # type: ignore[no-untyped-def]
+        commands.append(command.argv)
+        return SimpleNamespace(ok=True)
+
+    gate = SimpleNamespace(
+        enabled=True,
+        preparation="locked-install",
+        allow_scripts=False,
+        allow_build_hooks=False,
+    )
+    config = SimpleNamespace(
+        repo_path=Path("."),
+        targets={
+            "app": SimpleNamespace(
+                path=Path("."),
+                validation=(gate,),
+                package_managers=("npm", "uv"),
+            )
+        },
+    )
+    monkeypatch.setattr("touchstone.validation.run_gate", capture)
+
+    report = prepare(config, ("app",), object())  # type: ignore[arg-type]
+
+    assert report.outcome == "completed"
+    assert commands == [
+        ("npm", "ci", "--ignore-scripts"),
+        ("uv", "sync", "--frozen", "--no-install-project"),
+    ]

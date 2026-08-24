@@ -267,13 +267,15 @@ def prepare(
         ]
         if not requirements:
             continue
-        command = _preparation_command(
-            target.package_managers,
-            target_id,
-            allow_scripts=any(gate.allow_scripts for gate in requirements),
-            allow_build_hooks=any(gate.allow_build_hooks for gate in requirements),
-        )
-        results.append(run_gate(root, target.path, command, executor))
+        managers = target.package_managers or ("",)
+        for manager in managers:
+            command = _preparation_command(
+                (manager,) if manager else (),
+                target_id,
+                allow_scripts=any(gate.allow_scripts for gate in requirements),
+                allow_build_hooks=any(gate.allow_build_hooks for gate in requirements),
+            )
+            results.append(run_gate(root, target.path, command, executor))
     outcome: ValidationOutcome = (
         "blocked" if any(not result.ok for result in results) else "completed"
     )
