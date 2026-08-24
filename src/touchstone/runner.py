@@ -62,24 +62,26 @@ def _gates(config: Config, loop_name: str, *, dry_run: bool) -> None:
     context = current()
     loop = context.loop(loop_name)
 
+    # The kill switch holds even for a rehearsal. It is the one gate that means
+    # a person said stop, rather than a condition about publishing.
     paused = Path(config.state_dir) / "PAUSED"
     if paused.exists():
         raise Held(f"paused: {paused.read_text().strip()}")
 
-    # R-HAR-1 says one harness review open at a time — open, not
-    # open-and-not-a-draft. For the code audit the opposite is right: if drafts
-    # held the slot, the first medium-risk finding would be the last thing the
-    # loop ever did.
+    if dry_run:
+        # Everything below is about publishing, and a rehearsal publishes
+        # nothing. Both gates were checked first once, and the effect was that
+        # a rehearsal could not run while any pull request was open — which,
+        # for a loop whose job is opening pull requests, is nearly always.
+        return
+
+    # One harness review open at a time means open, not open-and-not-a-draft.
+    # For the code audit the opposite is right: if drafts held the slot, the
+    # first medium-risk finding would be the last thing the loop ever did.
     include_drafts = bool(loop.require_change_under)
     held = context.forge.open_pulls(loop.label, include_drafts=include_drafts)
     if held:
         raise Held(f"slot held by #{held[0]['number']}: {held[0].get('url', '')}")
-
-    if dry_run:
-        # A dry run cannot publish, so there is nothing for the health gate to
-        # protect — and a held rehearsal makes the engines impossible to
-        # compare, since whichever is tried mid-CI simply never runs.
-        return
 
     # Only an explicit success passes. Treating "anything but failure" as
     # healthy admits cancelled, timed-out and still-running checks, and those
@@ -139,24 +141,30 @@ def execute(config: Config, *, loop: str, dry_run: bool = False) -> int:
     try:
         _gates(config, loop, dry_run=dry_run)
         path, branch = _worktree(config)
+        thread_id = f"{loop}-{branch}"
         with SqliteSaver.from_conn_string(str(state_dir / "checkpoints.sqlite")) as saver:
             app = build().compile(checkpointer=saver)
-            thread = {"configurable": {"thread_id": f"{loop}-{branch}"}}
-            final = app.invoke({"loop": loop, "worktree": path, "branch": branch}, thread)
-        published = final.get("outcome") in {"merging", "escalated"}
-        print(
-            f"{loop}: {final.get('outcome', 'clean')}"
-            + (f" #{final['pr']}" if final.get("pr") else "")
-        )
-        if final.get("outcome") == "escalated":
-            print(f"  parked; resume with: touchstone resume {loop}-{branch} merge|close")
-        context.ledger.record(
-            status=final.get("outcome", "clean"),
-            risk=final.get("risk"),
-            pr=final.get("pr"),
-            title=final.get("finding", {}).get("title", ""),
-            detail="; ".join(final.get("notes", [])),
-        )
+            thread = {"configurable": {"thread_id": thread_id}}
+            final = app.invoke(
+                {"loop": loop, "worktree": path, "branch": branch, "dry_run": dry_run}, thread
+            )
+            # An interrupt returns the state as it stood *before* the node
+            # returned, because the node did not return — it stopped. Reading
+            # `outcome` from it therefore gets the default, which is how one run
+            # reported `clean` while its pull request sat open. Ask the graph
+            # whether it is paused instead of inferring it from the payload.
+            paused = bool(app.get_state(thread).next)
+
+        # The nodes keep their own ledger rows: they are the only ones that know
+        # what actually reached the forge. Recording again here produced two
+        # rows for one run, disagreeing with each other.
+        outcome = final.get("outcome") or ("escalated" if paused else "clean")
+        published = outcome in {"merging", "escalated"}
+        print(f"{loop}: {outcome}" + (f" #{final['pr']}" if final.get("pr") else ""))
+        for note in final.get("notes", []):
+            print(f"  {note}")
+        if paused:
+            print(f"  parked; resume with: touchstone resume {thread_id} merge|close")
         return 0
     except Held as held:
         print(held)

@@ -92,12 +92,14 @@ def test_only_a_finding_with_somewhere_to_live_counts_as_handled(tmp_path: Path)
     book.record(status="escalated", risk="medium", title="a parked one")
     book.record(status="held", risk="low", title="one the gate abandoned")
     book.record(status="reverted", risk="low", title="one that was undone")
+    book.record(status="rehearsed", risk="low", title="one that was only rehearsed")
 
     handled = " ".join(book.handled_titles())
     assert "a merged one" in handled
     assert "a parked one" in handled
     assert "one the gate abandoned" not in handled
     assert "one that was undone" not in handled
+    assert "one that was only rehearsed" not in handled
 
 
 def test_a_truncated_ledger_line_loses_a_record_not_the_run(tmp_path: Path) -> None:
@@ -326,3 +328,85 @@ def test_the_briefs_keep_the_constraints_that_were_paid_for() -> None:
     assert "owe it nothing" in review
     # Understating risk to get something merged.
     assert "Understating risk" in audit and "Understating risk" in harness
+
+
+def test_the_description_names_where_it_runs_not_what_is_configured(tmp_path: Path) -> None:
+    """An `[execution.ssh]` section can exist while the target is local.
+
+    Reading the section rather than the target reported `ssh my-server` for a
+    run happening on this machine — a loop that merges to production
+    misreporting which host it is on is exactly what this line exists to stop.
+    """
+    path = _config(
+        tmp_path,
+        'repo_path = "/tmp/r"\n[forge]\nslug = "o/r"\n'
+        '[execution]\ntarget = "local"\n'
+        '[execution.ssh]\nhost = "elsewhere"\nworkdir = "/w"\nstate_dir = "/s"\n'
+        '[loop.code]\nbrief = "b.md"\nlabel = "l"\n',
+    )
+    described = load(path).describe()
+    assert "local" in described
+    assert "elsewhere" not in described
+
+
+def test_a_rehearsal_is_stopped_only_by_the_kill_switch(tmp_path: Path) -> None:
+    """A dry run publishes nothing, so the gates about publishing do not apply.
+
+    Checked in the other order once, and the effect was that a rehearsal could
+    not run while any pull request was open — which, for a loop whose job is
+    opening pull requests, is nearly always. `PAUSED` still holds, because that
+    one means a person said stop rather than describing a condition.
+    """
+    import inspect
+
+    from touchstone import runner
+
+    source = inspect.getsource(runner._gates)
+    paused_at = source.index("PAUSED")
+    dry_at = source.index("if dry_run")
+    slot_at = source.index("open_pulls")
+    health_at = source.index("latest_run")
+    assert paused_at < dry_at < slot_at, "the slot gate runs before the dry-run exit"
+    assert dry_at < health_at, "the health gate runs before the dry-run exit"
+
+
+def test_a_rehearsal_never_reaches_the_forge() -> None:
+    """`--dry-run` has to be visible to the nodes that publish.
+
+    Passed only to the gates once, and the effect was a rehearsal that opened a
+    real pull request while printing `clean`. A rehearsal that publishes is
+    worse than no rehearsal, because it is trusted not to.
+    """
+    import inspect
+
+    from touchstone import graph
+
+    source = inspect.getsource(graph)
+    assert "dry_run: bool" in source, "dry_run does not travel in the graph state"
+    assert source.count('state.get("dry_run")') >= 2, (
+        "both publishing nodes must check for a rehearsal"
+    )
+
+
+def test_the_runner_asks_the_graph_whether_it_paused() -> None:
+    """An interrupt returns the state as it stood before the node returned.
+
+    Reading `outcome` from that payload gets the default, which is how one run
+    reported `clean` while its pull request sat open.
+    """
+    import inspect
+
+    from touchstone import runner
+
+    source = inspect.getsource(runner.execute)
+    assert "get_state(thread).next" in source
+
+    # The nodes own the rows for anything that reached them; recording again
+    # after the graph returned made two rows for one run that disagreed with
+    # each other. A gate hold is the exception and keeps its row here, because
+    # a run stopped at a gate never reaches a node at all, so nothing else
+    # would ever write it down.
+    records = [line for line in source.splitlines() if "ledger.record" in line]
+    assert len(records) == 1, f"expected only the gate-hold row, found {len(records)}"
+    held_at = source.index("except Held")
+    assert source.index("ledger.record") > held_at, "the surviving row is not the gate-hold one"

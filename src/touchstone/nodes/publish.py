@@ -7,6 +7,7 @@ it, and what happens afterwards depends on their answer.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from touchstone.nodes.context import current
@@ -160,3 +161,45 @@ def record_closed(state: dict[str, Any]) -> dict[str, Any]:
         detail="a person closed the parked draft",
     )
     return {"outcome": "escalated", "pr": number}
+
+
+def rehearse(state: dict[str, Any], *, would: str) -> dict[str, Any]:
+    """What a real run would have done, and the diff it would have carried.
+
+    Nothing reaches the forge. The diff is kept where it can be read after the
+    worktree is torn down, because the whole point of a rehearsal is to look at
+    it — and the worktree is gone by the time anyone thinks to.
+    """
+    context = current()
+    worktree = state["worktree"]
+    base = f"origin/{context.config.forge.default_branch}"
+
+    diff = context.executor.run(["git", "-C", worktree, "diff", base], timeout=180).stdout
+    target = Path(context.config.state_dir) / "dry-run.diff"
+    target.write_text(diff, encoding="utf-8")
+
+    stat = context.executor.run(
+        ["git", "-C", worktree, "diff", "--shortstat", base], timeout=60
+    ).stdout.strip()
+
+    # Recorded, so the ledger is a complete account of what the loop did rather
+    # than only of what it published. `rehearsed` is deliberately not in the
+    # handled allowlist: a rehearsal disposes of nothing, and feeding its title
+    # back as already-seen would hide a defect nobody has fixed.
+    context.ledger.record(
+        status="rehearsed",
+        risk=state.get("risk"),
+        pr=None,
+        title=state.get("finding", {}).get("title", ""),
+        detail=f"would {would}; review {state.get('verdict', 'skipped')}",
+    )
+
+    return {
+        "outcome": "rehearsed",
+        "pr": None,
+        "notes": [
+            f"would {would}",
+            f"risk {state.get('risk')} / review {state.get('verdict', 'skipped')}",
+            f"diff at {target} ({stat})",
+        ],
+    }

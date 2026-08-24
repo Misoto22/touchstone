@@ -38,6 +38,12 @@ class LoopState(TypedDict, total=False):
     loop: str
     worktree: str
     branch: str
+    #: A rehearsal runs the audit, the classification and the review for real
+    #: and stops before anything reaches the forge. It has to travel in the
+    #: state rather than being closed over, because the nodes that publish are
+    #: the ones that must not — and passing it only to the gates meant a dry
+    #: run opened a real pull request while reporting `clean`.
+    dry_run: bool
 
     finding: dict[str, Any]
     risk: Literal["low", "medium", "high"]
@@ -70,14 +76,22 @@ def _after_review(state: LoopState) -> str:
     return "merge" if state.get("verdict") == "approve" else "park"
 
 
+def _merge(state: LoopState) -> LoopState:
+    if state.get("dry_run"):
+        return publish.rehearse(state, would="merge")
+    return publish.merge(state)
+
+
 def park(state: LoopState) -> LoopState:
     """Open the pull request as a draft, then stop and wait for a person.
 
-    The interrupt is the point. A bash loop parked a draft and exited, so a
+    The interrupt is the point. A shell loop parked a draft and exited, so a
     person's answer reached nothing — the next hour simply started over and the
     ledger row was all that carried forward. Here the thread is checkpointed at
     this node, and answering resumes it.
     """
+    if state.get("dry_run"):
+        return publish.rehearse(state, would="park")
     published = publish.park(state)
     decision = interrupt(
         {
@@ -100,7 +114,7 @@ def build():  # type: ignore[no-untyped-def]
     graph.add_node("audit", audit.run)
     graph.add_node("classify", classify.run)
     graph.add_node("review", review.run)
-    graph.add_node("merge", publish.merge)
+    graph.add_node("merge", _merge)
     graph.add_node("park", park)
 
     graph.set_entry_point("audit")

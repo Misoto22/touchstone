@@ -167,9 +167,16 @@ class Config:
             raise ConfigError(f"no loop named {name!r}; configured loops are {known}") from None
 
     def describe(self) -> str:
-        """One line for the log, so a run says what it is before it costs anything."""
+        """One line for the log, so a run says what it is before it costs anything.
+
+        Where it runs comes from the target, not from whether an `[execution.ssh]`
+        section happens to exist. Read the other way round it reported `ssh
+        my-server` for a run executing locally — and a loop that merges to
+        production unattended misreporting which machine it is on is the one
+        thing this line exists to prevent.
+        """
         where = self.execution.target
-        if self.execution.ssh is not None:
+        if self.execution.target == "ssh" and self.execution.ssh is not None:
             where = f"ssh {self.execution.ssh.host}"
         return (
             f"{self.forge.slug} · engine={self.engine.name} model={self.engine.model} "
