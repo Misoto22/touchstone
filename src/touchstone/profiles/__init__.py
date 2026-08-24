@@ -11,6 +11,12 @@ from touchstone.profiles.model import (
     TargetCandidate,
     ValidationCandidate,
 )
+from touchstone.profiles.targets import (
+    ProjectTarget,
+    TargetDiscovery,
+    affected_targets,
+    discover_targets,
+)
 
 __all__ = [
     "DetectionVerdict",
@@ -18,8 +24,12 @@ __all__ = [
     "ProfileCatalog",
     "ProfileDefinition",
     "ProfileMatch",
+    "ProjectTarget",
     "TargetCandidate",
+    "TargetDiscovery",
     "ValidationCandidate",
+    "affected_targets",
     "detect_profiles",
+    "discover_targets",
     "load_catalog",
 ]

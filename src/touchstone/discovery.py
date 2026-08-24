@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 
 from touchstone.config import ConfigError
 from touchstone.execution import Executor
+from touchstone.profiles.targets import TargetDiscovery, affected_targets, discover_targets
 
 SchedulerName = Literal["launchd", "systemd", "unsupported"]
 
@@ -86,4 +87,11 @@ def _github_slug(remote: str) -> str:
     return slug
 
 
-__all__ = ["ProjectDiscovery", "SchedulerName", "discover_project"]
+__all__ = [
+    "ProjectDiscovery",
+    "SchedulerName",
+    "TargetDiscovery",
+    "affected_targets",
+    "discover_project",
+    "discover_targets",
+]
