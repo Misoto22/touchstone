@@ -115,6 +115,23 @@ def run(state: dict[str, Any]) -> dict[str, Any]:
         brief += "\n".join(f"- {title}" for title in handled)
 
     session = context.engine.author(brief, worktree=worktree, denied=loop.protected_paths)
+    if session.blocked:
+        # Not clean. The engine was present and thinking and could not act, and
+        # recording that as "found nothing" is how six hours of real work and
+        # 122k tokens per run disappeared into a ledger that said all was well.
+        context.ledger.record(
+            status="held",
+            risk=None,
+            pr=None,
+            title="",
+            detail=f"the {context.engine.name} session could not act: {session.blocked}",
+        )
+        return {
+            "outcome": "held",
+            "notes": [f"blocked: {session.blocked}", f"transcript in {context.config.state_dir}"],
+            "cost": [session.cost],
+        }
+
     if not session.ok:
         return {
             "outcome": "held",

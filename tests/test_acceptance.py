@@ -174,7 +174,9 @@ def test_model_process_receives_only_its_runtime_and_model_environment(
             timeout_seconds=30,
             extra_args=(),
             budget=SimpleNamespace(audit=1.0, review=1.0),
-        )
+            sandbox="workspace-write",
+        ),
+        state_dir=str(tmp_path / "state"),
     )
     engine = engine_type(config, spy)
 

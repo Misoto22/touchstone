@@ -45,6 +45,24 @@ class EngineConfig:
     timeout_seconds: int = 2700
     budget: Budget = field(default_factory=Budget)
     extra_args: tuple[str, ...] = ()
+    #: How much of the machine the authoring session may touch.
+    #:
+    #: `workspace-write` is right wherever the engine's own sandbox works, and
+    #: is the default because a weaker setting should never be inherited by
+    #: accident. It does not work everywhere: a host that forbids unprivileged
+    #: uid mapping cannot bring up loopback inside a user namespace, so
+    #: bubblewrap never starts and every file write is refused — silently, with
+    #: an exit code of 0.
+    #:
+    #: `danger-full-access` gives the session the machine. On a host where the
+    #: sandbox is broken the practical comparison is not "sandboxed versus not"
+    #: but "unrestricted versus unable to do anything at all", and the loop's
+    #: own guards do not depend on the sandbox: the session works in a
+    #: throwaway worktree, and the protected paths, the confinement check and
+    #: the independent review all read the finished diff. That is a real
+    #: reduction in defence and it is why this is a named setting rather than a
+    #: fallback the code chooses on its own.
+    sandbox: str = "workspace-write"
 
 
 @dataclass(frozen=True, slots=True)
@@ -220,6 +238,7 @@ _FORGE = {
 }
 _ENGINE = {
     "name",
+    "sandbox",
     "model",
     "audit_effort",
     "review_effort",
@@ -483,6 +502,7 @@ def _build_config(
     engine = EngineConfig(
         name=engine_name,
         model=os.environ.get("TOUCHSTONE_MODEL", engine_raw.get("model", "")),
+        sandbox=os.environ.get("TOUCHSTONE_SANDBOX", engine_raw.get("sandbox", "workspace-write")),
         audit_effort=os.environ.get("TOUCHSTONE_EFFORT", engine_raw.get("audit_effort", "high")),
         review_effort=os.environ.get(
             "TOUCHSTONE_REVIEW_EFFORT", engine_raw.get("review_effort", "high")

@@ -73,16 +73,69 @@ def engine_environment(
     return result
 
 
+#: How an engine says it was present and thinking but could not act.
+#:
+#: A session that cannot write is not a session that found nothing, and telling
+#: them apart cannot be left to the exit code: `codex exec` exits 0 after every
+#: one of its file writes was refused. On a host that forbids unprivileged uid
+#: mapping, bubblewrap cannot bring up loopback inside its namespace, so the
+#: sandbox never starts and every write fails.
+#:
+#: Matched against the transcript, which is where the engine is honest. But the
+#: transcript is also where the engine *quotes the repository*, and an audit of
+#: permission-handling code discusses these phrases as its subject matter — the
+#: first version matched a bare "Operation not permitted" and would have called
+#: a perfectly good review of an auth module blocked. So each marker is either
+#: a diagnostic no ordinary prose produces, or a pair that has to appear
+#: together.
+_SPECIFIC: tuple[tuple[str, str], ...] = (
+    ("bwrap:", "the sandbox could not start"),
+    ("Failed to write file", "a file write was refused"),
+    ("Blocked by workspace infrastructure", "the engine reported it could not act"),
+    ("sandbox_error", "the engine reported a sandbox error"),
+)
+
+#: Phrases that mean nothing alone and something together. "Operation not
+#: permitted" is ordinary text in a diff about permissions; alongside a
+#: namespace or seccomp failure it is a machine refusing the engine.
+_CORROBORATING: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("Operation not permitted", "namespace"), "a namespace operation was refused"),
+    (("Operation not permitted", "uid_map"), "uid mapping was refused"),
+    (("Operation not permitted", "seccomp"), "a seccomp restriction refused the engine"),
+    (("Permission denied", "sandbox"), "the sandbox was denied access"),
+)
+
+
+def blocked_reason(transcript: str) -> str | None:
+    """Why this session could not act, or `None` if nothing says it could not.
+
+    Returns a category of this function's own devising, never a slice of the
+    transcript: the answer travels into notes, the event log and the ledger,
+    and those are packaged into the hosted state snapshot. The transcript
+    itself stays in `state_dir`, on the machine, for whoever has to explain the
+    run.
+    """
+    for marker, reason in _SPECIFIC:
+        if marker in transcript:
+            return reason
+    for markers, reason in _CORROBORATING:
+        if all(marker in transcript for marker in markers):
+            return reason
+    return None
+
+
 def keep(state_dir: str, name: str, text: str) -> None:
     """Persist what a session said, for whoever has to explain it later.
 
     A run that takes seven minutes and produces nothing is the hardest kind to
     diagnose, and the first time it happened there was no record at all: the
-    outcome said `no finding file written` and the reasoning behind that had
+    ledger said `no finding file written` and the reasoning behind that had
     already been discarded. Cheap to keep, impossible to reconstruct.
-    """
-    from pathlib import Path
 
+    Written by the parent process into `state_dir`, never by the model's own
+    process — under a hosted backend the child's `HOME` is redirected, and a
+    transcript written there would land somewhere nobody thinks to look.
+    """
     target = Path(state_dir) / name
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(text, encoding="utf-8")
@@ -100,6 +153,9 @@ class Session:
     cost: float | None
     timed_out: bool = False
     detail: str = ""
+    #: Set when the engine ran, thought, and could not act — as distinct from
+    #: running and finding nothing. The two look identical from outside.
+    blocked: str | None = None
 
 
 @runtime_checkable
