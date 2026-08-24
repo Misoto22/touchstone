@@ -23,16 +23,17 @@ def test_readme_starts_with_the_installable_first_run() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     getting_started = readme.split("### Getting Started", 1)[1].split("\n---\n", 1)[0]
     commands = [
-        "pipx install touchstone-agent",
+        "pipx install git+https://github.com/Misoto22/touchstone.git",
         "touchstone init",
         "touchstone doctor",
         "touchstone setup",
         "touchstone run code --dry-run",
-        "touchstone install-scheduler",
     ]
 
     positions = [getting_started.index(command) for command in commands]
     assert positions == sorted(positions)
+    assert getting_started.count("touchstone doctor") == 2
+    assert "touchstone install-scheduler" not in getting_started
 
 
 def test_public_policy_files_are_linked_from_the_readme() -> None:
