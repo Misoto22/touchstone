@@ -157,3 +157,73 @@ def test_installed_wheel_renders_and_checks_a_safe_actions_workflow(
         "TOUCHSTONE_APP_PRIVATE_KEY"
         not in workflow.split("  analysis:", 1)[1].split("  publish:", 1)[0]
     )
+
+
+def test_composite_entrypoint_executes_a_real_hosted_prepare_stage(
+    wheel_env: WheelEnv, tmp_path: Path
+) -> None:
+    repository = _repository(tmp_path, "next-app")
+    initialized = wheel_env.run(
+        "init",
+        "--non-interactive",
+        "--engine",
+        "codex",
+        "--model",
+        "gpt-test",
+        "--workflow",
+        "ci.yml",
+        "--schedule",
+        "hourly@00",
+        cwd=repository,
+    )
+    assert initialized.returncode == 0, initialized.stdout + initialized.stderr
+
+    runner_temp = tmp_path / "runner"
+    action_ref = "a" * 40
+    action_venv = runner_temp / "touchstone-action-12345-1"
+    shutil.copytree(wheel_env.executable.parents[1], action_venv, symlinks=True)
+    (action_venv / ".touchstone-action-ref").write_text(action_ref + "\n", encoding="utf-8")
+    environment = wheel_env.env | {
+        "GITHUB_ACTION_PATH": str(ROOT),
+        "GITHUB_ACTION_REF": action_ref,
+        "GITHUB_RUN_ID": "12345",
+        "GITHUB_RUN_ATTEMPT": "1",
+        "RUNNER_TEMP": str(runner_temp),
+    }
+    for name in (
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "TOUCHSTONE_STATE_KEY",
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+    ):
+        environment.pop(name, None)
+
+    installed = subprocess.run(
+        [str(ROOT / "scripts" / "action-entrypoint.sh"), "install"],
+        cwd=repository,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    prepared = subprocess.run(
+        [str(ROOT / "scripts" / "action-entrypoint.sh"), "prepare"],
+        cwd=repository,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+
+    assert installed.returncode == 0, installed.stdout + installed.stderr
+    assert prepared.returncode == 0, prepared.stdout + prepared.stderr
+    payload = json.loads(
+        (repository / ".touchstone" / "hosted" / "prepare" / "result.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert payload["stage"] == "prepare"
+    assert payload["outcome"] == "completed"

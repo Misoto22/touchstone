@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import datetime as dt
 import hashlib
 import json
 from pathlib import Path
@@ -13,10 +14,13 @@ from touchstone.hosted.runtime import (
     CandidateIntegrityError,
     CandidateMetadata,
     HostedOutputs,
+    VerificationAttestation,
     run_stage,
     validate_stage_environment,
     verify_candidate,
 )
+from touchstone.outcomes import RunOutcome, RunResult
+from touchstone.scheduling.store import DueStore
 
 
 def _config(tmp_path: Path):  # type: ignore[no-untyped-def]
@@ -38,6 +42,9 @@ def _key() -> bytes:
 
 def test_stage_environment_keeps_model_and_publish_credentials_apart() -> None:
     validate_stage_environment("analysis", {"OPENAI_API_KEY": "model"})
+    validate_stage_environment(
+        "verify", {"GH_TOKEN": "read-only-token", "TOUCHSTONE_STATE_KEY": "state"}
+    )
     validate_stage_environment("publish", {"GH_TOKEN": "app-token"})
 
     with pytest.raises(CandidateIntegrityError, match="publishing credential"):
@@ -47,6 +54,10 @@ def test_stage_environment_keeps_model_and_publish_credentials_apart() -> None:
         )
     with pytest.raises(CandidateIntegrityError, match="model credential"):
         validate_stage_environment("publish", {"GH_TOKEN": "app-token", "OPENAI_API_KEY": "model"})
+    with pytest.raises(CandidateIntegrityError, match="model credential"):
+        validate_stage_environment("verify", {"OPENAI_API_KEY": "model"})
+    with pytest.raises(CandidateIntegrityError, match="publishing credential"):
+        validate_stage_environment("verify", {"TOUCHSTONE_APP_PRIVATE_KEY": "pem"})
     with pytest.raises(CandidateIntegrityError, match="credential"):
         validate_stage_environment("snapshot", {"GH_TOKEN": "app-token"})
 
@@ -62,6 +73,7 @@ def test_hosted_outputs_are_versioned_and_write_github_contracts(
         stage="analysis",
         run_id="run-1",
         outcome="proposed",
+        loop="code",
         candidate_id="candidate-1",
         should_run=True,
     )
@@ -70,9 +82,34 @@ def test_hosted_outputs_are_versioned_and_write_github_contracts(
 
     payload = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
     assert payload["version"] == 1
+    assert payload["loop"] == "code"
     assert payload["candidate_id"] == "candidate-1"
+    assert "loop=code" in github_output.read_text(encoding="utf-8")
     assert "candidate_id=candidate-1" in github_output.read_text(encoding="utf-8")
     assert "Analysis" in summary.read_text(encoding="utf-8")
+
+
+def test_verification_attestation_binds_candidate_patch_and_effective_config(
+    tmp_path: Path,
+) -> None:
+    attestation = VerificationAttestation(
+        candidate_id="candidate-1",
+        run_id="run-1",
+        base_sha="a" * 40,
+        patch_digest="sha256:" + "b" * 64,
+        config_digest="sha256:" + "c" * 64,
+        worktree="/tmp/verified-worktree",
+    )
+    path = tmp_path / "verified.json"
+
+    attestation.write(path)
+
+    assert VerificationAttestation.read(path) == attestation
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["patch_digest"] = "not-a-digest"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(CandidateIntegrityError, match="attestation"):
+        VerificationAttestation.read(path)
 
 
 def test_publish_verifies_candidate_before_any_mutation(tmp_path: Path) -> None:
@@ -82,6 +119,7 @@ def test_publish_verifies_candidate_before_any_mutation(tmp_path: Path) -> None:
     metadata = CandidateMetadata(
         repository="acme/widgets",
         loop="code",
+        finding_id="finding-1",
         candidate_id="candidate-1",
         run_id="run-1",
         base_sha="a" * 40,
@@ -113,6 +151,27 @@ def test_publish_verifies_candidate_before_any_mutation(tmp_path: Path) -> None:
     )
     bundle_path = tmp_path / "candidate.bundle.json"
     bundle_path.write_text(bundle.to_json(), encoding="utf-8")
+
+    with pytest.raises(CandidateIntegrityError, match="loop-mismatch"):
+        verify_candidate(
+            config,
+            bundle_path,
+            key=_key(),
+            destination=tmp_path / "wrong-loop",
+            expected_base="a" * 40,
+            expected_loop="other",
+            expected_lineage="candidate-1",
+        )
+    with pytest.raises(CandidateIntegrityError, match="lineage-mismatch"):
+        verify_candidate(
+            config,
+            bundle_path,
+            key=_key(),
+            destination=tmp_path / "wrong-lineage",
+            expected_base="a" * 40,
+            expected_loop="code",
+            expected_lineage="candidate-other",
+        )
     # Authentication still succeeds: this simulates a producer bug or a
     # malicious producer with the state key, so the independent digest check matters.
     bad = json.loads(metadata_path.read_text(encoding="utf-8"))
@@ -134,6 +193,8 @@ def test_publish_verifies_candidate_before_any_mutation(tmp_path: Path) -> None:
             key=_key(),
             destination=tmp_path / "restored",
             expected_base="a" * 40,
+            expected_loop="code",
+            expected_lineage="candidate-1",
         )
 
 
@@ -164,3 +225,46 @@ def test_no_due_analysis_and_snapshot_complete_without_model_or_publish_credenti
     assert analysis.reason_code == "not-due"
     assert snapshot.outcome == "completed"
     assert (tmp_path / ".touchstone" / "hosted" / "snapshot" / "state.bundle.json").is_file()
+
+
+def test_hosted_due_slot_is_finalized_only_by_durable_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path)
+    loop = SimpleNamespace(
+        name="code",
+        schedule="hourly@00",
+        priority=10,
+        targets=(),
+    )
+    config.loops = {"code": loop}
+    config.loop = lambda name: config.loops[name]
+    config.engine = SimpleNamespace(name="codex")
+    encoded = base64.urlsafe_b64encode(_key()).decode()
+    now = dt.datetime(2026, 8, 24, 12, tzinfo=dt.UTC)
+    env = {
+        "TOUCHSTONE_STATE_KEY": encoded,
+        "TOUCHSTONE_NOW": now.isoformat(),
+        "GITHUB_RUN_ID": "12345",
+        "GITHUB_RUN_ATTEMPT": "1",
+    }
+    monkeypatch.setattr("touchstone.hosted.runtime._ensure_engine", lambda *_args: None)
+    monkeypatch.setattr(
+        "touchstone.hosted.runtime._analyze_loop",
+        lambda *_args, **_kwargs: (RunResult(RunOutcome.NO_CHANGE), None),
+    )
+
+    analysis = run_stage(config, "analysis", env=env)
+
+    store = DueStore(Path(config.state_dir) / "due.sqlite")
+    pending = store.records()[0]
+    assert analysis.outcome == "no_change"
+    assert pending.consumed_at is None
+    assert pending.claim_owner == "github:12345-1"
+
+    run_stage(config, "snapshot", env=env)
+
+    finalized = store.record(pending.slot_id)
+    assert finalized is not None
+    assert finalized.consumed_at == now
+    assert finalized.claim_owner == ""

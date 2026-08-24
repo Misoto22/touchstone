@@ -19,6 +19,12 @@ class MemoryForge:
     def pull(self, number: int) -> PullState | None:
         return self.pulls.get(number)
 
+    def pull_for_branch(self, branch: str) -> PullState | None:
+        return next((pull for pull in self.pulls.values() if pull.branch == branch), None)
+
+    def branch_exists(self, branch: str) -> bool:
+        return any(pull.branch == branch for pull in self.pulls.values())
+
     def close(self, number: int, comment: str) -> OperationResult:
         self.closed.append(number)
         return OperationResult(True)
@@ -118,3 +124,60 @@ def test_github_lookup_failure_is_inconclusive_and_mutates_nothing(tmp_path: Pat
 
     assert report.inconclusive == (12,)
     assert ledger.projection(identifier).state == "awaiting_checks"  # type: ignore[union-attr]
+
+
+def test_reconcile_recovers_branch_only_partial_write_when_pull_exists(tmp_path: Path) -> None:
+    ledger = Ledger(tmp_path / "events.jsonl")
+    identifier = finding_id("code", "Partial publication")
+    ledger.append(
+        LifecycleEvent(
+            finding_id=identifier,
+            state="failed",
+            title="Partial publication",
+            loop="code",
+            risk="high",
+            branch="touchstone/run-1",
+            partial=True,
+        )
+    )
+    forge = MemoryForge()
+    forge.pulls[12] = _pull(draft=True)
+
+    report = RepositoryLifecycle(forge, ledger, reap_after_hours=6).reconcile(_loop(), NOW)
+
+    projection = ledger.projection(identifier)
+    assert report.partial_resolved == ("touchstone/run-1",)
+    assert projection is not None
+    assert projection.state == "awaiting_human"
+    assert projection.pr == 12
+    assert projection.partial is False
+
+
+def test_reconcile_keeps_partial_write_blocked_when_remote_lookup_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    from touchstone.forge import ForgeUnavailable
+
+    ledger = Ledger(tmp_path / "events.jsonl")
+    identifier = finding_id("code", "Partial publication")
+    ledger.append(
+        LifecycleEvent(
+            finding_id=identifier,
+            state="failed",
+            title="Partial publication",
+            loop="code",
+            branch="touchstone/run-1",
+            partial=True,
+        )
+    )
+
+    class UnavailableForge(MemoryForge):
+        def pull_for_branch(self, branch: str) -> PullState | None:
+            raise ForgeUnavailable("offline")
+
+    report = RepositoryLifecycle(UnavailableForge(), ledger, reap_after_hours=6).reconcile(
+        _loop(), NOW
+    )
+
+    assert report.partial_unresolved == ("touchstone/run-1",)
+    assert ledger.projection(identifier).partial is True  # type: ignore[union-attr]

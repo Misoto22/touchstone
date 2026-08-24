@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from touchstone.ledger import Ledger, LifecycleEvent, finding_id
+from touchstone.ledger import Ledger, LifecycleEvent, candidate_id, finding_id
 
 
 def _event(state: str, *, title: str = "Broken invariant") -> LifecycleEvent:
@@ -60,3 +60,12 @@ def test_projection_keeps_the_latest_event_for_each_finding(tmp_path: Path) -> N
     assert projection is not None
     assert projection.state == "awaiting_human"
     assert projection.head_sha == "abc123"
+
+
+def test_candidate_identity_binds_finding_base_patch_and_run() -> None:
+    stable = finding_id("code", "Broken invariant")
+    first = candidate_id(stable, "a" * 40, "sha256:" + "b" * 64, "run-1")
+
+    assert first == candidate_id(stable, "a" * 40, "sha256:" + "b" * 64, "run-1")
+    assert first != candidate_id(stable, "a" * 40, "sha256:" + "c" * 64, "run-1")
+    assert first != candidate_id(stable, "a" * 40, "sha256:" + "b" * 64, "run-2")

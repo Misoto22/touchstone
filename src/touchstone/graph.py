@@ -66,6 +66,7 @@ class LoopState(TypedDict, total=False):
     pr: int | None
     finding_id: str
     reviewed_head_sha: str
+    partial: bool
     cost: Annotated[list[float | None], lambda a, b: a + b]
     notes: Annotated[list[str], lambda a, b: a + b]
 

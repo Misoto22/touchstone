@@ -28,10 +28,10 @@ from touchstone.hosted.crypto import (
 from touchstone.hosted.snapshot import compatibility, config_digest, snapshot_state
 from touchstone.outcomes import ChangeState, RunOutcome, RunResult
 
-HostedStage = Literal["prepare", "analysis", "publish", "snapshot"]
+HostedStage = Literal["prepare", "analysis", "verify", "publish", "snapshot"]
 ResumeDecision = Literal["approve", "close", "reanalyze"]
 
-_STAGES = {"prepare", "analysis", "publish", "snapshot"}
+_STAGES = {"prepare", "analysis", "verify", "publish", "snapshot"}
 _DECISIONS = {"approve", "close", "reanalyze"}
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _BRANCH = re.compile(r"^touchstone/[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
@@ -78,6 +78,7 @@ class ResumeInput:
 class CandidateMetadata:
     repository: str
     loop: str
+    finding_id: str
     candidate_id: str
     run_id: str
     base_sha: str
@@ -90,7 +91,7 @@ class CandidateMetadata:
     escalation: str = ""
     resume_candidate_id: str = ""
     resume_decision: str = ""
-    version: int = 1
+    version: int = 2
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), sort_keys=True, separators=(",", ":"))
@@ -111,6 +112,7 @@ class CandidateMetadata:
         strings = (
             self.repository,
             self.loop,
+            self.finding_id,
             self.candidate_id,
             self.run_id,
             self.base_sha,
@@ -122,8 +124,10 @@ class CandidateMetadata:
         )
         if any(not isinstance(value, str) or not value for value in strings):
             raise CandidateIntegrityError("candidate metadata has missing string fields")
-        if self.version != 1:
+        if self.version != 2:
             raise CandidateIntegrityError("candidate metadata version is unsupported")
+        if not _IDENTIFIER.fullmatch(self.finding_id):
+            raise CandidateIntegrityError("finding ID is invalid")
         if not _IDENTIFIER.fullmatch(self.candidate_id):
             raise CandidateIntegrityError("candidate ID is invalid")
         if not _IDENTIFIER.fullmatch(self.run_id):
@@ -157,10 +161,57 @@ class CandidateMetadata:
 
 
 @dataclass(frozen=True, slots=True)
+class VerificationAttestation:
+    candidate_id: str
+    run_id: str
+    base_sha: str
+    patch_digest: str
+    config_digest: str
+    worktree: str
+    version: int = 1
+
+    def validate(self) -> None:
+        if self.version != 1:
+            raise CandidateIntegrityError("verification attestation version is unsupported")
+        if not _IDENTIFIER.fullmatch(self.candidate_id) or not _IDENTIFIER.fullmatch(self.run_id):
+            raise CandidateIntegrityError("verification attestation identity is invalid")
+        if not re.fullmatch(r"[0-9a-f]{40}", self.base_sha):
+            raise CandidateIntegrityError("verification attestation base SHA is invalid")
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", self.patch_digest):
+            raise CandidateIntegrityError("verification attestation patch digest is invalid")
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", self.config_digest):
+            raise CandidateIntegrityError("verification attestation config digest is invalid")
+        path = Path(self.worktree)
+        if not path.is_absolute() or ".." in path.parts:
+            raise CandidateIntegrityError("verification attestation worktree is invalid")
+
+    def write(self, path: Path) -> None:
+        self.validate()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(asdict(self), sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+
+    @classmethod
+    def read(cls, path: Path) -> VerificationAttestation:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                raise TypeError
+            attestation = cls(**payload)
+        except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+            raise CandidateIntegrityError("verification attestation is invalid") from exc
+        attestation.validate()
+        return attestation
+
+
+@dataclass(frozen=True, slots=True)
 class HostedOutputs:
     stage: HostedStage | str
     run_id: str
     outcome: str
+    loop: str = ""
     candidate_id: str = ""
     change_state: str = ""
     reason_code: str = ""
@@ -207,6 +258,7 @@ class HostedOutputs:
         values = {
             "run_id": self.run_id,
             "outcome": self.outcome,
+            "loop": self.loop,
             "candidate_id": self.candidate_id,
             "change_state": self.change_state,
             "reason_code": self.reason_code,
@@ -233,10 +285,14 @@ def validate_stage_environment(stage: str, env: Mapping[str, str]) -> None:
         prohibited = present & _PUBLISH_CREDENTIALS
         if prohibited:
             raise CandidateIntegrityError("analysis stage received a publishing credential")
-    elif stage == "publish":
+    elif stage in {"verify", "publish"}:
         prohibited = present & _MODEL_CREDENTIALS
         if prohibited:
-            raise CandidateIntegrityError("publish stage received a model credential")
+            raise CandidateIntegrityError(f"{stage} stage received a model credential")
+        if stage == "verify":
+            prohibited = present & _PUBLISH_CREDENTIALS
+            if prohibited:
+                raise CandidateIntegrityError("verify stage received a publishing credential")
     else:
         prohibited = present & (_MODEL_CREDENTIALS | _PUBLISH_CREDENTIALS | _WRITE_TOKENS)
         if prohibited:
@@ -250,6 +306,8 @@ def verify_candidate(
     key: bytes,
     destination: Path,
     expected_base: str,
+    expected_loop: str,
+    expected_lineage: str,
 ) -> CandidateMetadata:
     try:
         bundle = EncryptedBundle.from_json(bundle_path.read_text(encoding="utf-8"))
@@ -259,8 +317,8 @@ def verify_candidate(
     checked = compatibility(
         manifest,
         config,
-        loop=manifest.loop,
-        lineage=manifest.lineage,
+        loop=expected_loop,
+        lineage=expected_lineage,
     )
     if not checked.ok:
         raise CandidateIntegrityError(
@@ -308,6 +366,7 @@ def run_stage(
     handler = {
         "prepare": _prepare_stage,
         "analysis": _analysis_stage,
+        "verify": _verify_stage,
         "publish": _publish_stage,
         "snapshot": _snapshot_stage,
     }.get(stage)
@@ -390,9 +449,17 @@ def _analysis_stage(
         root / "prepare" / "state.bundle.json",
         key,
     )
+    from touchstone import runner as hosted_runner
+
+    hosted_runner._partial_write_gate(config)
     resume = ResumeInput.from_environment(env)
 
     if resume.candidate_id and resume.decision in {"approve", "close"}:
+        from touchstone.ledger import Ledger
+
+        projection = Ledger(Path(config.state_dir) / "ledger.jsonl").projection(resume.candidate_id)
+        if projection is None:
+            raise CandidateIntegrityError("resume candidate is absent from restored state")
         source = root / "prepare" / "candidate.bundle.json"
         _copy_envelope(source, directory / "candidate.bundle.json", lineage=resume.candidate_id)
         state = _write_state_bundle(
@@ -411,6 +478,7 @@ def _analysis_stage(
             stage="analysis",
             run_id=run_id,
             outcome="proposed",
+            loop=projection.loop,
             candidate_id=resume.candidate_id,
             change_state=ChangeState.AWAITING_HUMAN.value,
             clean_start_reason=clean_start,
@@ -480,6 +548,7 @@ def _analysis_stage(
             stage="analysis",
             run_id=run_id,
             outcome=result.outcome.value,
+            loop=selected.slot.loop_id,
             reason_code=result.reason_code,
             clean_start_reason=clean_start,
         )
@@ -504,11 +573,11 @@ def _analysis_stage(
             retryable=True,
         )
         candidate = None
-    store.finish(
-        claimed.claim,
-        result,
+    _write_pending_finalization(
+        directory / "pending-finalization.json",
+        claim=claimed.claim,
+        result=result,
         now=current,
-        snapshot=f"github:{run_id}",
     )
     _write_state_bundle(
         config,
@@ -522,6 +591,7 @@ def _analysis_stage(
         stage="analysis",
         run_id=run_id,
         outcome=outcome,
+        loop=selected.slot.loop_id,
         candidate_id=candidate.candidate_id if candidate else "",
         change_state=result.lifecycle.value if result.lifecycle else "",
         reason_code=result.reason_code,
@@ -542,7 +612,7 @@ def _analyze_loop(
     destination: Path,
     resume: ResumeInput,
 ) -> tuple[RunResult, CandidateMetadata | None]:
-    from touchstone.ledger import finding_id
+    from touchstone.ledger import candidate_id, finding_id
     from touchstone.nodes import audit, classify, review
     from touchstone.nodes.context import configure
     from touchstone.validation import prepare, validate
@@ -632,19 +702,22 @@ def _analyze_loop(
             for key, value in state.get("finding", {}).items()
             if key in {"title", "summary", "rationale", "commit_subject"} and isinstance(value, str)
         }
-        identifier = finding_id(loop, finding.get("title", "Touchstone finding"))
-        branch = f"touchstone/{identifier}-{run_id[:8]}"
+        stable_finding_id = finding_id(loop, finding.get("title", "Touchstone finding"))
         with tempfile.TemporaryDirectory(prefix="touchstone-candidate-") as temporary:
             candidate_root = Path(temporary)
             patch_path = candidate_root / "candidate.patch"
             patch_path.write_text(patch_result.stdout, encoding="utf-8")
+            patch_digest = f"sha256:{hashlib.sha256(patch_path.read_bytes()).hexdigest()}"
+            identifier = candidate_id(stable_finding_id, base_sha, patch_digest, run_id)
+            branch = f"touchstone/{stable_finding_id[:8]}-{identifier[:16]}"
             metadata = CandidateMetadata(
                 repository=config.forge.slug,
                 loop=loop,
+                finding_id=stable_finding_id,
                 candidate_id=identifier,
                 run_id=run_id,
                 base_sha=base_sha,
-                patch_digest=(f"sha256:{hashlib.sha256(patch_path.read_bytes()).hexdigest()}"),
+                patch_digest=patch_digest,
                 branch=branch,
                 finding=finding,
                 risk=str(state.get("risk") or "high"),
@@ -684,6 +757,97 @@ def _analyze_loop(
         _remove_worktree(config, worktree)
 
 
+def _verify_stage(
+    config: Config,
+    root: Path,
+    run_id: str,
+    env: Mapping[str, str],
+) -> HostedOutputs:
+    from touchstone import runner
+    from touchstone.nodes.context import configure
+
+    directory = _fresh_directory(root, "verified")
+    key = _state_key(env)
+    clean_start = _restore_state_bundle(
+        config,
+        root / "candidate" / "analysis-state.bundle.json",
+        key,
+    )
+    if clean_start:
+        raise CandidateIntegrityError(
+            f"verification cannot continue without exact analysis state: {clean_start}"
+        )
+    resume = ResumeInput.from_environment(env)
+    context = configure(config)
+
+    if resume.candidate_id and resume.decision in {"approve", "close"}:
+        projection = context.ledger.projection(resume.candidate_id)
+        if projection is None or projection.pr is None or not projection.head_sha:
+            raise CandidateIntegrityError("resume candidate is not a parked publication")
+        if resume.decision == "approve":
+            runner._health_gate(config)
+            runner._publication_gate(config, config.loop(projection.loop))
+        (directory / "resume.json").write_text(
+            json.dumps(
+                {
+                    "candidate_id": resume.candidate_id,
+                    "decision": resume.decision,
+                    "config_digest": config_digest(config),
+                    "run_id": run_id,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        output = HostedOutputs(
+            stage="verify",
+            run_id=run_id,
+            outcome="completed",
+            candidate_id=resume.candidate_id,
+            change_state=ChangeState.AWAITING_HUMAN.value,
+            should_run=True,
+        )
+        output.write(directory / "result.json", env=env)
+        return output
+
+    expected_base = _git_head(config.repo_path)
+    expected_loop, expected_lineage = _expected_candidate_identity(env)
+    candidate_path = root / "candidate" / "candidate.bundle.json"
+    with tempfile.TemporaryDirectory(prefix="touchstone-verify-") as temporary:
+        restored = Path(temporary)
+        metadata = verify_candidate(
+            config,
+            candidate_path,
+            key=key,
+            destination=restored,
+            expected_base=expected_base,
+            expected_loop=expected_loop,
+            expected_lineage=expected_lineage,
+        )
+        worktree = _prepare_verified_worktree(config, metadata, restored / "candidate.patch")
+    VerificationAttestation(
+        candidate_id=metadata.candidate_id,
+        run_id=metadata.run_id,
+        base_sha=metadata.base_sha,
+        patch_digest=metadata.patch_digest,
+        config_digest=config_digest(config),
+        worktree=str(worktree),
+    ).write(directory / "verified.json")
+    output = HostedOutputs(
+        stage="verify",
+        run_id=run_id,
+        outcome="completed",
+        loop=metadata.loop,
+        candidate_id=metadata.candidate_id,
+        change_state=ChangeState.PROPOSED.value,
+        should_run=True,
+    )
+    output.write(directory / "result.json", env=env)
+    return output
+
+
 def _publish_stage(
     config: Config,
     root: Path,
@@ -706,6 +870,14 @@ def _publish_stage(
     context = configure(config)
 
     if resume.candidate_id and resume.decision in {"approve", "close"}:
+        verified_resume = _read_json_object(root / "verified" / "resume.json")
+        if verified_resume != {
+            "candidate_id": resume.candidate_id,
+            "decision": resume.decision,
+            "config_digest": config_digest(config),
+            "run_id": run_id,
+        }:
+            raise CandidateIntegrityError("resume decision lacks an exact verification attestation")
         projection = context.ledger.projection(resume.candidate_id)
         if projection is None or projection.pr is None or not projection.head_sha:
             raise CandidateIntegrityError("resume candidate is not a parked publication")
@@ -749,6 +921,7 @@ def _publish_stage(
             )
     else:
         expected_base = _git_head(config.repo_path)
+        expected_loop, expected_lineage = _expected_candidate_identity(env)
         candidate_path = root / "candidate" / "candidate.bundle.json"
         with tempfile.TemporaryDirectory(prefix="touchstone-publish-") as temporary:
             restored = Path(temporary)
@@ -758,7 +931,23 @@ def _publish_stage(
                 key=key,
                 destination=restored,
                 expected_base=expected_base,
+                expected_loop=expected_loop,
+                expected_lineage=expected_lineage,
             )
+            attestation = VerificationAttestation.read(root / "verified" / "verified.json")
+            expected_worktree = (Path(config.state_dir) / "publish-worktree").resolve()
+            if (
+                attestation.candidate_id != metadata.candidate_id
+                or attestation.run_id != metadata.run_id
+                or attestation.base_sha != metadata.base_sha
+                or attestation.patch_digest != metadata.patch_digest
+                or attestation.config_digest != config_digest(config)
+                or Path(attestation.worktree).resolve() != expected_worktree
+            ):
+                raise CandidateIntegrityError(
+                    "verification attestation does not match the candidate"
+                )
+            _verify_staged_worktree(config, metadata, expected_worktree)
             if metadata.resume_candidate_id and metadata.resume_decision == "reanalyze":
                 previous = Ledger(Path(config.state_dir) / "ledger.jsonl").projection(
                     metadata.resume_candidate_id
@@ -784,7 +973,7 @@ def _publish_stage(
                     raise CandidateIntegrityError(
                         "could not close the prior candidate for reanalysis"
                     )
-            result = _publish_candidate(config, metadata, restored / "candidate.patch")
+            result = _publish_verified_candidate(config, metadata, expected_worktree)
 
     _write_state_bundle(
         config,
@@ -797,6 +986,7 @@ def _publish_stage(
         stage="publish",
         run_id=run_id,
         outcome=result.outcome.value,
+        loop=env.get("TOUCHSTONE_EXPECTED_LOOP", "").strip(),
         candidate_id=result.candidate_id or resume.candidate_id,
         change_state=result.lifecycle.value if result.lifecycle else "",
         reason_code=result.reason_code,
@@ -807,18 +997,18 @@ def _publish_stage(
     return output
 
 
-def _publish_candidate(
+def _prepare_verified_worktree(
     config: Config,
     metadata: CandidateMetadata,
     patch: Path,
-) -> RunResult:
+) -> Path:
     from touchstone import runner
-    from touchstone.nodes import publish
     from touchstone.nodes.context import configure
+    from touchstone.validation import validate
 
     context = configure(config)
-    worktree = Path(config.state_dir) / "publish-worktree"
-    _remove_worktree(config, worktree)
+    worktree = (Path(config.state_dir) / "publish-worktree").resolve()
+    _remove_worktree(config, worktree, delete_branch=True, branch=metadata.branch)
     added = context.executor.run(
         [
             "git",
@@ -834,17 +1024,69 @@ def _publish_candidate(
         timeout=180,
     )
     if not added.ok:
-        return RunResult(RunOutcome.BLOCKED, reason_code="publish-worktree")
-    published = False
+        raise CandidateIntegrityError("could not create the verified publication worktree")
     try:
         applied = context.executor.run(
-            ["git", "-C", str(worktree), "apply", "--binary", str(patch)],
+            ["git", "-C", str(worktree), "apply", "--index", "--binary", str(patch)],
             timeout=180,
         )
         if not applied.ok:
-            return RunResult(RunOutcome.BLOCKED, reason_code="candidate-apply")
+            raise CandidateIntegrityError("could not apply and stage the candidate patch")
         runner._health_gate(config)
         runner._publication_gate(config, config.loop(metadata.loop))
+        validation = validate(
+            config,
+            config.loop(metadata.loop).targets,
+            context.executor,
+            repository=worktree,
+        )
+        if validation.blocked:
+            raise CandidateIntegrityError("candidate failed credential-free publication validation")
+        _verify_staged_worktree(config, metadata, worktree)
+        return worktree
+    except Exception:
+        _remove_worktree(
+            config,
+            worktree,
+            delete_branch=True,
+            branch=metadata.branch,
+        )
+        raise
+
+
+def _verify_staged_worktree(
+    config: Config,
+    metadata: CandidateMetadata,
+    worktree: Path,
+) -> None:
+    from touchstone.nodes.context import configure
+
+    if not worktree.is_dir():
+        raise CandidateIntegrityError("verified publication worktree is unavailable")
+    context = configure(config)
+    base = context.executor.run(["git", "-C", str(worktree), "rev-parse", "HEAD"], timeout=60)
+    if not base.ok or base.stdout.strip() != metadata.base_sha:
+        raise CandidateIntegrityError("verified publication base changed")
+    patch = context.executor.run(
+        ["git", "-C", str(worktree), "diff", "--cached", "--binary", "--full-index", "HEAD"],
+        timeout=180,
+    )
+    digest = f"sha256:{hashlib.sha256(patch.stdout.encode()).hexdigest()}"
+    if not patch.ok or digest != metadata.patch_digest:
+        raise CandidateIntegrityError("verified staged patch changed after validation")
+
+
+def _publish_verified_candidate(
+    config: Config,
+    metadata: CandidateMetadata,
+    worktree: Path,
+) -> RunResult:
+    from touchstone.nodes import publish
+    from touchstone.nodes.context import configure
+
+    configure(config)
+    published = False
+    try:
         state: dict[str, Any] = {
             "loop": metadata.loop,
             "worktree": str(worktree),
@@ -855,8 +1097,9 @@ def _publish_candidate(
             "verdict": metadata.verdict,
             "verdict_reason": metadata.verdict_reason,
             "escalation": metadata.escalation,
+            "pre_staged": True,
         }
-        payload = publish._publish(state)
+        payload = publish._publish_verified(state)
         legacy = str(payload.get("outcome") or "failed")
         lifecycle = {
             "awaiting_human": ChangeState.AWAITING_HUMAN,
@@ -869,7 +1112,8 @@ def _publish_candidate(
             if legacy == "blocked"
             else RunOutcome.FAILED
         )
-        published = lifecycle is not None or payload.get("pr") is not None
+        partial = payload.get("partial") is True
+        published = lifecycle is not None or partial
         return RunResult(
             outcome,
             lifecycle=lifecycle,
@@ -877,15 +1121,8 @@ def _publish_candidate(
             detail="; ".join(str(note) for note in payload.get("notes", [])),
             pr_number=int(payload["pr"]) if payload.get("pr") is not None else None,
             candidate_id=metadata.candidate_id,
-            partial=published and outcome != RunOutcome.COMPLETED,
+            partial=partial,
             retryable=outcome == RunOutcome.FAILED and not published,
-        )
-    except runner.Held as held:
-        return RunResult(
-            RunOutcome.BLOCKED,
-            reason_code="safety-gate",
-            detail=str(held),
-            candidate_id=metadata.candidate_id,
         )
     finally:
         _remove_worktree(config, worktree, delete_branch=not published, branch=metadata.branch)
@@ -908,20 +1145,47 @@ def _snapshot_stage(
     )
     source = next((path for path in candidates if path.is_file()), None)
     if source is None:
+        final_result = RunResult(RunOutcome.NO_CHANGE, reason_code="clean-start")
         _write_state_bundle(
             config,
             directory / "state.bundle.json",
             key=key,
             run_id=run_id,
-            result=RunResult(RunOutcome.NO_CHANGE, reason_code="clean-start"),
+            result=final_result,
         )
         clean_start = "no-stage-state"
     else:
-        with tempfile.TemporaryDirectory(prefix="touchstone-snapshot-verify-") as temporary:
-            reason = _restore_state_bundle(config, source, key, destination=Path(temporary))
-            if reason:
-                raise CandidateIntegrityError(f"snapshot input is incompatible: {reason}")
-        _copy_envelope(source, directory / "state.bundle.json")
+        reason = _restore_state_bundle(config, source, key)
+        if reason:
+            raise CandidateIntegrityError(f"snapshot input is incompatible: {reason}")
+        pending_candidates = [
+            *sorted(inputs.rglob("pending-finalization.json"), reverse=True),
+            root / "candidate" / "pending-finalization.json",
+        ]
+        pending_path = next((path for path in pending_candidates if path.is_file()), None)
+        if pending_path is not None:
+            claim, analysis_result, analyzed_at = _read_pending_finalization(pending_path)
+            final_result = _hosted_final_result(env, analysis_result)
+            from touchstone.scheduling.store import DueStore
+
+            DueStore(Path(config.state_dir) / "due.sqlite").finish(
+                claim,
+                final_result,
+                now=analyzed_at,
+                snapshot=f"github:{run_id}",
+            )
+        else:
+            final_result = _hosted_final_result(
+                env,
+                RunResult(RunOutcome.NO_CHANGE, reason_code="no-pending-slot"),
+            )
+        _write_state_bundle(
+            config,
+            directory / "state.bundle.json",
+            key=key,
+            run_id=run_id,
+            result=final_result,
+        )
         clean_start = ""
     output = HostedOutputs(
         stage="snapshot",
@@ -932,6 +1196,117 @@ def _snapshot_stage(
     )
     output.write(directory / "result.json", env=env)
     return output
+
+
+def _write_pending_finalization(
+    path: Path,
+    *,
+    claim: Any,
+    result: RunResult,
+    now: Any,
+) -> None:
+    payload = {
+        "version": 1,
+        "claim": {
+            "slot_id": claim.slot_id,
+            "owner": claim.owner,
+            "expires_at": claim.expires_at.isoformat(),
+            "attempt": claim.attempt,
+        },
+        "result": result.to_dict(),
+        "analyzed_at": now.isoformat(),
+    }
+    path.write_text(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _read_pending_finalization(path: Path) -> tuple[Any, RunResult, Any]:
+    import datetime as dt
+
+    from touchstone.scheduling.store import DurableClaim
+
+    payload = _read_json_object(path)
+    try:
+        if payload.get("version") != 1:
+            raise ValueError
+        claim_raw = payload["claim"]
+        result_raw = payload["result"]
+        claim = DurableClaim(
+            slot_id=str(claim_raw["slot_id"]),
+            owner=str(claim_raw["owner"]),
+            expires_at=dt.datetime.fromisoformat(str(claim_raw["expires_at"])),
+            attempt=int(claim_raw["attempt"]),
+        )
+        analyzed_at = dt.datetime.fromisoformat(str(payload["analyzed_at"]))
+        result = _run_result_from_dict(result_raw)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise CandidateIntegrityError("pending Due Slot finalization is invalid") from exc
+    if analyzed_at.tzinfo is None or claim.expires_at.tzinfo is None:
+        raise CandidateIntegrityError("pending Due Slot timestamps must be aware")
+    return claim, result, analyzed_at
+
+
+def _run_result_from_dict(payload: Any) -> RunResult:
+    if not isinstance(payload, dict) or payload.get("version") != 1:
+        raise CandidateIntegrityError("pending run result is invalid")
+    try:
+        outcome = RunOutcome(str(payload["outcome"]))
+        lifecycle_raw = payload.get("lifecycle")
+        lifecycle = ChangeState(str(lifecycle_raw)) if lifecycle_raw else None
+        pr_raw = payload.get("pr_number")
+        return RunResult(
+            outcome,
+            lifecycle=lifecycle,
+            reason_code=str(payload.get("reason_code", "")),
+            detail=str(payload.get("detail", "")),
+            pr_url=str(payload.get("pr_url", "")),
+            pr_number=int(pr_raw) if pr_raw is not None else None,
+            candidate_id=str(payload.get("candidate_id", "")),
+            partial=payload.get("partial") is True,
+            retryable=payload.get("retryable") is True,
+        )
+    except (TypeError, ValueError) as exc:
+        raise CandidateIntegrityError("pending run result is invalid") from exc
+
+
+def _hosted_final_result(env: Mapping[str, str], analysis: RunResult) -> RunResult:
+    job = env.get("TOUCHSTONE_PUBLISH_JOB_RESULT", "").strip()
+    if job in {"failure", "cancelled"}:
+        return RunResult(
+            RunOutcome.FAILED,
+            reason_code=f"hosted-publish-{job}",
+            candidate_id=analysis.candidate_id,
+            retryable=True,
+        )
+    raw_outcome = env.get("TOUCHSTONE_FINAL_OUTCOME", "").strip()
+    if not raw_outcome:
+        return analysis
+    try:
+        outcome = RunOutcome(raw_outcome)
+    except ValueError:
+        return RunResult(
+            RunOutcome.FAILED,
+            reason_code="hosted-final-outcome",
+            candidate_id=analysis.candidate_id,
+            retryable=True,
+        )
+    lifecycle_raw = env.get("TOUCHSTONE_FINAL_CHANGE_STATE", "").strip()
+    try:
+        lifecycle = ChangeState(lifecycle_raw) if lifecycle_raw else analysis.lifecycle
+    except ValueError:
+        lifecycle = ChangeState.FAILED
+    return RunResult(
+        outcome,
+        lifecycle=lifecycle,
+        reason_code=env.get("TOUCHSTONE_FINAL_REASON_CODE", "").strip(),
+        candidate_id=(
+            env.get("TOUCHSTONE_FINAL_CANDIDATE_ID", "").strip() or analysis.candidate_id
+        ),
+        partial=env.get("TOUCHSTONE_FINAL_PARTIAL", "").lower() == "true",
+        retryable=outcome == RunOutcome.FAILED,
+    )
 
 
 def _write_state_bundle(
@@ -972,7 +1347,7 @@ def _restore_state_bundle(
         bundle.manifest,
         config,
         loop="__repository__",
-        lineage=bundle.manifest.lineage,
+        lineage=None,
     )
     if not checked.ok:
         return checked.clean_start_reason
@@ -996,6 +1371,26 @@ def _copy_envelope(source: Path, destination: Path, *, lineage: str = "") -> Non
         raise CandidateIntegrityError("encrypted artifact lineage does not match")
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(raw, encoding="utf-8")
+
+
+def _read_json_object(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CandidateIntegrityError("verified hosted contract is unavailable") from exc
+    if not isinstance(payload, dict):
+        raise CandidateIntegrityError("verified hosted contract is invalid")
+    return payload
+
+
+def _expected_candidate_identity(env: Mapping[str, str]) -> tuple[str, str]:
+    loop = env.get("TOUCHSTONE_EXPECTED_LOOP", "").strip()
+    lineage = env.get("TOUCHSTONE_EXPECTED_CANDIDATE_ID", "").strip()
+    if not loop or not _IDENTIFIER.fullmatch(loop):
+        raise CandidateIntegrityError("expected candidate loop is missing or invalid")
+    if not lineage or not _IDENTIFIER.fullmatch(lineage):
+        raise CandidateIntegrityError("expected candidate lineage is missing or invalid")
+    return loop, lineage
 
 
 def _download_artifact_file(

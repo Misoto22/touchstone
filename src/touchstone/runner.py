@@ -75,6 +75,8 @@ def _gates(config: Config, loop_name: str, *, dry_run: bool) -> None:
     if paused.exists():
         raise Held(f"paused: {paused.read_text().strip()}")
 
+    _partial_write_gate(config)
+
     if dry_run:
         # Everything below is about publishing, and a rehearsal publishes
         # nothing. Both gates were checked first once, and the effect was that
@@ -94,6 +96,21 @@ def _gates(config: Config, loop_name: str, *, dry_run: bool) -> None:
 
     _health_gate(config)
     _publication_gate(config, loop)
+
+
+def _partial_write_gate(config: Config) -> None:
+    from touchstone.ledger import Ledger
+
+    unresolved = [
+        projection
+        for projection in Ledger(Path(config.state_dir) / "ledger.jsonl").projections().values()
+        if projection.partial and projection.state == ChangeState.FAILED
+    ]
+    if unresolved:
+        identity = unresolved[0].branch or unresolved[0].finding_id
+        raise Held(
+            f"partial remote publication requires reconciliation before new analysis: {identity}"
+        )
 
 
 def _health_gate(config: Config) -> None:
@@ -312,6 +329,8 @@ def resume(config: Config, *, thread: str, answer: str) -> int:
         print(held)
         return 0
 
+    reanalysis_loop = ""
+    result_code = 0
     try:
         with SqliteSaver.from_conn_string(str(state_dir / "checkpoints.sqlite")) as saver:
             app = build().compile(checkpointer=saver)
@@ -331,12 +350,17 @@ def resume(config: Config, *, thread: str, answer: str) -> int:
         print(f"{thread}: {final.get('outcome', 'unknown')}")
         for note in final.get("notes", []):
             print(f"  {note}")
-        return 0
+        if final.get("outcome") == "reanalyze":
+            reanalysis_loop = loop_name
     except Held as held:
         print(held)
-        return 3
+        result_code = 3
     finally:
         shutil.rmtree(lock, ignore_errors=True)
+    if reanalysis_loop:
+        print(f"{thread}: starting fresh analysis from the current default branch")
+        return execute(config, loop=reanalysis_loop)
+    return result_code
 
 
 @dataclass(frozen=True, slots=True)

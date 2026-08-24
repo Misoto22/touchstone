@@ -11,14 +11,16 @@ from touchstone.config import ConfigError
 from touchstone.hosted.workflow import ActionPins, actions_diff, render_workflow
 
 
-def _config(tmp_path: Path, *, visibility: str = "public"):  # type: ignore[no-untyped-def]
+def _config(tmp_path: Path, *, visibility: str = "public", wake_minutes: int | None = None):  # type: ignore[no-untyped-def]
     return SimpleNamespace(
         repo_path=tmp_path,
         forge=SimpleNamespace(default_branch="main"),
         engine=SimpleNamespace(name="codex"),
         actions=SimpleNamespace(
             visibility=visibility,
-            wake_minutes=15 if visibility == "public" else 60,
+            wake_minutes=(15 if visibility == "public" else 60)
+            if wake_minutes is None
+            else wake_minutes,
             artifact_retention_days=90,
             node_version="24",
             approval_environment="",
@@ -48,6 +50,56 @@ def test_generated_workflow_exposes_split_trust_boundaries(tmp_path: Path) -> No
     assert "retention-days: 90" in text
 
 
+def test_credentials_are_action_inputs_not_install_step_environment(tmp_path: Path) -> None:
+    text = render_workflow(_config(tmp_path), ActionPins(), action_sha="a" * 40)
+    analysis = text.split("  analysis:", 1)[1].split("  publish:", 1)[0]
+
+    assert "openai-api-key: ${{ secrets.OPENAI_API_KEY }}" in analysis
+    assert "state-key: ${{ secrets.TOUCHSTONE_STATE_KEY }}" in analysis
+    assert "env:\n          OPENAI_API_KEY:" not in analysis
+
+
+def test_publish_verifies_without_write_token_before_minting_scoped_token(
+    tmp_path: Path,
+) -> None:
+    text = render_workflow(_config(tmp_path), ActionPins(), action_sha="a" * 40)
+    publish = text.split("  publish:", 1)[1].split("  snapshot:", 1)[0]
+
+    verify_at = publish.index("stage: verify")
+    token_at = publish.index("id: app-token")
+    publish_at = publish.index("stage: publish")
+    assert verify_at < token_at < publish_at
+    assert "persist-credentials: false" in publish
+    assert "\n          token: ${{ steps.app-token.outputs.token }}" not in publish
+    assert "repositories: ${{ github.event.repository.name }}" in publish
+    assert publish.count("expected-loop: ${{ needs.analysis.outputs.loop }}") == 2
+    assert publish.count("candidate-id: ${{ needs.analysis.outputs.candidate_id }}") == 2
+
+
+def test_analysis_exports_independently_expected_candidate_identity(tmp_path: Path) -> None:
+    text = render_workflow(_config(tmp_path), ActionPins(), action_sha="a" * 40)
+    analysis = text.split("  analysis:", 1)[1].split("  publish:", 1)[0]
+
+    assert "loop: ${{ steps.touchstone.outputs.loop }}" in analysis
+    assert "candidate_id: ${{ steps.touchstone.outputs.candidate_id }}" in analysis
+
+
+def test_snapshot_receives_final_stage_contract_for_due_slot_finalization(
+    tmp_path: Path,
+) -> None:
+    text = render_workflow(_config(tmp_path), ActionPins(), action_sha="a" * 40)
+    snapshot = text.split("  snapshot:", 1)[1]
+
+    assert "publish-job-result: ${{ needs.publish.result }}" in snapshot
+    assert (
+        "final-outcome: ${{ needs.publish.outputs.outcome || needs.analysis.outputs.outcome }}"
+        in snapshot
+    )
+    assert "final-candidate-id:" in snapshot
+    assert "final-change-state:" in snapshot
+    assert "final-partial:" in snapshot
+
+
 def test_every_action_reference_is_an_immutable_sha(tmp_path: Path) -> None:
     text = render_workflow(_config(tmp_path), ActionPins(), action_sha="b" * 40)
 
@@ -65,6 +117,24 @@ def test_public_and_private_wake_cadence_are_off_hour(tmp_path: Path) -> None:
 
     assert "cron: '7,22,37,52 * * * *'" in public
     assert "cron: '17 * * * *'" in private
+
+
+def test_supported_custom_wake_cadence_is_rendered_without_visibility_coupling(
+    tmp_path: Path,
+) -> None:
+    public = render_workflow(
+        _config(tmp_path, visibility="public", wake_minutes=30),
+        ActionPins(),
+        action_sha="a" * 40,
+    )
+    private = render_workflow(
+        _config(tmp_path, visibility="private", wake_minutes=15),
+        ActionPins(),
+        action_sha="a" * 40,
+    )
+
+    assert "cron: '7,37 * * * *'" in public
+    assert "cron: '7,22,37,52 * * * *'" in private
 
 
 def test_actions_diff_is_read_only_and_reports_drift(tmp_path: Path) -> None:

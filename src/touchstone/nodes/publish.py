@@ -37,48 +37,60 @@ def _request(state: dict[str, Any], context: Any) -> PublicationRequest:
         escalation=state.get("escalation", ""),
         author_name=context.config.git.author_name,
         author_email=context.config.git.author_email,
+        pre_staged=bool(state.get("pre_staged", False)),
     )
 
 
-def _publish(state: dict[str, Any]) -> dict[str, Any]:
+def _publish(state: dict[str, Any], *, validation_required: bool = True) -> dict[str, Any]:
     context = current()
-    from touchstone.validation import validate
+    if validation_required:
+        from touchstone.validation import validate
 
-    loop = context.loop(state["loop"])
-    validation = validate(
-        context.config,
-        loop.targets,
-        context.executor,
-        repository=Path(state["worktree"]),
-    )
-    if validation.blocked:
-        details = [
-            f"{' '.join(result.argv)}: {result.reason}"
-            for result in validation.results
-            if not result.ok
-        ]
-        return {
-            "outcome": "blocked",
-            "pr": None,
-            "notes": ["Validation blocked publication: " + "; ".join(details)],
-        }
+        loop = context.loop(state["loop"])
+        validation = validate(
+            context.config,
+            loop.targets,
+            context.executor,
+            repository=Path(state["worktree"]),
+        )
+        if validation.blocked:
+            details = [
+                f"{' '.join(result.argv)}: {result.reason}"
+                for result in validation.results
+                if not result.ok
+            ]
+            return {
+                "outcome": "blocked",
+                "pr": None,
+                "notes": ["Validation blocked publication: " + "; ".join(details)],
+            }
     lifecycle = RepositoryLifecycle(
         context.forge,
         context.ledger,
         reap_after_hours=context.config.forge.reap_after_hours,
         executor=context.executor,
     )
-    result = lifecycle.publish(_request(state, context))
-    outcome = result.outcome
+    return _publication_payload(lifecycle.publish(_request(state, context)))
+
+
+def _publication_payload(result: Any) -> dict[str, Any]:
     payload: dict[str, Any] = {
-        "outcome": outcome,
+        "outcome": result.outcome,
         "pr": result.pr,
         "finding_id": result.finding_id,
         "reviewed_head_sha": result.head_sha,
+        "partial": result.partial,
+        "branch": result.branch,
     }
     if result.outcome == "failed" and result.detail:
         payload["notes"] = [result.detail]
     return payload
+
+
+def _publish_verified(state: dict[str, Any]) -> dict[str, Any]:
+    """Mutate the forge only after a credential-free stage validated and staged the patch."""
+
+    return _publish(state, validation_required=False)
 
 
 def merge(state: dict[str, Any]) -> dict[str, Any]:
@@ -127,6 +139,7 @@ def _resume(state: dict[str, Any], decision: str) -> dict[str, Any]:
             pr=int(number),
             decision=decision,
             reviewed_head_sha=str(reviewed_head),
+            lineage=str(identifier),
         )
     )
     outcome = result.outcome
@@ -145,6 +158,33 @@ def rehearse(state: dict[str, Any], *, would: str) -> dict[str, Any]:
     """
     context = current()
     worktree = state["worktree"]
+    loop = context.config.loop(state["loop"])
+    from touchstone.validation import prepare, validate
+
+    preparation = prepare(
+        context.config,
+        loop.targets,
+        context.executor,
+        repository=Path(worktree),
+    )
+    if preparation.outcome == "blocked":
+        return {
+            "outcome": "blocked",
+            "pr": None,
+            "notes": ["Dry-run preparation blocked candidate validation."],
+        }
+    validation = validate(
+        context.config,
+        loop.targets,
+        context.executor,
+        repository=Path(worktree),
+    )
+    if validation.blocked:
+        return {
+            "outcome": "blocked",
+            "pr": None,
+            "notes": ["Dry-run candidate failed configured Validation Gates."],
+        }
     base = f"origin/{context.config.forge.default_branch}"
 
     diff = context.executor.run(["git", "-C", worktree, "diff", base], timeout=180).stdout

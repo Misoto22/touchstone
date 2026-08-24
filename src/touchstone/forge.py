@@ -246,6 +246,16 @@ class Forge:
             raise ForgeUnavailable("existing pull request response is malformed")
         return pull
 
+    def branch_exists(self, branch: str) -> bool | None:
+        endpoint = f"repos/{self._slug}/git/ref/heads/{quote(branch, safe='')}"
+        result = self._exec.run(["gh", "api", endpoint, "--silent"], timeout=120)
+        if result.ok:
+            return True
+        detail = (result.stderr or result.stdout).lower()
+        if "404" in detail or "not found" in detail:
+            return False
+        return None
+
     def arm_auto_merge(self, number: int) -> OperationResult:
         ok, detail = self._gh(["pr", "merge", str(number), "--auto", "--squash", "--delete-branch"])
         return OperationResult(ok, "" if ok else detail)

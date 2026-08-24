@@ -40,6 +40,8 @@ class LifecycleForge(Protocol):
 
     def close(self, number: int, comment: str) -> OperationResult: ...
 
+    def branch_exists(self, branch: str) -> bool | None: ...
+
 
 @dataclass(frozen=True, slots=True)
 class ReconcileReport:
@@ -48,6 +50,8 @@ class ReconcileReport:
     failed: tuple[int, ...] = ()
     reaped: tuple[int, ...] = ()
     inconclusive: tuple[int, ...] = ()
+    partial_resolved: tuple[str, ...] = ()
+    partial_unresolved: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +73,7 @@ class PublicationRequest:
     escalation: str = ""
     author_name: str | None = None
     author_email: str | None = None
+    pre_staged: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,6 +127,12 @@ class RepositoryLifecycle:
                 "held",
                 request.pr,
                 f"the finding is {projection.state}, not the parked pull request #{request.pr}",
+            )
+        if not request.lineage or request.lineage != projection.finding_id:
+            return ResumeResult(
+                "held",
+                request.pr,
+                "the resume lineage does not match the exact parked candidate",
             )
 
         pull = self._forge.pull(request.pr)
@@ -196,8 +207,22 @@ class RepositoryLifecycle:
         head = self._git(request.worktree, ["rev-parse", "HEAD"])
         if not head:
             detail = "could not resolve the published commit"
-            self._record(request, "proposed", detail=detail)
-            return PublicationResult("failed", request.finding_id, None, None, detail)
+            self._record(
+                request,
+                "failed",
+                branch=request.branch,
+                partial=True,
+                detail=detail,
+            )
+            return PublicationResult(
+                "failed",
+                request.finding_id,
+                None,
+                None,
+                detail,
+                partial=True,
+                branch=request.branch,
+            )
 
         park = request.risk != "low" or request.verdict != "approve"
         try:
@@ -311,9 +336,53 @@ class RepositoryLifecycle:
         failed: list[int] = []
         reaped: list[int] = []
         inconclusive: list[int] = []
+        partial_resolved: list[str] = []
+        partial_unresolved: list[str] = []
 
         for projection in self._ledger.projections().values():
             if projection.loop not in {loop.name, "legacy"}:
+                continue
+            if projection.partial and projection.state == ChangeState.FAILED:
+                try:
+                    pull = (
+                        self._forge.pull(projection.pr)
+                        if projection.pr is not None
+                        else self._forge.pull_for_branch(projection.branch)
+                        if projection.branch
+                        else None
+                    )
+                except ForgeUnavailable:
+                    partial_unresolved.append(projection.branch or projection.finding_id)
+                    continue
+                if pull is not None:
+                    self._ledger.append(
+                        LifecycleEvent(
+                            finding_id=projection.finding_id,
+                            state=(
+                                ChangeState.AWAITING_HUMAN
+                                if pull.draft
+                                else ChangeState.AWAITING_CHECKS
+                            ),
+                            title=projection.title,
+                            loop=projection.loop,
+                            risk=projection.risk,
+                            pr=pull.number,
+                            head_sha=pull.head_sha,
+                            detail="reconciled a partial remote publication",
+                            branch=pull.branch,
+                        )
+                    )
+                    partial_resolved.append(projection.branch or str(pull.number))
+                    continue
+                if projection.branch and self._forge.branch_exists(projection.branch) is False:
+                    self._transition(
+                        projection,
+                        "closed",
+                        "the partial remote branch no longer exists",
+                    )
+                    partial_resolved.append(projection.branch)
+                else:
+                    partial_unresolved.append(projection.branch or projection.finding_id)
                 continue
             if (
                 projection.state
@@ -362,6 +431,8 @@ class RepositoryLifecycle:
             tuple(failed),
             tuple(reaped),
             tuple(inconclusive),
+            tuple(partial_resolved),
+            tuple(partial_unresolved),
         )
 
     def _transition(self, projection: FindingProjection, state: str, detail: str) -> None:
@@ -381,9 +452,10 @@ class RepositoryLifecycle:
     def _commit_and_push(self, request: PublicationRequest) -> str:
         assert self._executor is not None
         worktree = str(request.worktree)
-        added = self._executor.run(["git", "-C", worktree, "add", "-A"], timeout=180)
-        if not added.ok:
-            return f"could not stage changes: {added.tail()}"
+        if not request.pre_staged:
+            added = self._executor.run(["git", "-C", worktree, "add", "-A"], timeout=180)
+            if not added.ok:
+                return f"could not stage changes: {added.tail()}"
 
         staged = self._executor.run(
             ["git", "-C", worktree, "diff", "--cached", "--quiet"], timeout=60
@@ -399,7 +471,7 @@ class RepositoryLifecycle:
                     "-c",
                     f"user.email={request.author_email}",
                 ]
-            argv += ["commit", "--quiet", "-m", request.commit_subject]
+            argv += ["commit", "--quiet", "--no-verify", "-m", request.commit_subject]
             if request.summary:
                 argv += ["-m", request.summary]
             committed = self._executor.run(argv, timeout=180)
@@ -407,7 +479,17 @@ class RepositoryLifecycle:
                 return f"could not commit changes: {committed.tail()}"
 
         pushed = self._executor.run(
-            ["git", "-C", worktree, "push", "--quiet", "-u", "origin", request.branch],
+            [
+                "git",
+                "-C",
+                worktree,
+                "push",
+                "--quiet",
+                "--no-verify",
+                "-u",
+                "origin",
+                request.branch,
+            ],
             timeout=180,
         )
         return "" if pushed.ok else f"could not push the branch: {pushed.tail()}"

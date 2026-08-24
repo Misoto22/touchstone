@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
 from touchstone.execution.local import LocalExecutor
 from touchstone.forge import ForgeUnavailable, OperationResult, PullState
 from touchstone.ledger import Ledger, finding_id
-from touchstone.lifecycle import PublicationRequest, RepositoryLifecycle
+from touchstone.lifecycle import PublicationRequest, PublicationResult, RepositoryLifecycle
 from touchstone.nodes import publish as publish_node
 
 
@@ -160,6 +161,86 @@ def test_publication_holds_when_existing_pull_state_is_unavailable(tmp_path: Pat
     assert forge.created_pull_count == 0
 
 
+def test_node_preserves_branch_only_partial_publication_identity() -> None:
+    payload = publish_node._publication_payload(
+        PublicationResult(
+            "failed",
+            "candidate-1",
+            None,
+            "a" * 40,
+            "pull creation unavailable",
+            partial=True,
+            branch="touchstone/candidate-1",
+        )
+    )
+
+    assert payload["partial"] is True
+    assert payload["branch"] == "touchstone/candidate-1"
+    assert payload["reviewed_head_sha"] == "a" * 40
+
+
+def test_dry_run_rehearsal_runs_preparation_and_validation_before_diff(
+    tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    calls: list[str] = []
+    config = SimpleNamespace(
+        state_dir=tmp_path,
+        forge=SimpleNamespace(default_branch="main"),
+        loop=lambda _name: SimpleNamespace(targets=("app",)),
+    )
+    context = SimpleNamespace(config=config, executor=object())
+    monkeypatch.setattr(publish_node, "current", lambda: context)
+    monkeypatch.setattr(
+        "touchstone.validation.prepare",
+        lambda *_args, **_kwargs: (
+            calls.append("prepare") or SimpleNamespace(outcome="completed", results=())
+        ),
+    )
+    monkeypatch.setattr(
+        "touchstone.validation.validate",
+        lambda *_args, **_kwargs: (
+            calls.append("validate") or SimpleNamespace(blocked=True, results=())
+        ),
+    )
+
+    result = publish_node.rehearse(
+        {"loop": "code", "worktree": str(tmp_path), "risk": "low"}, would="publish"
+    )
+
+    assert calls == ["prepare", "validate"]
+    assert result["outcome"] == "blocked"
+    assert not (tmp_path / "dry-run.diff").exists()
+
+
+def test_verified_publication_runs_no_repository_hooks_or_staging_with_write_token(
+    tmp_path: Path,
+) -> None:
+    repo = _worktree(tmp_path)
+    _git(repo, "add", "-A")
+
+    class RecordingExecutor(LocalExecutor):
+        def __init__(self) -> None:
+            self.commands: list[list[str]] = []
+
+        def run(self, argv, **kwargs):  # type: ignore[no-untyped-def]
+            self.commands.append(argv)
+            return super().run(argv, **kwargs)
+
+    executor = RecordingExecutor()
+    lifecycle = RepositoryLifecycle(
+        MemoryForge(), Ledger(tmp_path / "events.jsonl"), reap_after_hours=6, executor=executor
+    )
+
+    result = lifecycle.publish(replace(_request(repo), pre_staged=True))
+
+    assert result.outcome == "awaiting_checks"
+    assert not any(command[-2:] == ["add", "-A"] for command in executor.commands)
+    commit = next(command for command in executor.commands if "commit" in command)
+    push = next(command for command in executor.commands if "push" in command)
+    assert "--no-verify" in commit
+    assert "--no-verify" in push
+
+
 def test_node_builds_publication_from_project_configuration() -> None:
     context = SimpleNamespace(
         config=SimpleNamespace(
@@ -175,6 +256,7 @@ def test_node_builds_publication_from_project_configuration() -> None:
         "risk": "low",
         "verdict": "approve",
         "verdict_reason": "covered by a focused regression test",
+        "pre_staged": True,
         "finding": {
             "title": "Configuration drift",
             "commit_subject": "fix: prevent configuration drift",
@@ -188,6 +270,7 @@ def test_node_builds_publication_from_project_configuration() -> None:
     assert request.base == "trunk"
     assert request.label == "automation:audit"
     assert request.escalation_label == "ops:review"
+    assert request.pre_staged is True
     assert (request.author_name, request.author_email) == (
         "Touchstone Bot",
         "bot@example.com",

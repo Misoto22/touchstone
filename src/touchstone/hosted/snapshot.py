@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
-from pathlib import Path
+from dataclasses import asdict, dataclass, is_dataclass
+from enum import Enum
+from pathlib import Path, PurePath
 from typing import Any
 
 from touchstone.hosted.crypto import BundleManifest
@@ -65,9 +66,9 @@ def compatibility(
     config: Any,
     *,
     loop: str,
-    lineage: str,
+    lineage: str | None,
 ) -> CompatibilityResult:
-    expected = (
+    expected = [
         (manifest.repository, config.forge.slug, "repository-mismatch"),
         (manifest.loop, loop, "loop-mismatch"),
         (manifest.schema_version, config.source.schema_version, "schema-mismatch"),
@@ -79,8 +80,9 @@ def compatibility(
             else "v1",
             "profile-mismatch",
         ),
-        (manifest.lineage, lineage, "lineage-mismatch"),
-    )
+    ]
+    if lineage is not None:
+        expected.append((manifest.lineage, lineage, "lineage-mismatch"))
     for actual, wanted, reason in expected:
         if actual != wanted:
             return CompatibilityResult(False, reason)
@@ -88,17 +90,83 @@ def compatibility(
 
 
 def config_digest(config: Any) -> str:
+    loops = {
+        name: _loop_config(loop) for name, loop in sorted(getattr(config, "loops", {}).items())
+    }
+    execution = getattr(config, "execution", None)
+    ssh = getattr(execution, "ssh", None)
     safe = {
         "schema": config.source.schema_version,
         "repository": config.forge.slug,
-        "profile": (
-            config.generated_metadata.source_digest
-            if getattr(config, "generated_metadata", None) is not None
-            else "v1"
-        ),
+        "timezone": getattr(config, "timezone", "UTC"),
+        "forge": getattr(config, "forge", {}),
+        "engine": getattr(config, "engine", {}),
+        "execution": {
+            "target": getattr(execution, "target", "local"),
+            "ssh": (
+                {
+                    "host": ssh.host,
+                    "workdir": ssh.workdir,
+                    "state_dir": ssh.state_dir,
+                    "env_keys": sorted(key for key, _value in ssh.env),
+                    "identity_file": ssh.identity_file,
+                    "connect_timeout": ssh.connect_timeout,
+                }
+                if ssh is not None
+                else None
+            ),
+        },
+        "git": getattr(config, "git", {}),
+        "actions": getattr(config, "actions", {}),
+        "loops": loops,
+        "targets": getattr(config, "targets", {}),
+        "generated": getattr(config, "generated_metadata", None),
     }
-    encoded = json.dumps(safe, sort_keys=True, separators=(",", ":")).encode()
+    encoded = json.dumps(
+        _canonical(safe),
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
     return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+
+def _canonical(value: Any) -> Any:
+    if is_dataclass(value) and not isinstance(value, type):
+        return _canonical(asdict(value))
+    if hasattr(value, "__dict__"):
+        return _canonical(vars(value))
+    if isinstance(value, dict):
+        return {str(key): _canonical(item) for key, item in sorted(value.items())}
+    if isinstance(value, (tuple, list)):
+        return [_canonical(item) for item in value]
+    if isinstance(value, PurePath):
+        return value.as_posix()
+    if isinstance(value, Enum):
+        return value.value
+    return value
+
+
+def _text_digest(value: str) -> str:
+    return f"sha256:{hashlib.sha256(value.encode()).hexdigest()}"
+
+
+def _loop_config(loop: Any) -> dict[str, Any]:
+    prompt = getattr(loop, "prompt", None)
+    review_prompt = getattr(loop, "review_prompt", None)
+    return {
+        "name": getattr(loop, "name", ""),
+        "brief": getattr(loop, "brief", ""),
+        "brief_digest": _text_digest(prompt()) if callable(prompt) else "",
+        "review_digest": _text_digest(review_prompt()) if callable(review_prompt) else "",
+        "label": getattr(loop, "label", ""),
+        "schedule": getattr(loop, "schedule", None),
+        "priority": getattr(loop, "priority", 100),
+        "protected_paths": getattr(loop, "protected_paths", ()),
+        "require_change_under": getattr(loop, "require_change_under", ()),
+        "confine_to": getattr(loop, "confine_to", ()),
+        "targets": getattr(loop, "targets", ()),
+        "context": getattr(loop, "context", ()),
+    }
 
 
 __all__ = [

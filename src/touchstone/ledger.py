@@ -64,6 +64,12 @@ def finding_id(loop: str, title: str) -> str:
     return hashlib.sha256(f"{loop}\0{normalized}".encode()).hexdigest()[:16]
 
 
+def candidate_id(finding: str, base_sha: str, patch_digest: str, run_id: str) -> str:
+    """Bind a publication identity to one exact analyzed change."""
+    material = "\0".join((finding, base_sha, patch_digest, run_id))
+    return hashlib.sha256(material.encode()).hexdigest()[:24]
+
+
 class Ledger:
     def __init__(self, path: Path) -> None:
         self._path = path
@@ -165,5 +171,6 @@ __all__ = [
     "Ledger",
     "LifecycleEvent",
     "LifecycleState",
+    "candidate_id",
     "finding_id",
 ]
