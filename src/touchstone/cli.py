@@ -270,11 +270,35 @@ def _hosted(args: argparse.Namespace) -> int:
     except CandidateIntegrityError as exc:
         print(f"touchstone hosted: {exc}", file=sys.stderr)
         return 3
+    # Say why on the way out. A blocked or failed stage used to return its exit
+    # code silently, so a runner log showed sixteen seconds of nothing and
+    # "Process completed with exit code 3"; the reason existed only inside an
+    # uploaded artifact, which is not where anyone looks first.
+    print(
+        _hosted_summary(args.stage, result),
+        file=sys.stderr if result.outcome != "completed" else sys.stdout,
+    )
     if result.outcome == "blocked":
         return 3
     if result.outcome == "failed":
         return 1
     return 0
+
+
+def _hosted_summary(stage: str, result) -> str:  # type: ignore[no-untyped-def]
+    parts = [f"touchstone {stage}: {result.outcome}"]
+    for label, value in (
+        ("loop", result.loop),
+        ("reason", result.reason_code),
+        ("change", result.change_state),
+        ("candidate", result.candidate_id),
+        ("clean start", result.clean_start_reason),
+    ):
+        if value:
+            parts.append(f"{label}={value}")
+    if result.partial:
+        parts.append("partial=true")
+    return " · ".join(parts)
 
 
 def _status(args: argparse.Namespace) -> int:

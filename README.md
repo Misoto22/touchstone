@@ -165,14 +165,16 @@ The standard repository secrets are:
 | `TOUCHSTONE_STATE_KEY` | Analysis, Verify, Publish, and Snapshot |
 
 > [!IMPORTANT]
-> The hosted stages have not yet been executed by a GitHub Actions runner. The
-> workflow contract, the composite Action, the credential boundaries, and the
-> recovery paths are covered by tests and by local simulation of the runner
-> environment, and `npm ci` for both Agent CLI locks does run on a real runner in
-> this repository's CI. The five-stage sequence itself — artifact round-trip
-> between jobs, App token minting, and recovery from a Publish that fails partway
-> — has not. Treat the GitHub Actions backend as unproven end to end until a run
-> exists to point at.
+> Part of the hosted backend has now run on a GitHub Actions runner, and part has
+> not. Verified on a runner: the composite Action and its hash-locked install, the
+> Agent CLI installed from its committed lock, the per-stage credential
+> boundaries, the artifact round-trip between jobs, the state artifact named by
+> the configuration digest, and Prepare, Analysis and Snapshot reaching their
+> recorded outcomes with Verify and Publish correctly skipped. Still unverified:
+> minting the App token, the Publish stage itself, and recovery from a Publish
+> that fails partway — each needs an installed Owner App, which `touchstone
+> actions setup` creates through a browser handoff the repository owner performs.
+> Treat publication as unproven until a run exists to point at.
 
 The workflow has only `schedule` and `workflow_dispatch` triggers. It does not run on pull requests. Public repositories default to off-hour 15-minute wake signals; private repositories default to one off-hour wake per hour. Configure a supported interval with `actions.wake_minutes`, then rerun `touchstone actions init`. Each wake evaluates durable schedules, so frequent wake signals do not imply frequent model calls.
 
