@@ -2033,6 +2033,35 @@ def _expected_candidate_identity(env: Mapping[str, str]) -> tuple[str, str]:
     return loop, lineage
 
 
+class _DropAuthorizationOnRedirect(urllib.request.HTTPRedirectHandler):
+    """Follow GitHub's artifact redirect without carrying the API token onward.
+
+    An artifact download answers 302 with a signed URL on separate storage.
+    urllib repeats every header on a redirect, and that host rejects a request
+    carrying both its own signature and an `Authorization` header -- it answers
+    401 `InvalidAuthenticationInfo`. The download then failed for every
+    artifact, so a restorable State Snapshot read as absent and every hosted run
+    began as a Clean Start; a resume could never find its candidate at all.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
+        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if redirected is None:
+            return None
+        if _hostname(newurl) != _hostname(req.full_url):
+            redirected.remove_header("Authorization")
+        return redirected
+
+
+def _hostname(url: str) -> str:
+    return (urllib.parse.urlsplit(url).hostname or "").lower()
+
+
+def _open_artifact_archive(url: str, headers: Mapping[str, str], *, timeout: int):  # type: ignore[no-untyped-def]
+    opener = urllib.request.build_opener(_DropAuthorizationOnRedirect)
+    return opener.open(urllib.request.Request(url, headers=dict(headers)), timeout=timeout)
+
+
 def _download_artifact_file(
     config: Config,
     env: Mapping[str, str],
@@ -2084,9 +2113,10 @@ def _download_artifact_file(
     ]
     matching.sort(key=lambda item: str(item.get("created_at", "")), reverse=True)
     for artifact in matching:
-        download = urllib.request.Request(artifact["archive_download_url"], headers=headers)
         try:
-            with urllib.request.urlopen(download, timeout=30) as response:
+            with _open_artifact_archive(
+                artifact["archive_download_url"], headers, timeout=30
+            ) as response:
                 archive_bytes = response.read(100 * 1024 * 1024 + 1)
         except (OSError, urllib.error.HTTPError, urllib.error.URLError):
             continue

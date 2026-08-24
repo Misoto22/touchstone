@@ -37,6 +37,7 @@ All notable user-facing changes are documented here. The format follows [Keep a 
 
 ### Fixed
 
+- Hosted artifact downloads follow GitHub's redirect to signed storage without carrying the API token, which that host rejects. Every download failed before, so a restorable State Snapshot read as absent, every hosted run began as a Clean Start, and a hosted resume could never find its candidate.
 - A blocked or failed hosted stage said why. It returned its exit code without printing anything, so a runner log showed only `Process completed with exit code 3` and the reason existed solely inside an uploaded artifact.
 
 ### Known gaps
