@@ -56,6 +56,8 @@ class LoopState(TypedDict, total=False):
 
     outcome: Literal["clean", "merging", "escalated", "held", "reaped", "inconclusive"]
     pr: int | None
+    finding_id: str
+    reviewed_head_sha: str
     cost: Annotated[list[float | None], lambda a, b: a + b]
     notes: Annotated[list[str], lambda a, b: a + b]
 

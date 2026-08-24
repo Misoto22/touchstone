@@ -93,9 +93,7 @@ class Forge:
     def labels(self) -> set[str]:
         payload = self._json(["label", "list", "--limit", "100", "--json", "name"]) or []
         return {
-            str(item["name"])
-            for item in payload
-            if isinstance(item, dict) and item.get("name")
+            str(item["name"]) for item in payload if isinstance(item, dict) and item.get("name")
         }
 
     def ensure_label(self, name: str, *, color: str, description: str) -> bool:
@@ -129,24 +127,33 @@ class Forge:
         conclusion = payload[0].get("conclusion")
         return conclusion if conclusion else "pending"
 
-    def create_pull(self, *, base: str, head: str, title: str, body: str, label: str) -> int | None:
-        ok, out = self._gh(
-            [
-                "pr",
-                "create",
-                "--base",
-                base,
-                "--head",
-                head,
-                "--title",
-                title,
-                "--body",
-                body,
-                "--label",
-                label,
-            ],
-            timeout=180,
-        )
+    def create_pull(
+        self,
+        *,
+        base: str,
+        head: str,
+        title: str,
+        body: str,
+        label: str,
+        draft: bool = False,
+    ) -> int | None:
+        argv = [
+            "pr",
+            "create",
+            "--base",
+            base,
+            "--head",
+            head,
+            "--title",
+            title,
+            "--body",
+            body,
+            "--label",
+            label,
+        ]
+        if draft:
+            argv.append("--draft")
+        ok, out = self._gh(argv, timeout=180)
         if not ok:
             return None
         digits = "".join(char for char in out.rsplit("/", 1)[-1] if char.isdigit())
@@ -172,7 +179,7 @@ class Forge:
                 "--head",
                 branch,
                 "--state",
-                "all",
+                "open",
                 "--limit",
                 "1",
                 "--json",
@@ -184,9 +191,7 @@ class Forge:
         return _pull_state(payload[0])
 
     def arm_auto_merge(self, number: int) -> OperationResult:
-        ok, detail = self._gh(
-            ["pr", "merge", str(number), "--auto", "--squash", "--delete-branch"]
-        )
+        ok, detail = self._gh(["pr", "merge", str(number), "--auto", "--squash", "--delete-branch"])
         return OperationResult(ok, "" if ok else detail)
 
     def to_draft(self, number: int) -> OperationResult:
@@ -202,9 +207,7 @@ class Forge:
         return OperationResult(ok, "" if ok else detail)
 
     def close(self, number: int, comment: str) -> OperationResult:
-        ok, detail = self._gh(
-            ["pr", "close", str(number), "--delete-branch", "--comment", comment]
-        )
+        ok, detail = self._gh(["pr", "close", str(number), "--delete-branch", "--comment", comment])
         return OperationResult(ok, "" if ok else detail)
 
 

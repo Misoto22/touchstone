@@ -4,15 +4,36 @@ from __future__ import annotations
 
 import datetime as dt
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol
 
 from touchstone.config import LoopConfig
+from touchstone.execution import Executor
 from touchstone.forge import OperationResult, PullState
 from touchstone.ledger import FindingProjection, Ledger, LifecycleEvent
 
 
 class LifecycleForge(Protocol):
     def pull(self, number: int) -> PullState | None: ...
+
+    def pull_for_branch(self, branch: str) -> PullState | None: ...
+
+    def create_pull(
+        self,
+        *,
+        base: str,
+        head: str,
+        title: str,
+        body: str,
+        label: str,
+        draft: bool = False,
+    ) -> int | None: ...
+
+    def arm_auto_merge(self, number: int) -> OperationResult: ...
+
+    def to_draft(self, number: int) -> OperationResult: ...
+
+    def add_label(self, number: int, label: str) -> OperationResult: ...
 
     def close(self, number: int, comment: str) -> OperationResult: ...
 
@@ -26,11 +47,109 @@ class ReconcileReport:
     inconclusive: tuple[int, ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class PublicationRequest:
+    finding_id: str
+    loop: str
+    branch: str
+    worktree: Path
+    base: str
+    label: str
+    escalation_label: str
+    risk: str
+    verdict: str
+    title: str
+    commit_subject: str
+    summary: str
+    rationale: str
+    review_reason: str
+    escalation: str = ""
+    author_name: str | None = None
+    author_email: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PublicationResult:
+    outcome: str
+    finding_id: str
+    pr: int | None
+    head_sha: str | None
+    detail: str = ""
+
+
 class RepositoryLifecycle:
-    def __init__(self, forge: LifecycleForge, ledger: Ledger, *, reap_after_hours: int) -> None:
+    def __init__(
+        self,
+        forge: LifecycleForge,
+        ledger: Ledger,
+        *,
+        reap_after_hours: int,
+        executor: Executor | None = None,
+    ) -> None:
         self._forge = forge
         self._ledger = ledger
         self._reap_after_hours = reap_after_hours
+        self._executor = executor
+
+    def publish(self, request: PublicationRequest) -> PublicationResult:
+        """Publish once, and project only forge operations that succeeded."""
+        if self._executor is None:
+            raise RuntimeError("publishing requires an executor")
+
+        error = self._commit_and_push(request)
+        if error:
+            self._record(request, "proposed", detail=error)
+            return PublicationResult("held", request.finding_id, None, None, error)
+
+        head = self._git(request.worktree, ["rev-parse", "HEAD"])
+        if not head:
+            detail = "could not resolve the published commit"
+            self._record(request, "proposed", detail=detail)
+            return PublicationResult("held", request.finding_id, None, None, detail)
+
+        park = request.risk != "low" or request.verdict != "approve"
+        pull = self._forge.pull_for_branch(request.branch)
+        number = (
+            pull.number
+            if pull is not None
+            else self._forge.create_pull(
+                base=request.base,
+                head=request.branch,
+                title=request.commit_subject,
+                body=_pull_body(request),
+                label=request.label,
+                draft=park,
+            )
+        )
+        if number is None:
+            detail = "could not open or find the pull request"
+            self._record(request, "proposed", head_sha=head, detail=detail)
+            return PublicationResult("held", request.finding_id, None, head, detail)
+
+        if park:
+            if pull is not None and not pull.draft:
+                drafted = self._forge.to_draft(number)
+                if not drafted.ok:
+                    detail = drafted.detail or "could not convert the pull request to a draft"
+                    self._record(request, "proposed", pr=number, head_sha=head, detail=detail)
+                    return PublicationResult("held", request.finding_id, number, head, detail)
+            labelled = self._forge.add_label(number, request.escalation_label)
+            if not labelled.ok:
+                detail = labelled.detail or "could not add the escalation label"
+                self._record(request, "proposed", pr=number, head_sha=head, detail=detail)
+                return PublicationResult("held", request.finding_id, number, head, detail)
+            detail = f"{request.risk} / {request.verdict}: {request.review_reason}"
+            self._record(request, "parked", pr=number, head_sha=head, detail=detail)
+            return PublicationResult("parked", request.finding_id, number, head, detail)
+
+        armed = self._forge.arm_auto_merge(number)
+        if not armed.ok:
+            detail = armed.detail or "could not enable auto-merge"
+            self._record(request, "proposed", pr=number, head_sha=head, detail=detail)
+            return PublicationResult("held", request.finding_id, number, head, detail)
+        detail = "independent review approved; auto-merge armed"
+        self._record(request, "armed", pr=number, head_sha=head, detail=detail)
+        return PublicationResult("armed", request.finding_id, number, head, detail)
 
     def reconcile(self, loop: LoopConfig, now: dt.datetime) -> ReconcileReport:
         merged: list[int] = []
@@ -98,6 +217,67 @@ class RepositoryLifecycle:
             )
         )
 
+    def _commit_and_push(self, request: PublicationRequest) -> str:
+        assert self._executor is not None
+        worktree = str(request.worktree)
+        added = self._executor.run(["git", "-C", worktree, "add", "-A"], timeout=180)
+        if not added.ok:
+            return f"could not stage changes: {added.tail()}"
+
+        staged = self._executor.run(
+            ["git", "-C", worktree, "diff", "--cached", "--quiet"], timeout=60
+        )
+        if staged.code not in {0, 1} or staged.timed_out:
+            return f"could not inspect staged changes: {staged.tail()}"
+        if staged.code == 1:
+            argv = ["git", "-C", worktree]
+            if request.author_name and request.author_email:
+                argv += [
+                    "-c",
+                    f"user.name={request.author_name}",
+                    "-c",
+                    f"user.email={request.author_email}",
+                ]
+            argv += ["commit", "--quiet", "-m", request.commit_subject]
+            if request.summary:
+                argv += ["-m", request.summary]
+            committed = self._executor.run(argv, timeout=180)
+            if not committed.ok:
+                return f"could not commit changes: {committed.tail()}"
+
+        pushed = self._executor.run(
+            ["git", "-C", worktree, "push", "--quiet", "-u", "origin", request.branch],
+            timeout=180,
+        )
+        return "" if pushed.ok else f"could not push the branch: {pushed.tail()}"
+
+    def _git(self, worktree: Path, argv: list[str]) -> str:
+        assert self._executor is not None
+        result = self._executor.run(["git", "-C", str(worktree), *argv], timeout=60)
+        return result.stdout.strip() if result.ok else ""
+
+    def _record(
+        self,
+        request: PublicationRequest,
+        state: str,
+        *,
+        pr: int | None = None,
+        head_sha: str | None = None,
+        detail: str = "",
+    ) -> None:
+        self._ledger.append(
+            LifecycleEvent(
+                finding_id=request.finding_id,
+                state=state,  # type: ignore[arg-type]
+                title=request.title,
+                loop=request.loop,
+                risk=request.risk,
+                pr=pr,
+                head_sha=head_sha,
+                detail=detail,
+            )
+        )
+
 
 def _age_hours(created_at: str, now: dt.datetime) -> float:
     try:
@@ -109,4 +289,33 @@ def _age_hours(created_at: str, now: dt.datetime) -> float:
     return max(0.0, (now - created.astimezone(dt.UTC)).total_seconds() / 3600)
 
 
-__all__ = ["ReconcileReport", "RepositoryLifecycle"]
+def _pull_body(request: PublicationRequest) -> str:
+    escalation = f"\n\nEscalated by the loop: {request.escalation}" if request.escalation else ""
+    return f"""## What this changes
+
+{request.summary}
+
+## Why
+
+{request.rationale}
+
+## Risk
+
+`{request.risk}`{escalation}
+
+## Independent review
+
+**{request.verdict}** — {request.review_reason}
+
+---
+
+Opened by Touchstone. Closing the pull request is a valid operator decision.
+"""
+
+
+__all__ = [
+    "PublicationRequest",
+    "PublicationResult",
+    "ReconcileReport",
+    "RepositoryLifecycle",
+]
