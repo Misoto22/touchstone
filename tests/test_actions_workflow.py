@@ -15,6 +15,7 @@ def _config(tmp_path: Path, *, visibility: str = "public"):  # type: ignore[no-u
     return SimpleNamespace(
         repo_path=tmp_path,
         forge=SimpleNamespace(default_branch="main"),
+        engine=SimpleNamespace(name="codex"),
         actions=SimpleNamespace(
             visibility=visibility,
             wake_minutes=15 if visibility == "public" else 60,
@@ -91,3 +92,24 @@ def test_actions_init_writes_then_checks_exact_workflow(
 def test_workflow_rejects_mutable_action_reference(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="40-character commit SHA"):
         render_workflow(_config(tmp_path), ActionPins(), action_sha="main")
+
+
+def test_claude_workflow_uses_only_the_claude_model_secret(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config.engine.name = "claude"
+
+    workflow = render_workflow(config, ActionPins(), action_sha="a" * 40)
+    analysis = workflow.split("  analysis:", 1)[1].split("  publish:", 1)[0]
+
+    assert "ANTHROPIC_API_KEY" in analysis
+    assert "OPENAI_API_KEY" not in analysis
+
+
+def test_publish_environment_is_emitted_only_when_configured(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config.actions.approval_environment = "touchstone-publish"
+
+    workflow = render_workflow(config, ActionPins(), action_sha="a" * 40)
+    publish = workflow.split("  publish:", 1)[1].split("  snapshot:", 1)[0]
+
+    assert 'name: "touchstone-publish"' in publish

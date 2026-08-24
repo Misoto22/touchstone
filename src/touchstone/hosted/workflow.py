@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import difflib
+import json
 import os
 import re
 import tempfile
@@ -95,6 +96,13 @@ def render_workflow(config: Config, pins: ActionPins, *, action_sha: str) -> str
     branch = config.forge.default_branch
     retention = config.actions.artifact_retention_days
     package_version = _package_version()
+    model_secret = "OPENAI_API_KEY" if config.engine.name == "codex" else "ANTHROPIC_API_KEY"
+    approval = config.actions.approval_environment
+    if len(approval) > 255 or any(ord(character) < 32 for character in approval):
+        raise ConfigError("actions.approval_environment contains unsupported characters")
+    environment_block = (
+        f"    environment:\n      name: {json.dumps(approval)}\n" if approval else ""
+    )
     if not 1 <= retention <= 90:
         raise ConfigError("actions.artifact_retention_days must be between 1 and 90")
     if config.actions.auto_merge:
@@ -191,7 +199,7 @@ jobs:
       - id: touchstone
         uses: Misoto22/touchstone@{sha}
         env:
-          OPENAI_API_KEY: ${{{{ secrets.OPENAI_API_KEY }}}}
+          {model_secret}: ${{{{ secrets.{model_secret} }}}}
           TOUCHSTONE_STATE_KEY: ${{{{ secrets.TOUCHSTONE_STATE_KEY }}}}
           TOUCHSTONE_CANDIDATE_ID: ${{{{ inputs.candidate_id }}}}
           TOUCHSTONE_DECISION: ${{{{ inputs.decision }}}}
@@ -210,7 +218,7 @@ jobs:
     needs: analysis
     if: needs.analysis.outputs.outcome == 'proposed'
     runs-on: ubuntu-latest
-    permissions:
+{environment_block}    permissions:
       contents: read
       actions: read
     outputs:

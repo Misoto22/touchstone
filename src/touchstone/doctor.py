@@ -6,6 +6,7 @@ import json
 import os
 import sys
 from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, Protocol
 
@@ -528,6 +529,7 @@ def _actions_checks(config: Config, context: DoctorContext) -> list[CheckResult]
             else "Correct actions.visibility and regenerate the workflow.",
         )
     )
+    checks.append(_actions_schedule_inactivity_check(repository))
     required_secrets = {
         "OPENAI_API_KEY" if config.engine.name == "codex" else "ANTHROPIC_API_KEY",
         "TOUCHSTONE_APP_ID",
@@ -583,6 +585,66 @@ def _actions_checks(config: Config, context: DoctorContext) -> list[CheckResult]
             )
         )
     return checks
+
+
+def _actions_schedule_inactivity_check(
+    repository: dict[str, object] | None,
+    *,
+    now: datetime | None = None,
+) -> CheckResult:
+    if not isinstance(repository, dict):
+        return CheckResult(
+            "actions.schedule_inactivity",
+            "WARN",
+            "public schedule inactivity could not be assessed",
+            "Check repository activity and the workflow state on GitHub.",
+        )
+    if repository.get("private") is True:
+        return CheckResult(
+            "actions.schedule_inactivity",
+            "PASS",
+            "the public-repository schedule inactivity cutoff does not apply",
+        )
+
+    pushed_at = repository.get("pushed_at")
+    if not isinstance(pushed_at, str):
+        return CheckResult(
+            "actions.schedule_inactivity",
+            "WARN",
+            "latest repository push time is unavailable",
+            "Check repository activity and the workflow state on GitHub.",
+        )
+    try:
+        pushed = datetime.fromisoformat(pushed_at.replace("Z", "+00:00"))
+    except ValueError:
+        return CheckResult(
+            "actions.schedule_inactivity",
+            "WARN",
+            "latest repository push time is malformed",
+            "Check repository activity and the workflow state on GitHub.",
+        )
+    if pushed.tzinfo is None:
+        pushed = pushed.replace(tzinfo=UTC)
+    age_days = max(0, int(((now or datetime.now(UTC)) - pushed).total_seconds() // 86400))
+    if age_days < 45:
+        return CheckResult(
+            "actions.schedule_inactivity",
+            "PASS",
+            f"latest repository push was {age_days} days ago",
+        )
+
+    return CheckResult(
+        "actions.schedule_inactivity",
+        "WARN",
+        (
+            f"latest repository push was {age_days} days ago; GitHub can disable "
+            "public scheduled workflows after 60-day inactivity"
+        ),
+        (
+            "Confirm repository activity before the cutoff; if scheduling is disabled, "
+            "re-enable the workflow or recover with workflow_dispatch."
+        ),
+    )
 
 
 def _labels(config: Config) -> tuple[str, ...]:

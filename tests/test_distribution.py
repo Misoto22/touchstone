@@ -5,7 +5,10 @@ import subprocess
 import sys
 import tomllib
 import zipfile
+from importlib.metadata import version
 from pathlib import Path
+
+import touchstone
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -34,6 +37,10 @@ def test_distribution_metadata_declares_public_contract() -> None:
     assert project["license"] == "Apache-2.0"
     assert project["readme"] == "README.md"
     assert "dev" in project["optional-dependencies"]
+
+
+def test_runtime_version_matches_installed_distribution_metadata() -> None:
+    assert touchstone.__version__ == version("touchstone-agent")
 
 
 def test_release_uses_pypi_trusted_publishing_only() -> None:

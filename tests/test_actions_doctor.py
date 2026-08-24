@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from datetime import UTC, datetime
 
 from tests.test_doctor import MemoryForge, _v2_config
 from touchstone.doctor import DoctorContext, run_doctor
@@ -62,7 +63,7 @@ def test_actions_doctor_checks_workflow_app_and_secret_metadata(tmp_path) -> Non
             return {"name": name, "state": "active"}
 
         def repository_info(self):  # type: ignore[no-untyped-def]
-            return {"private": False}
+            return {"private": False, "pushed_at": datetime.now(UTC).isoformat()}
 
         def environment(self, name: str):  # type: ignore[no-untyped-def]
             return {"name": name}
@@ -82,3 +83,55 @@ def test_actions_doctor_checks_workflow_app_and_secret_metadata(tmp_path) -> Non
     assert report.by_id("actions.secrets").level == "PASS"
     assert report.by_id("actions.app").level == "PASS"
     assert report.by_id("actions.visibility").level == "PASS"
+    assert report.by_id("actions.schedule_inactivity").level == "PASS"
+
+
+def test_actions_doctor_warns_when_a_public_repository_is_near_the_cutoff(
+    tmp_path,
+) -> None:  # type: ignore[no-untyped-def]
+    _report, config = _v2_config(tmp_path)
+    rendered = render_workflow(config, ActionPins(), action_sha="a" * 40)
+    actions_diff(config.repo_path, rendered).write()
+
+    class InactiveGitHub:
+        def actions_secret_names(self) -> set[str]:
+            return {
+                "OPENAI_API_KEY",
+                "TOUCHSTONE_APP_ID",
+                "TOUCHSTONE_APP_PRIVATE_KEY",
+                "TOUCHSTONE_STATE_KEY",
+            }
+
+        def installation(self):  # type: ignore[no-untyped-def]
+            return {
+                "permissions": {
+                    "actions": "read",
+                    "contents": "write",
+                    "issues": "write",
+                    "pull_requests": "write",
+                }
+            }
+
+        def workflow(self, name: str = "touchstone.yml"):  # type: ignore[no-untyped-def]
+            return {"name": name, "state": "active"}
+
+        def repository_info(self):  # type: ignore[no-untyped-def]
+            return {"private": False, "pushed_at": "2000-01-01T00:00:00Z"}
+
+        def environment(self, name: str):  # type: ignore[no-untyped-def]
+            return {"name": name}
+
+    context = DoctorContext(
+        commands=frozenset({"git", "gh", "codex"}),
+        forge=MemoryForge(labels={"touchstone:audit", "touchstone:needs-review"}),
+        scheduler="launchd",
+        online=True,
+        actions=InactiveGitHub(),
+    )
+
+    report = run_doctor(config, context)
+    check = report.by_id("actions.schedule_inactivity")
+
+    assert check.level == "WARN"
+    assert "60-day" in check.summary
+    assert "workflow_dispatch" in check.repair
