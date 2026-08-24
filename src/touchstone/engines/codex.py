@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import PurePosixPath
 
-from touchstone.engines.base import Session
+from touchstone.engines.base import Session, blocked_reason, keep
 from touchstone.execution import Executor
 
 
@@ -36,6 +36,19 @@ class CodexEngine:
         argv += list(self._config.engine.extra_args)
         return argv
 
+    def _session(self, result, transcript: str, *, cost: float | None = None) -> Session:  # type: ignore[no-untyped-def]
+        blocked = blocked_reason(transcript)
+        return Session(
+            # A blocked session is not ok, whatever the exit code said. This is
+            # the whole point: `codex exec` exits 0 after refusing every write.
+            ok=result.ok and blocked is None,
+            text=result.stdout,
+            cost=cost,
+            timed_out=result.timed_out,
+            detail=blocked or result.tail(),
+            blocked=blocked,
+        )
+
     def author(self, brief: str, *, worktree: str, denied: tuple[str, ...]) -> Session:
         # `denied` is accepted and not used, deliberately. Codex has no
         # per-path deny list, and pretending otherwise by filtering the brief
@@ -44,17 +57,13 @@ class CodexEngine:
         argv = self._argv(
             worktree=worktree,
             effort=self._config.engine.audit_effort,
-            sandbox="workspace-write",
+            sandbox=self._config.engine.sandbox,
         )
         argv.append(brief)
         result = self._exec.run(argv, timeout=self._config.engine.timeout_seconds)
-        return Session(
-            ok=result.ok,
-            text=result.stdout,
-            cost=None,
-            timed_out=result.timed_out,
-            detail=result.tail(),
-        )
+        transcript = result.stdout + result.stderr
+        keep(self._config.state_dir, "engine-author.log", transcript)
+        return self._session(result, transcript)
 
     def review(self, brief: str, *, worktree: str, schema: dict) -> Session:
         schema_path = str(PurePosixPath(worktree) / ".harness-review-schema.json")
@@ -69,15 +78,19 @@ class CodexEngine:
         argv += ["--output-schema", schema_path, "--output-last-message", answer_path, brief]
         result = self._exec.run(argv, timeout=self._config.engine.timeout_seconds)
         answer = self._exec.read_text(answer_path) or ""
-        # Same reason: these are how this engine is asked and answered, not
-        # anything the repository should carry.
+        transcript = result.stdout + result.stderr
+        keep(self._config.state_dir, "engine-review.log", transcript)
+        # These two are how this engine is asked and answered, not anything
+        # the repository should carry.
         self._exec.run(["rm", "-f", schema_path, answer_path], timeout=30)
+        session = self._session(result, transcript)
         return Session(
-            ok=result.ok and bool(answer.strip()),
+            ok=session.ok and bool(answer.strip()),
             text=answer,
             cost=None,
-            timed_out=result.timed_out,
-            detail=result.tail() if not result.ok else "",
+            timed_out=session.timed_out,
+            detail=session.detail,
+            blocked=session.blocked,
         )
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid

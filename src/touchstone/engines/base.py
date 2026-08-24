@@ -9,9 +9,61 @@ a vendor, and only two steps ever talk to a model.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 from touchstone.execution import Executor
+
+#: Things an engine says when it was present and thinking but could not act.
+#:
+#: A session that cannot write is not a session that found nothing, and telling
+#: them apart cannot be left to the exit code: `codex exec` exits 0 after every
+#: one of its file writes was refused. On a host that forbids unprivileged uid
+#: mapping, bubblewrap cannot bring up loopback inside its namespace, so the
+#: sandbox never starts and every write fails — for six hours the loop spent
+#: seven minutes and 122k tokens per run, found a real defect each time, wrote
+#: nothing, and recorded `clean`. Six identical entries saying all is well.
+#:
+#: Matched against the transcript rather than the exit status, because the
+#: transcript is where the engine is honest: "Blocked by workspace
+#: infrastructure. Every shell and file-write attempt failed."
+BLOCKED_MARKERS: tuple[tuple[str, str], ...] = (
+    ("bwrap:", "the sandbox could not start"),
+    ("Failed to write file", "a file write was refused"),
+    ("Blocked by workspace infrastructure", "the engine reported it could not act"),
+    ("Operation not permitted", "an operation was refused by the host"),
+)
+
+
+def blocked_reason(transcript: str) -> str | None:
+    """Why this session could not act, or `None` if nothing says it could not.
+
+    Deliberately generous about what counts. A false positive costs one run
+    recorded as `held` when it was merely clean; a false negative costs an
+    unbounded number of runs recorded as clean when the engine was mute — and
+    the second is what actually happened.
+    """
+    for marker, reason in BLOCKED_MARKERS:
+        if marker in transcript:
+            return reason
+    return None
+
+
+def keep(state_dir: str, name: str, text: str) -> None:
+    """Persist what a session said, for whoever has to explain it later.
+
+    A run that takes seven minutes and produces nothing is the hardest kind to
+    diagnose, and the first time it happened there was no record at all: the
+    ledger said `no finding file written` and the reasoning behind that had
+    already been discarded. Cheap to keep, impossible to reconstruct.
+
+    Written by the parent process into `state_dir`, never by the model's own
+    process — under a hosted backend the child's `HOME` is redirected, and a
+    transcript written there would land somewhere nobody thinks to look.
+    """
+    target = Path(state_dir) / name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text, encoding="utf-8")
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +78,9 @@ class Session:
     cost: float | None
     timed_out: bool = False
     detail: str = ""
+    #: Set when the engine ran, thought, and could not act — as distinct from
+    #: running and finding nothing. The two look identical from outside.
+    blocked: str | None = None
 
 
 @runtime_checkable

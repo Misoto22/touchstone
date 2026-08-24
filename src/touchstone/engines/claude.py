@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from touchstone.engines.base import Session
+from touchstone.engines.base import Session, blocked_reason, keep
 from touchstone.execution import Executor
 
 
@@ -69,13 +69,17 @@ class ClaudeEngine:
         ]
         result = self._exec.run(argv, cwd=worktree, timeout=self._config.engine.timeout_seconds)
         self._exec.run(["rm", "-f", settings_path], timeout=30)
+        transcript = result.stdout + result.stderr
+        keep(self._config.state_dir, "engine-author.log", transcript)
+        blocked = blocked_reason(transcript)
         cost, _ = _payload(result.stdout)
         return Session(
-            ok=result.ok,
+            blocked=blocked,
+            ok=result.ok and blocked is None,
             text=result.stdout,
             cost=cost,
             timed_out=result.timed_out,
-            detail=result.tail(),
+            detail=blocked or result.tail(),
         )
 
     def review(self, brief: str, *, worktree: str, schema: dict) -> Session:
