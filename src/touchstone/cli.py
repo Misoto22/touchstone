@@ -1,7 +1,7 @@
 """The command line.
 
-Three verbs. `run` is what a scheduler calls, `resume` is what a person calls
-after answering a parked draft, and `graph` is how the picture stays honest.
+The stable command surface for initialization, diagnostics, scheduled runs,
+human decisions, and graph documentation.
 """
 
 from __future__ import annotations
@@ -12,6 +12,42 @@ from pathlib import Path
 
 from touchstone import visualise
 from touchstone.config import ConfigError, load
+
+
+def _init(args: argparse.Namespace) -> int:
+    from touchstone.execution.local import LocalExecutor
+    from touchstone.initialize import InitOptions, initialize
+
+    engine = args.engine
+    model = args.model
+    workflows = tuple(args.workflow or ())
+    schedule = args.schedule
+    if args.non_interactive:
+        if not engine or not model:
+            raise ConfigError("non-interactive init requires --engine and --model")
+    else:
+        engine = engine or input("Engine (codex or claude) [codex]: ").strip() or "codex"
+        model = model or input("Model: ").strip()
+        if not workflows:
+            workflow = input("Required workflow [ci.yml]: ").strip() or "ci.yml"
+            workflows = (workflow,)
+        schedule = schedule or input("Schedule [hourly]: ").strip() or "hourly"
+    if engine not in ("codex", "claude"):
+        raise ConfigError("engine must be 'codex' or 'claude'")
+    path = initialize(
+        InitOptions(
+            start=args.path,
+            engine=engine,
+            model=model or "",
+            workflows=workflows,
+            schedule=schedule or "hourly",
+            output=args.output,
+            force=args.force,
+        ),
+        LocalExecutor(),
+    )
+    print(f"wrote {path}")
+    return 0
 
 
 def _run(args: argparse.Namespace) -> int:
@@ -49,6 +85,17 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="touchstone", description=__doc__)
     parser.add_argument("--config", type=Path, help="a TOML file; discovered when omitted")
     sub = parser.add_subparsers(dest="command", required=True)
+
+    init = sub.add_parser("init", help="discover a repository and write touchstone.toml")
+    init.add_argument("--path", type=Path, default=Path.cwd(), help="repository or child path")
+    init.add_argument("--output", type=Path, help="configuration destination")
+    init.add_argument("--non-interactive", action="store_true")
+    init.add_argument("--engine", choices=("codex", "claude"))
+    init.add_argument("--model")
+    init.add_argument("--workflow", action="append", help="required default-branch workflow")
+    init.add_argument("--schedule", help="hourly, daily@HH:MM, or weekly@DAY,HH:MM")
+    init.add_argument("--force", action="store_true", help="replace an existing config")
+    init.set_defaults(handler=_init)
 
     run = sub.add_parser("run", help="one iteration of a loop")
     run.add_argument("loop", help="which loop, by its [loop.*] name")
