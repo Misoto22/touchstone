@@ -186,3 +186,15 @@ def test_readme_states_that_schema_v1_keeps_working() -> None:
     assert "An existing schema-v1 configuration keeps loading unchanged" in readme
     assert "~/.config/touchstone/config.toml" in readme
     assert "upgrading is an explicit command" in readme
+
+
+def test_readme_does_not_imply_the_hosted_backend_has_run() -> None:
+    """The original brief: never claim a workflow ran in GitHub from local tests alone."""
+    # Compare against unwrapped prose: the statement is a wrapped blockquote, so
+    # strip the quote markers before collapsing whitespace.
+    raw = (ROOT / "README.md").read_text(encoding="utf-8")
+    readme = " ".join(line.lstrip("> ") for line in raw.splitlines())
+    readme = " ".join(readme.split())
+
+    assert "hosted stages have not yet been executed by a GitHub Actions runner" in readme
+    assert "unproven end to end until a run exists to point at" in readme

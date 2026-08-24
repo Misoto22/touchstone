@@ -164,6 +164,16 @@ The standard repository secrets are:
 | `TOUCHSTONE_APP_ID` and `TOUCHSTONE_APP_PRIVATE_KEY` | Publish only |
 | `TOUCHSTONE_STATE_KEY` | Analysis, Verify, Publish, and Snapshot |
 
+> [!IMPORTANT]
+> The hosted stages have not yet been executed by a GitHub Actions runner. The
+> workflow contract, the composite Action, the credential boundaries, and the
+> recovery paths are covered by tests and by local simulation of the runner
+> environment, and `npm ci` for both Agent CLI locks does run on a real runner in
+> this repository's CI. The five-stage sequence itself — artifact round-trip
+> between jobs, App token minting, and recovery from a Publish that fails partway
+> — has not. Treat the GitHub Actions backend as unproven end to end until a run
+> exists to point at.
+
 The workflow has only `schedule` and `workflow_dispatch` triggers. It does not run on pull requests. Public repositories default to off-hour 15-minute wake signals; private repositories default to one off-hour wake per hour. Configure a supported interval with `actions.wake_minutes`, then rerun `touchstone actions init`. Each wake evaluates durable schedules, so frequent wake signals do not imply frequent model calls.
 
 Each job runs the composite Action's credential-free install step first. That step maps no secret at all: it installs the hash-locked Python runtime, the locked Agent CLI, and the project's locked dependencies, then writes a non-secret attestation binding them to the repository HEAD, configuration digest, Target set, and lockfiles. A later stage reuses that exact environment; a mismatched or absent attestation fails closed unless the process still holds no model credential, so dependencies are only ever installed before model credentials exist.
