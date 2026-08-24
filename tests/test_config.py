@@ -84,3 +84,99 @@ def test_discovery_honours_xdg_config_home(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("TOUCHSTONE_CONFIG", raising=False)
 
     assert discover_config_path(start) == expected
+
+
+def test_ssh_runtime_paths_come_from_the_ssh_section(tmp_path: Path) -> None:
+    raw = (
+        _valid_config()
+        + """
+
+[execution]
+target = "ssh"
+
+[execution.ssh]
+host = "audit.example"
+workdir = "/srv/widgets"
+state_dir = "/var/lib/touchstone"
+"""
+    )
+    config = load_config(_write(tmp_path / "touchstone.toml", raw))
+
+    assert config.execution_repo == "/srv/widgets"
+    assert config.execution_worktree == "/var/lib/touchstone/worktree"
+
+
+def test_ssh_runtime_paths_must_be_absolute(tmp_path: Path) -> None:
+    raw = (
+        _valid_config()
+        + """
+
+[execution]
+target = "ssh"
+
+[execution.ssh]
+host = "audit.example"
+workdir = "relative/repository"
+state_dir = "/var/lib/touchstone"
+"""
+    )
+
+    with pytest.raises(ConfigError, match="absolute"):
+        load_config(_write(tmp_path / "touchstone.toml", raw))
+
+
+def test_config_rejects_secret_shaped_ssh_environment_keys(tmp_path: Path) -> None:
+    raw = (
+        _valid_config()
+        + """
+
+[execution]
+target = "ssh"
+
+[execution.ssh]
+host = "audit.example"
+workdir = "/srv/widgets"
+state_dir = "/var/lib/touchstone"
+env = { GH_TOKEN = "must-not-live-in-toml" }
+"""
+    )
+
+    with pytest.raises(ConfigError, match="secret-like"):
+        load_config(_write(tmp_path / "touchstone.toml", raw))
+
+
+def test_default_state_directories_are_isolated_per_repository(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    first = load_config(_write(tmp_path / "one.toml", _valid_config()))
+    second = load_config(
+        _write(
+            tmp_path / "two.toml",
+            _valid_config().replace('slug = "acme/widgets"', 'slug = "acme/gadgets"'),
+        )
+    )
+
+    assert first.state_dir.parent == tmp_path / "state" / "touchstone"
+    assert second.state_dir.parent == tmp_path / "state" / "touchstone"
+    assert first.state_dir != second.state_dir
+
+
+@pytest.mark.parametrize(
+    ("needle", "replacement", "message"),
+    [
+        ('slug = "acme/widgets"', 'slug = "acme/widgets"\nrequired_workflows = "ci.yml"', "array"),
+        ('model = "gpt-test"', 'model = "gpt-test"\ntimeout_seconds = 0', "positive"),
+        (
+            'label = "touchstone:audit"',
+            'label = "touchstone:audit"\nprotected_paths = ".github/"',
+            "array",
+        ),
+        ('label = "touchstone:audit"', 'label = ""', "must not be empty"),
+    ],
+)
+def test_config_rejects_invalid_types_and_ranges(
+    tmp_path: Path, needle: str, replacement: str, message: str
+) -> None:
+    raw = _valid_config().replace(needle, replacement)
+
+    with pytest.raises(ConfigError, match=message):
+        load_config(_write(tmp_path / "touchstone.toml", raw))

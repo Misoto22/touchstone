@@ -7,11 +7,21 @@ what it was doing — and a check that can be argued down is not a check.
 
 from __future__ import annotations
 
+import fnmatch
 from typing import Any
 
 from touchstone.nodes.context import current
 
 RISKS = ("low", "medium", "high")
+BUILTIN_PROTECTED_PATHS = (
+    ".github/",
+    ".env",
+    ".env.*",
+    "**/.env",
+    "**/.env.*",
+    "touchstone.toml",
+    "AGENTS.md",
+)
 
 
 def _changed(context, worktree: str, base: str) -> list[str]:  # type: ignore[no-untyped-def]
@@ -63,6 +73,26 @@ def _twinless(paths: list[str], context, worktree: str, base: str) -> list[str]:
     return stranded
 
 
+def _matches_path(path: str, pattern: str) -> bool:
+    normalized = pattern.removeprefix("./")
+    candidates = (normalized, normalized.removeprefix("**/"))
+    for candidate in dict.fromkeys(candidates):
+        if any(char in candidate for char in "*?["):
+            glob = f"{candidate}*" if candidate.endswith("/") else candidate
+            if fnmatch.fnmatchcase(path, glob):
+                return True
+        elif candidate.endswith("/"):
+            if path.startswith(candidate):
+                return True
+        elif path == candidate:
+            return True
+    return False
+
+
+def _protected_paths(loop: Any) -> tuple[str, ...]:
+    return tuple(dict.fromkeys((*BUILTIN_PROTECTED_PATHS, *loop.protected_paths)))
+
+
 def run(state: dict[str, Any]) -> dict[str, Any]:
     context = current()
     loop = context.loop(state["loop"])
@@ -93,8 +123,8 @@ def run(state: dict[str, Any]) -> dict[str, Any]:
             "notes": ["nothing changed under the paths this loop maintains"],
         }
 
-    for protected in loop.protected_paths:
-        hit = [path for path in paths if path.startswith(protected.rstrip("/"))]
+    for protected in _protected_paths(loop):
+        hit = [path for path in paths if _matches_path(path, protected)]
         if hit:
             return {
                 "risk": "high",

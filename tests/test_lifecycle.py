@@ -114,9 +114,7 @@ def test_github_lookup_failure_is_inconclusive_and_mutates_nothing(tmp_path: Pat
     ledger = Ledger(tmp_path / "events.jsonl")
     identifier = _seed(ledger, "armed")
 
-    report = RepositoryLifecycle(MemoryForge(), ledger, reap_after_hours=6).reconcile(
-        _loop(), NOW
-    )
+    report = RepositoryLifecycle(MemoryForge(), ledger, reap_after_hours=6).reconcile(_loop(), NOW)
 
     assert report.inconclusive == (12,)
     assert ledger.projection(identifier).state == "armed"  # type: ignore[union-attr]

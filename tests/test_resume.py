@@ -128,6 +128,38 @@ def test_health_gate_checks_only_configured_workflows(monkeypatch) -> None:  # t
     assert calls == [("quality.yml", "trunk"), ("deploy.yml", "trunk")]
 
 
+def test_health_gate_refuses_unattended_publish_without_a_workflow(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    import pytest
+
+    from touchstone import runner
+
+    config = SimpleNamespace(forge=SimpleNamespace(default_branch="trunk", required_workflows=()))
+    monkeypatch.setattr(runner, "current", lambda: SimpleNamespace(forge=object()))
+
+    with pytest.raises(runner.Held, match="no required workflows"):
+        runner._health_gate(config)  # type: ignore[arg-type]
+
+
+def test_publication_gate_requires_auto_merge_and_setup_labels(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    import pytest
+
+    from touchstone import runner
+
+    class ForgeWithoutAutoMerge:
+        def repository_info(self):  # type: ignore[no-untyped-def]
+            return {"autoMergeAllowed": False}
+
+        def labels(self) -> set[str]:
+            return set()
+
+    config = SimpleNamespace(forge=SimpleNamespace(escalation_label="touchstone:needs-review"))
+    loop = SimpleNamespace(label="touchstone:audit")
+    monkeypatch.setattr(runner, "current", lambda: SimpleNamespace(forge=ForgeWithoutAutoMerge()))
+
+    with pytest.raises(runner.Held, match="auto-merge"):
+        runner._publication_gate(config, loop)  # type: ignore[arg-type]
+
+
 def test_runner_resume_uses_the_shared_lock_and_health_gate() -> None:
     import inspect
 
@@ -136,4 +168,5 @@ def test_runner_resume_uses_the_shared_lock_and_health_gate() -> None:
     source = inspect.getsource(runner.resume)
     assert "_lock(state_dir)" in source
     assert "_health_gate(config)" in source
+    assert "_publication_gate(config" in source
     assert "shutil.rmtree(lock" in source

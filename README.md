@@ -43,6 +43,8 @@ Touchstone does not merge on a model's claim. The author writes a structured fin
 
 Malformed or missing agent output is `inconclusive`, never `clean`. Drafts are never automatically reaped. A human resume is refused if the pull-request head differs from the independently reviewed commit.
 
+Repository policy files, Touchstone config, agent instructions, and environment files are always treated as protected. Project config may add more protected paths, but it cannot remove these built-in escalation rules.
+
 > [!IMPORTANT]
 > A dry run does not publish to GitHub, but it does run the configured model against a temporary worktree. Use only repositories, hosts, models, and credentials you are authorised to use.
 
@@ -97,7 +99,7 @@ touchstone install-scheduler --dry-run
 touchstone install-scheduler
 ```
 
-`touchstone init` asks for the engine, model, required default-branch workflow, and schedule. It discovers the repository values and writes `touchstone.toml`; relative paths in that file resolve from the file itself.
+`touchstone init` asks for the engine, model, required default-branch workflow, and schedule. It discovers the repository values and writes `touchstone.toml`; relative paths in that file resolve from the file itself. The first `doctor` run may report missing labels; `setup` creates them, and a second `doctor` run should clear that failure.
 
 **Prerequisites** — Python 3.12+ · pipx · Git · authenticated GitHub CLI (`gh`) · authenticated Codex CLI or Claude CLI · macOS or Linux for native scheduling
 
@@ -122,13 +124,13 @@ The generated file separates project decisions from credentials:
 - `[project]` — target repository path.
 - `[forge]` — GitHub slug, default branch, required workflow names, labels, and reap threshold.
 - `[engine]` — Codex or Claude, model, effort, timeout, and optional budget.
-- `[execution]` — local or SSH execution; SSH environment values are runtime inputs, not logged.
+- `[execution]` — local or SSH execution; remote work and state paths must be absolute.
 - `[git]` — optional commit author override; omit it to inherit repository Git configuration.
 - `[loop.<name>]` — brief, label, schedule, protected paths, and project context.
 
 See the complete generic [`touchstone.example.toml`](touchstone.example.toml). Built-in briefs use `builtin:code-audit`; custom brief paths resolve relative to the configuration file.
 
-Secrets do not belong in TOML. GitHub and engine authentication remain in their native CLI stores or runtime environment.
+Secrets do not belong in TOML. Secret-shaped SSH environment keys are rejected; GitHub and engine authentication remain in their native CLI stores or the remote runtime environment. When `state_dir` is omitted, Touchstone creates an isolated per-repository directory under `$XDG_STATE_HOME/touchstone` (or `~/.local/state/touchstone`).
 
 ---
 
@@ -185,7 +187,7 @@ daily@03:15
 weekly@MON,09:30
 ```
 
-On macOS, Touchstone writes user agents under `~/Library/LaunchAgents`. On Linux, it writes user services and timers under `~/.config/systemd/user`. Generated jobs use the absolute `touchstone` executable, absolute config path, explicit working directory, and no credentials.
+On macOS, Touchstone writes user agents under `~/Library/LaunchAgents`. On Linux, it writes user services and timers under `~/.config/systemd/user`. Generated jobs use the absolute `touchstone` executable, absolute config path, explicit working directory, a credential-free `PATH`, and no credentials. Scheduling remains local to the orchestrator even when repository and model work execute over SSH.
 
 Render scheduler files for review without enabling them:
 
@@ -199,6 +201,7 @@ touchstone scheduler-status
 ### Troubleshooting
 
 - **A run stops before the model starts** — run `touchstone doctor`; repair every `FAIL`, then review each `WARN` before enabling unattended runs.
+- **GitHub preflight fails** — authenticate `gh`, run `touchstone setup`, enable auto-merge, and protect the configured default branch.
 - **`production not known good`** — every configured `forge.required_workflows` entry must have an explicit successful run on the default branch.
 - **A draft will not resume** — run `touchstone status`; if its head changed, review the new commit rather than approving the old checkpoint.
 - **The slot is held** — finish or close the current labelled pull request. Draft-slot behaviour differs by loop scope and is reported by the CLI.
@@ -224,6 +227,7 @@ cd touchstone
 uv sync --extra dev
 uv run pytest
 uv run ruff check .
+uv run ruff format --check src tests
 uv run touchstone graph --check
 ```
 

@@ -8,6 +8,7 @@ from touchstone.config import LoopConfig
 from touchstone.events import EventLog, run_event
 from touchstone.forge import OperationResult, PullState
 from touchstone.ledger import Ledger, LifecycleEvent, finding_id
+from touchstone.scheduling.base import SchedulerStatus
 from touchstone.status import collect_status
 
 
@@ -20,6 +21,15 @@ class MemoryForge:
 
     def close(self, number: int, comment: str) -> OperationResult:
         return OperationResult(True)
+
+
+class MemoryScheduler:
+    def status(self, config) -> SchedulerStatus:  # type: ignore[no-untyped-def]
+        return SchedulerStatus(
+            adapter="launchd",
+            supported=True,
+            installed=(Path(config.state_dir) / "touchstone-code.plist",),
+        )
 
 
 def test_status_reconciles_live_pull_truth_before_projecting(tmp_path: Path) -> None:
@@ -71,8 +81,11 @@ def test_status_reconciles_live_pull_truth_before_projecting(tmp_path: Path) -> 
         config,
         SimpleNamespace(forge=forge, ledger=ledger),
         now=dt.datetime(2026, 8, 24, 12, tzinfo=dt.UTC),
+        scheduler=MemoryScheduler(),
     )
 
     payload = report.to_dict()
     assert payload["findings"][0]["state"] == "merged"
     assert payload["last_runs"][0]["outcome"] == "armed"
+    assert payload["scheduler"]["adapter"] == "launchd"
+    assert payload["scheduler"]["installed"] == [str(tmp_path / "touchstone-code.plist")]

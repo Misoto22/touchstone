@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import quote
 
 from touchstone.execution import Executor
 
@@ -56,6 +57,15 @@ class Forge:
         except json.JSONDecodeError:
             return None
 
+    def _api_json(self, endpoint: str) -> Any:
+        result = self._exec.run(["gh", "api", endpoint], timeout=120)
+        if not result.ok:
+            return None
+        try:
+            return json.loads(result.stdout)
+        except json.JSONDecodeError:
+            return None
+
     def open_pulls(self, label: str, *, include_drafts: bool) -> list[dict[str, Any]]:
         """Pull requests holding the slot.
 
@@ -85,10 +95,20 @@ class Forge:
         return [pull for pull in payload if not pull.get("isDraft")]
 
     def repository_info(self) -> dict[str, Any] | None:
-        payload = self._json(
-            ["repo", "view", "--json", "nameWithOwner,defaultBranchRef,autoMergeAllowed"]
-        )
-        return payload if isinstance(payload, dict) else None
+        payload = self._api_json(f"repos/{self._slug}")
+        if not isinstance(payload, dict):
+            return None
+        return {
+            "nameWithOwner": str(payload.get("full_name") or ""),
+            "defaultBranchRef": {"name": str(payload.get("default_branch") or "")},
+            "autoMergeAllowed": bool(payload.get("allow_auto_merge")),
+        }
+
+    def branch_protection(self, branch: str) -> bool | None:
+        payload = self._api_json(f"repos/{self._slug}/branches/{quote(branch, safe='')}")
+        if not isinstance(payload, dict):
+            return None
+        return bool(payload.get("protected"))
 
     def labels(self) -> set[str]:
         payload = self._json(["label", "list", "--limit", "100", "--json", "name"]) or []

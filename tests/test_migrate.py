@@ -7,7 +7,7 @@ import pytest
 from touchstone.config import ConfigError, load_config
 from touchstone.migrate import migrate_config
 
-LEGACY = '''\
+LEGACY = """\
 repo_path = "/tmp/repository"
 state_dir = "~/.local/state/touchstone"
 
@@ -31,7 +31,7 @@ project = "this repository"
 ledger = "the ledger"
 protected = "the protected paths"
 rules_clause = ""
-'''
+"""
 
 
 def test_migration_backs_up_unversioned_config_before_replacement(tmp_path: Path) -> None:
@@ -44,7 +44,7 @@ def test_migration_backs_up_unversioned_config_before_replacement(tmp_path: Path
     loaded = load_config(source)
     assert loaded.source.schema_version == 1
     assert loaded.repo_path == Path("/tmp/repository").resolve()
-    assert loaded.forge.required_workflows == ("verify-deploy.yml", "ci.yml")
+    assert loaded.forge.required_workflows == ()
     assert loaded.loop("code").brief == "builtin:code-audit"
 
 

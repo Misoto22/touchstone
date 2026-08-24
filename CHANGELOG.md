@@ -12,11 +12,16 @@ All notable user-facing changes are documented here. The format follows [Keep a 
 - Independent review, verified auto-merge arming, draft parking, and head-SHA-bound human resume.
 - Native launchd and systemd user scheduling with portable hourly, daily, and weekly schedules.
 - Built-in generic audit and review briefs packaged in the wheel.
+- Per-repository XDG state isolation and target-aware local/SSH diagnostics.
+- Online publication preflight for GitHub access, auto-merge, labels, workflows, and branch protection visibility.
 
 ### Security
 
 - Removed project-specific paths and personal commit identities from runtime behavior.
 - Invalid agent output is inconclusive rather than clean.
 - GitHub mutation results are checked before lifecycle state advances.
+- Built-in control-path escalation cannot be disabled by project config, and protected-path globs cover environment variants.
+- Secret-shaped SSH environment keys and invalid configuration types or ranges are rejected before execution.
+- A failed fetch cannot fall back to a stale default-branch worktree.
 
 [0.1.0]: https://github.com/Misoto22/touchstone/releases/tag/v0.1.0

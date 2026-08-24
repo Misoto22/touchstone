@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+import shutil
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -48,4 +51,34 @@ def write_files(rendered: dict[Path, str], *, dry_run: bool) -> InstallReport:
     return InstallReport(files=tuple(rendered), changed=changed)
 
 
-__all__ = ["InstallReport", "Scheduler", "SchedulerStatus", "write_files"]
+def command_path(executable: Path) -> str:
+    """A credential-free PATH containing Touchstone and its declared CLIs."""
+    directories = [str(executable.resolve().parent)]
+    for command in ("git", "gh", "codex", "claude", "ssh"):
+        found = shutil.which(command)
+        if found:
+            directories.append(str(Path(found).resolve().parent))
+    for conventional in ("/usr/local/bin", "/opt/homebrew/bin", "/usr/bin", "/bin"):
+        if Path(conventional).is_dir():
+            directories.append(conventional)
+    return os.pathsep.join(dict.fromkeys(directories))
+
+
+def find_touchstone_executable() -> Path:
+    found = shutil.which("touchstone")
+    if found:
+        return Path(found).resolve()
+    beside_python = Path(sys.executable).parent / "touchstone"
+    if beside_python.is_file():
+        return beside_python.resolve()
+    raise RuntimeError("could not locate the touchstone executable")
+
+
+__all__ = [
+    "InstallReport",
+    "Scheduler",
+    "SchedulerStatus",
+    "command_path",
+    "find_touchstone_executable",
+    "write_files",
+]

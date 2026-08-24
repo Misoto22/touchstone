@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from tests.test_config import _valid_config, _write
-from touchstone.config import load_config
+from touchstone.config import ConfigError, load_config
 from touchstone.setup import setup
 
 
@@ -49,3 +51,12 @@ def test_setup_is_idempotent(tmp_path: Path) -> None:
     assert first.created_labels == ("touchstone:audit", "touchstone:needs-review")
     assert second.created_labels == ()
     assert config.state_dir.is_dir()
+
+
+def test_setup_fails_when_a_label_cannot_be_created(tmp_path: Path) -> None:
+    class FailingForge(MemoryForge):
+        def ensure_label(self, name: str, *, color: str, description: str) -> bool:
+            return False
+
+    with pytest.raises(ConfigError, match="could not create GitHub label"):
+        setup(_config(tmp_path), dry_run=False, forge=FailingForge())

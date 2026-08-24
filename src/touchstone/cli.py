@@ -23,8 +23,11 @@ def _init(args: argparse.Namespace) -> int:
     workflows = tuple(args.workflow or ())
     schedule = args.schedule
     if args.non_interactive:
-        if not engine or not model:
-            raise ConfigError("non-interactive init requires --engine and --model")
+        if not engine or not model or not workflows or not schedule:
+            raise ConfigError(
+                "non-interactive init requires --engine, --model, --schedule, "
+                "and at least one --workflow"
+            )
     else:
         engine = engine or input("Engine (codex or claude) [codex]: ").strip() or "codex"
         model = model or input("Model: ").strip()
@@ -90,7 +93,7 @@ def _status(args: argparse.Namespace) -> int:
     from touchstone.status import collect_status
 
     config = load(args.config)
-    report = collect_status(config, configure(config))
+    report = collect_status(config, configure(config), scheduler=_scheduler(config))
     if args.json:
         print(json.dumps(report.to_dict(), indent=2))
         return 0
@@ -101,15 +104,24 @@ def _status(args: argparse.Namespace) -> int:
         print(f"{finding['loop']}: {finding['state']}{pull} — {finding['title']}")
     for run in report.last_runs:
         print(f"last {run.get('loop', 'unknown')}: {run.get('outcome', 'unknown')}")
+    if report.scheduler:
+        installed = len(report.scheduler["installed"])
+        missing = len(report.scheduler["missing"])
+        print(
+            f"scheduler: {report.scheduler['adapter']} ({installed} installed, {missing} missing)"
+        )
     return 0
 
 
 def _scheduler(config):  # type: ignore[no-untyped-def]
-    from touchstone import execution
+    from touchstone.execution.local import LocalExecutor
     from touchstone.scheduling import current_scheduler
 
     try:
-        return current_scheduler(execution.build(config))
+        # The configured executor owns repository/model work. Native user
+        # timers belong to the machine running this CLI, even when that work
+        # is delegated to an SSH target.
+        return current_scheduler(LocalExecutor())
     except RuntimeError as exc:
         raise ConfigError(str(exc)) from None
 

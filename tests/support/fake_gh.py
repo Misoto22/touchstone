@@ -12,6 +12,11 @@ class FakeGhExecutor:
     def __init__(self) -> None:
         self.pulls: dict[int, dict[str, Any]] = {}
         self.failures: dict[str, str] = {}
+        self.repository = {
+            "full_name": "acme/widgets",
+            "default_branch": "trunk",
+            "allow_auto_merge": True,
+        }
 
     def add_pull(
         self,
@@ -54,6 +59,10 @@ class FakeGhExecutor:
             return Result(0, json.dumps(matches[:1]), "")
         if argv[1:3] == ["pr", "merge"]:
             return Result(0, "queued", "")
+        if argv[1:3] == ["api", "repos/acme/widgets"]:
+            return Result(0, json.dumps(self.repository), "")
+        if argv[1:3] == ["api", "repos/acme/widgets/branches/trunk"]:
+            return Result(0, json.dumps({"protected": True}), "")
         return Result(1, "", f"unsupported gh command: {argv}")
 
     def read_text(self, path: str) -> str | None:

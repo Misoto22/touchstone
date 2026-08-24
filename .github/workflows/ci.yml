@@ -34,6 +34,8 @@ jobs:
         run: python -m pytest -q
       - name: Lint
         run: python -m ruff check .
+      - name: Check formatting
+        run: python -m ruff format --check src tests
       - name: Check graph documentation
         run: touchstone graph --check
 

@@ -19,7 +19,7 @@ from pathlib import Path
 
 from langgraph.checkpoint.sqlite import SqliteSaver
 
-from touchstone.config import Config
+from touchstone.config import Config, LoopConfig
 from touchstone.events import EventLog, run_event
 from touchstone.graph import build
 from touchstone.lifecycle import RepositoryLifecycle
@@ -88,10 +88,13 @@ def _gates(config: Config, loop_name: str, *, dry_run: bool) -> None:
         raise Held(f"slot held by #{held[0]['number']}: {held[0].get('url', '')}")
 
     _health_gate(config)
+    _publication_gate(config, loop)
 
 
 def _health_gate(config: Config) -> None:
     """Require explicit success from every project-configured workflow."""
+    if not config.forge.required_workflows:
+        raise Held("no required workflows are configured for unattended publication")
     forge = current().forge
     unhealthy: list[str] = []
     for workflow in config.forge.required_workflows:
@@ -102,15 +105,40 @@ def _health_gate(config: Config) -> None:
         raise Held(f"production not known good: {' '.join(unhealthy)}")
 
 
+def _publication_gate(config: Config, loop: LoopConfig) -> None:
+    """Refuse to buy an author session when GitHub cannot accept its result."""
+    forge = current().forge
+    repository = forge.repository_info()
+    if repository is None:
+        raise Held("GitHub repository is not accessible; run touchstone doctor")
+    if not repository.get("autoMergeAllowed"):
+        raise Held("GitHub auto-merge is disabled; enable it before unattended runs")
+    expected = {loop.label, config.forge.escalation_label}
+    missing = sorted(expected - forge.labels())
+    if missing:
+        raise Held(
+            f"configured GitHub labels are missing: {', '.join(missing)}; run touchstone setup"
+        )
+
+
 def _worktree(config: Config) -> tuple[str, str]:
     context = current()
     branch = f"audit/{dt.datetime.now(dt.UTC).strftime('%Y%m%dT%H%M%SZ')}"
-    path = str(Path(config.state_dir) / "worktree")
-    repo = str(config.repo_path)
+    path = config.execution_worktree
+    repo = config.execution_repo
     base = f"origin/{config.forge.default_branch}"
 
-    context.executor.run(["git", "-C", repo, "fetch", "--prune", "--quiet", "origin"], timeout=300)
-    context.executor.run(["git", "-C", repo, "worktree", "prune"], timeout=60)
+    prepared = context.executor.run(["mkdir", "-p", str(Path(path).parent)], timeout=60)
+    if not prepared.ok:
+        raise Held(f"could not prepare worktree state: {prepared.tail()}")
+    fetched = context.executor.run(
+        ["git", "-C", repo, "fetch", "--prune", "--quiet", "origin"], timeout=300
+    )
+    if not fetched.ok:
+        raise Held(f"could not fetch the current default branch: {fetched.tail()}")
+    pruned = context.executor.run(["git", "-C", repo, "worktree", "prune"], timeout=60)
+    if not pruned.ok:
+        raise Held(f"could not inspect existing worktrees: {pruned.tail()}")
     context.executor.run(["git", "-C", repo, "worktree", "remove", "--force", path], timeout=60)
     # Always from the fetched base, never from whatever the clone has checked
     # out: a clone parked on a feature branch would seed every branch weeks
@@ -125,7 +153,7 @@ def _worktree(config: Config) -> tuple[str, str]:
 
 def _teardown(config: Config, path: str, branch: str, *, published: bool) -> None:
     context = current()
-    repo = str(config.repo_path)
+    repo = config.execution_repo
     context.executor.run(["git", "-C", repo, "worktree", "remove", "--force", path], timeout=60)
     context.executor.run(["git", "-C", repo, "worktree", "prune"], timeout=60)
     if not published:
@@ -273,6 +301,7 @@ def resume(config: Config, *, thread: str, answer: str) -> int:
             ).reconcile(config.loop(loop_name), dt.datetime.now(dt.UTC))
             if answer == "merge":
                 _health_gate(config)
+                _publication_gate(config, config.loop(loop_name))
             final = app.invoke(Command(resume=answer), graph_config)
         print(f"{thread}: {final.get('outcome', 'unknown')}")
         for note in final.get("notes", []):

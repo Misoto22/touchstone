@@ -4,7 +4,9 @@ import plistlib
 from pathlib import Path
 from types import SimpleNamespace
 
+from touchstone.cli import _scheduler
 from touchstone.execution.local import LocalExecutor
+from touchstone.scheduling.base import find_touchstone_executable
 from touchstone.scheduling.launchd import LaunchdScheduler
 from touchstone.scheduling.systemd import SystemdScheduler
 
@@ -51,7 +53,9 @@ def test_systemd_install_is_idempotent_and_skips_unscheduled_loops(tmp_path: Pat
     assert second.changed == ()
     service = (target / "touchstone-code.service").read_text(encoding="utf-8")
     assert "WorkingDirectory=" + str((tmp_path / "project").resolve()) in service
-    assert "Environment=" not in service
+    assert 'Environment="PATH=' in service
+    assert "GH_TOKEN" not in service
+    assert "SECRET" not in service
 
 
 def test_scheduler_dry_run_writes_and_executes_nothing(tmp_path: Path) -> None:
@@ -62,3 +66,35 @@ def test_scheduler_dry_run_writes_and_executes_nothing(tmp_path: Path) -> None:
 
     assert len(report.files) == 4
     assert not target.exists()
+
+
+def test_executable_discovery_uses_the_active_python_environment(
+    tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    import sys
+
+    binary = tmp_path / "venv" / "bin" / "touchstone"
+    binary.parent.mkdir(parents=True)
+    binary.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr(sys, "executable", str(binary.parent / "python"))
+    monkeypatch.setattr("shutil.which", lambda command: None)
+
+    assert find_touchstone_executable() == binary.resolve()
+
+
+def test_native_scheduler_commands_always_run_on_the_local_orchestrator(
+    monkeypatch,
+) -> None:  # type: ignore[no-untyped-def]
+    import touchstone.scheduling
+
+    observed: list[object] = []
+    monkeypatch.setattr(
+        touchstone.scheduling,
+        "current_scheduler",
+        lambda executor: observed.append(executor) or executor,
+    )
+
+    scheduler = _scheduler(SimpleNamespace())
+
+    assert isinstance(scheduler, LocalExecutor)
+    assert observed == [scheduler]

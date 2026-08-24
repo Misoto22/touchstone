@@ -54,9 +54,7 @@ def discover_project(start: Path, executor: Executor) -> ProjectDiscovery:
     if head.ok and head.stdout.strip().startswith("origin/"):
         default_branch = head.stdout.strip().removeprefix("origin/")
     else:
-        current = executor.run(
-            ["git", "-C", str(root), "branch", "--show-current"], timeout=30
-        )
+        current = executor.run(["git", "-C", str(root), "branch", "--show-current"], timeout=30)
         default_branch = current.stdout.strip() if current.ok else ""
     if not default_branch:
         raise ConfigError("could not discover the repository's default branch")

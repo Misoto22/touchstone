@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 from tests.test_config import _valid_config, _write
 from touchstone.cli import main
 from touchstone.config import load_config
 from touchstone.doctor import DoctorContext, run_doctor
+from touchstone.execution.base import Result
+from touchstone.execution.local import LocalExecutor
+from touchstone.scheduling.base import SchedulerStatus
 
 
 class MemoryForge:
@@ -16,12 +20,15 @@ class MemoryForge:
     def repository_info(self) -> dict[str, object]:
         return {
             "nameWithOwner": "acme/widgets",
-            "defaultBranchRef": {"name": "trunk"},
+            "defaultBranchRef": {"name": "main"},
             "autoMergeAllowed": True,
         }
 
     def labels(self) -> set[str]:
         return set(self._labels)
+
+    def branch_protection(self, branch: str) -> bool:
+        return True
 
     def latest_run(self, workflow: str, *, branch: str | None = None) -> str:
         return "success"
@@ -79,3 +86,183 @@ def test_doctor_command_is_registered(tmp_path: Path, capsys) -> None:  # type: 
     output = json.loads(capsys.readouterr().out)
     assert code in {0, 1}
     assert output["checks"][0]["id"] == "config.schema"
+
+
+def test_doctor_fails_when_unattended_health_has_no_workflow(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    config = load_config(
+        _write(
+            tmp_path / "touchstone.toml",
+            _valid_config().replace('path = "."', 'path = "repo"'),
+        )
+    )
+    context = DoctorContext(
+        commands=frozenset({"git", "gh", "codex"}),
+        forge=MemoryForge(labels={"touchstone:audit", "touchstone:needs-review"}),
+        scheduler="launchd",
+    )
+
+    report = run_doctor(config, context)
+
+    assert report.by_id("workflows.required").level == "FAIL"
+    assert report.exit_code == 1
+
+
+def test_doctor_fails_when_no_model_is_configured(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    object.__setattr__(config.engine, "model", "")
+    context = DoctorContext(
+        commands=frozenset({"git", "gh", "codex"}),
+        forge=MemoryForge(labels={"touchstone:audit", "touchstone:needs-review"}),
+        scheduler="launchd",
+    )
+
+    assert run_doctor(config, context).by_id("engine.model").level == "FAIL"
+
+
+def test_doctor_checks_the_target_is_a_git_repo_with_origin(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    subprocess.run(["git", "-C", str(config.repo_path), "init"], check=True, capture_output=True)
+    context = DoctorContext(
+        commands=frozenset({"git", "gh", "codex"}),
+        forge=MemoryForge(labels={"touchstone:audit", "touchstone:needs-review"}),
+        scheduler="launchd",
+        executor=LocalExecutor(),
+    )
+
+    report = run_doctor(config, context)
+
+    assert report.by_id("project.git").level == "PASS"
+    assert report.by_id("project.origin").level == "FAIL"
+    assert report.by_id("project.worktrees").level == "PASS"
+
+
+def test_doctor_reports_scheduled_loops_that_are_not_installed(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    context = DoctorContext(
+        commands=frozenset({"git", "gh", "codex"}),
+        forge=MemoryForge(labels={"touchstone:audit", "touchstone:needs-review"}),
+        scheduler="launchd",
+        scheduler_status=SchedulerStatus(
+            adapter="launchd",
+            supported=True,
+            missing=(tmp_path / "io.touchstone.agent.code.plist",),
+        ),
+    )
+
+    check = run_doctor(config, context).by_id("scheduler.installed")
+
+    assert check.level == "WARN"
+    assert "1" in check.summary
+
+
+def test_doctor_names_deprecated_overrides_without_logging_values(
+    tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("TOUCHSTONE_MODEL", "private-model-value")
+    config = _config(tmp_path)
+    context = DoctorContext(
+        commands=frozenset({"git", "gh", "codex"}),
+        forge=MemoryForge(labels={"touchstone:audit", "touchstone:needs-review"}),
+        scheduler="launchd",
+    )
+
+    check = run_doctor(config, context).by_id("config.deprecated_env")
+
+    assert check.level == "WARN"
+    assert "TOUCHSTONE_MODEL" in check.summary
+    assert "private-model-value" not in check.summary
+
+
+def test_doctor_fails_when_default_branch_drifted(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+
+    class DriftedForge(MemoryForge):
+        def repository_info(self) -> dict[str, object]:
+            info = super().repository_info()
+            info["defaultBranchRef"] = {"name": "trunk"}
+            return info
+
+    context = DoctorContext(
+        commands=frozenset({"git", "gh", "codex"}),
+        forge=DriftedForge(labels={"touchstone:audit", "touchstone:needs-review"}),
+        scheduler="launchd",
+    )
+
+    check = run_doctor(config, context).by_id("forge.default_branch")
+
+    assert check.level == "FAIL"
+    assert "trunk" in check.summary
+
+
+def test_doctor_discovers_commands_on_the_execution_target(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from touchstone import doctor
+
+    class TargetExecutor:
+        where = "ssh audit.example"
+
+        def run(self, argv, **_kwargs):  # type: ignore[no-untyped-def]
+            command = argv[-1]
+            present = command in {"git", "codex"}
+            return Result(0 if present else 1, f"/usr/bin/{command}\n" if present else "", "")
+
+    class Scheduler:
+        def status(self, _config):  # type: ignore[no-untyped-def]
+            return SchedulerStatus(adapter="launchd", supported=True)
+
+    executor = TargetExecutor()
+    monkeypatch.setattr(doctor.execution, "build", lambda _config: executor)
+    monkeypatch.setattr(doctor, "current_scheduler", lambda _executor: Scheduler())
+
+    context = doctor.build_context(_config(tmp_path), offline=True)
+
+    assert context.commands == frozenset({"git", "codex"})
+
+
+def test_online_doctor_fails_when_github_repository_is_inaccessible(tmp_path: Path) -> None:
+    class InaccessibleForge(MemoryForge):
+        def repository_info(self) -> None:
+            return None
+
+    context = DoctorContext(
+        commands=frozenset({"git", "gh", "codex"}),
+        forge=InaccessibleForge(labels={"touchstone:audit", "touchstone:needs-review"}),
+        scheduler="launchd",
+        online=True,
+    )
+
+    check = run_doctor(_config(tmp_path), context).by_id("forge.repository")
+
+    assert check.level == "FAIL"
+
+
+def test_online_doctor_fails_when_setup_labels_are_missing(tmp_path: Path) -> None:
+    context = DoctorContext(
+        commands=frozenset({"git", "gh", "codex"}),
+        forge=MemoryForge(labels=set()),
+        scheduler="launchd",
+        online=True,
+    )
+
+    check = run_doctor(_config(tmp_path), context).by_id("forge.labels")
+
+    assert check.level == "FAIL"
+
+
+def test_doctor_warns_when_default_branch_protection_is_missing(tmp_path: Path) -> None:
+    class UnprotectedForge(MemoryForge):
+        def branch_protection(self, branch: str) -> bool:
+            return False
+
+    context = DoctorContext(
+        commands=frozenset({"git", "gh", "codex"}),
+        forge=UnprotectedForge(labels={"touchstone:audit", "touchstone:needs-review"}),
+        scheduler="launchd",
+        online=True,
+    )
+
+    check = run_doctor(_config(tmp_path), context).by_id("forge.branch_protection")
+
+    assert check.level == "WARN"
+    assert "not confirmed" in check.summary

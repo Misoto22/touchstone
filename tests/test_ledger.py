@@ -21,9 +21,7 @@ def _event(state: str, *, title: str = "Broken invariant") -> LifecycleEvent:
 
 
 @pytest.mark.parametrize("terminal", ["failed", "reaped", "closed"])
-def test_terminal_failure_does_not_suppress_rediscovery(
-    tmp_path: Path, terminal: str
-) -> None:
+def test_terminal_failure_does_not_suppress_rediscovery(tmp_path: Path, terminal: str) -> None:
     ledger = Ledger(tmp_path / "events.jsonl")
     ledger.append(_event("armed"))
     ledger.append(_event(terminal))
@@ -32,9 +30,7 @@ def test_terminal_failure_does_not_suppress_rediscovery(
 
 
 @pytest.mark.parametrize("state", ["armed", "parked", "merged"])
-def test_live_or_completed_publication_suppresses_rediscovery(
-    tmp_path: Path, state: str
-) -> None:
+def test_live_or_completed_publication_suppresses_rediscovery(tmp_path: Path, state: str) -> None:
     ledger = Ledger(tmp_path / "events.jsonl")
     ledger.append(_event(state))
 

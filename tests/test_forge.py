@@ -45,3 +45,17 @@ def test_auto_merge_failure_returns_the_error() -> None:
     result = Forge("acme/widgets", executor).arm_auto_merge(12)
 
     assert (result.ok, result.detail) == (False, "auto-merge is disabled")
+
+
+def test_repository_info_uses_the_current_github_api_shape() -> None:
+    info = Forge("acme/widgets", FakeGhExecutor()).repository_info()
+
+    assert info == {
+        "nameWithOwner": "acme/widgets",
+        "defaultBranchRef": {"name": "trunk"},
+        "autoMergeAllowed": True,
+    }
+
+
+def test_branch_protection_uses_the_current_github_api_shape() -> None:
+    assert Forge("acme/widgets", FakeGhExecutor()).branch_protection("trunk") is True

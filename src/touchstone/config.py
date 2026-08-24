@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
+import re
 import tomllib
 from dataclasses import dataclass, field
 from importlib.resources import files
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from string import Template
 from typing import Any, Literal
 
@@ -49,6 +51,22 @@ class SshConfig:
     env: tuple[tuple[str, str], ...] = ()
     identity_file: str | None = None
     connect_timeout: int = 15
+
+    def __post_init__(self) -> None:
+        if not self.host.strip():
+            raise ConfigError("execution.ssh.host must not be empty")
+        if not PurePosixPath(self.workdir).is_absolute():
+            raise ConfigError("execution.ssh.workdir must be an absolute remote path")
+        if not PurePosixPath(self.state_dir).is_absolute():
+            raise ConfigError("execution.ssh.state_dir must be an absolute remote path")
+        secret_markers = ("TOKEN", "SECRET", "PASSWORD", "PASSWD", "API_KEY", "PRIVATE_KEY")
+        for key, _value in self.env:
+            normalized = key.upper()
+            if any(marker in normalized for marker in secret_markers):
+                raise ConfigError(
+                    f"execution.ssh.env contains secret-like key {key!r}; "
+                    "provide credentials through the remote runtime instead"
+                )
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,6 +154,18 @@ class Config:
             known = ", ".join(sorted(self.loops)) or "none"
             raise ConfigError(f"no loop named {name!r}; configured loops are {known}") from None
 
+    @property
+    def execution_repo(self) -> str:
+        if self.execution.target == "ssh" and self.execution.ssh is not None:
+            return self.execution.ssh.workdir
+        return str(self.repo_path)
+
+    @property
+    def execution_worktree(self) -> str:
+        if self.execution.target == "ssh" and self.execution.ssh is not None:
+            return str(PurePosixPath(self.execution.ssh.state_dir) / "worktree")
+        return str(self.state_dir / "worktree")
+
     def describe(self) -> str:
         where = self.execution.target
         if self.execution.target == "ssh" and self.execution.ssh is not None:
@@ -205,6 +235,36 @@ def _required(table: dict[str, Any], key: str, where: str) -> Any:
     return table[key]
 
 
+def _string(table: dict[str, Any], key: str, where: str, *, required: bool = False) -> None:
+    if key not in table:
+        if required:
+            raise ConfigError(f"[{where}] is missing the required key {key!r}")
+        return
+    value = table[key]
+    if not isinstance(value, str):
+        raise ConfigError(f"{where}.{key} must be a string")
+    if not value.strip():
+        raise ConfigError(f"{where}.{key} must not be empty")
+
+
+def _string_array(table: dict[str, Any], key: str, where: str) -> None:
+    if key not in table:
+        return
+    value = table[key]
+    if not isinstance(value, list) or any(
+        not isinstance(item, str) or not item.strip() for item in value
+    ):
+        raise ConfigError(f"{where}.{key} must be an array of non-empty strings")
+
+
+def _positive_int(table: dict[str, Any], key: str, where: str) -> None:
+    if key not in table:
+        return
+    value = table[key]
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ConfigError(f"{where}.{key} must be a positive integer")
+
+
 def _local_path(value: str, base_dir: Path) -> Path:
     path = Path(value).expanduser()
     return path.resolve() if path.is_absolute() else (base_dir / path).resolve()
@@ -225,6 +285,32 @@ def _validate(raw: dict[str, Any]) -> None:
     _unknown(execution, _EXECUTION, "execution")
     _unknown(_table(execution, "ssh"), _SSH, "execution.ssh")
     _unknown(git, _GIT, "git")
+    _string(project, "path", "project", required=True)
+    if "state_dir" in raw and not isinstance(raw["state_dir"], str):
+        raise ConfigError("state_dir must be a string")
+    for key in ("provider", "slug", "default_branch", "escalation_label"):
+        _string(forge, key, "forge")
+    _string_array(forge, "required_workflows", "forge")
+    _positive_int(forge, "reap_after_hours", "forge")
+    for key in ("name", "model", "audit_effort", "review_effort"):
+        _string(engine, key, "engine")
+    _positive_int(engine, "timeout_seconds", "engine")
+    _string_array(engine, "extra_args", "engine")
+    for key, value in _table(engine, "budget").items():
+        if isinstance(value, bool) or not isinstance(value, int | float) or value < 0:
+            raise ConfigError(f"engine.budget.{key} must be a non-negative number")
+    _string(execution, "target", "execution")
+    ssh = _table(execution, "ssh")
+    for key in ("host", "workdir", "state_dir", "identity_file"):
+        _string(ssh, key, "execution.ssh")
+    _positive_int(ssh, "connect_timeout", "execution.ssh")
+    ssh_env = ssh.get("env", {})
+    if not isinstance(ssh_env, dict) or any(
+        not isinstance(key, str) or not isinstance(value, str) for key, value in ssh_env.items()
+    ):
+        raise ConfigError("execution.ssh.env must be a table of string values")
+    for key in ("author_name", "author_email"):
+        _string(git, key, "git")
     for name, value in loops.items():
         if not isinstance(value, dict):
             raise ConfigError(f"[loop.{name}] must be a table")
@@ -232,9 +318,17 @@ def _validate(raw: dict[str, Any]) -> None:
         context = value.get("context", {})
         if not isinstance(context, dict):
             raise ConfigError(f"[loop.{name}.context] must be a table")
+        for key in ("brief", "label", "schedule"):
+            _string(value, key, f"loop.{name}", required=key in {"brief", "label"})
+        for key in ("protected_paths", "require_change_under", "confine_to"):
+            _string_array(value, key, f"loop.{name}")
+        if any(
+            not isinstance(key, str) or not isinstance(item, str) for key, item in context.items()
+        ):
+            raise ConfigError(f"loop.{name}.context must contain only string values")
 
 
-def _state_dir(raw: dict[str, Any], base_dir: Path) -> Path:
+def _state_dir(raw: dict[str, Any], base_dir: Path, *, identity: str) -> Path:
     override = os.environ.get("TOUCHSTONE_STATE")
     if override:
         return _local_path(override, Path.cwd())
@@ -242,7 +336,10 @@ def _state_dir(raw: dict[str, Any], base_dir: Path) -> Path:
     if configured:
         return _local_path(str(configured), base_dir)
     xdg = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state"))
-    return (xdg / "touchstone").expanduser().resolve()
+    leaf = re.sub(r"[^a-zA-Z0-9._-]+", "-", identity.rsplit("/", 1)[-1]).strip("-")
+    leaf = leaf or "project"
+    digest = hashlib.sha256(identity.encode()).hexdigest()[:10]
+    return (xdg / "touchstone" / f"{leaf}-{digest}").expanduser().resolve()
 
 
 def _loops(raw: dict[str, Any], base_dir: Path) -> dict[str, LoopConfig]:
@@ -343,7 +440,11 @@ def load_config(path: Path | None = None) -> Config:
     return Config(
         source=ConfigSource(path=chosen, schema_version=1),
         repo_path=repo_path,
-        state_dir=_state_dir(raw, base_dir),
+        state_dir=_state_dir(
+            raw,
+            base_dir,
+            identity=str(forge_raw.get("slug") or repo_path),
+        ),
         forge=ForgeConfig(
             slug=str(forge_raw.get("slug", "")),
             provider="github",

@@ -4,13 +4,18 @@ from __future__ import annotations
 
 import os
 import plistlib
-import shutil
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from touchstone.execution import Executor
-from touchstone.scheduling.base import InstallReport, SchedulerStatus, write_files
+from touchstone.scheduling.base import (
+    InstallReport,
+    SchedulerStatus,
+    command_path,
+    find_touchstone_executable,
+    write_files,
+)
 from touchstone.scheduling.model import parse_schedule
 
 
@@ -25,7 +30,7 @@ class LaunchdScheduler:
         home: Path | None = None,
     ) -> None:
         self._executor = executor
-        self._executable = (executable or _touchstone_executable()).resolve()
+        self._executable = (executable or find_touchstone_executable()).resolve()
         self._home = (home or Path.home()).resolve()
 
     def install(
@@ -91,7 +96,7 @@ class LaunchdScheduler:
                 ],
                 "WorkingDirectory": str(Path(config.repo_path).resolve()),
                 "ProcessType": "Background",
-                "EnvironmentVariables": {"PATH": "/usr/local/bin:/usr/bin:/bin"},
+                "EnvironmentVariables": {"PATH": command_path(self._executable)},
                 "StandardOutPath": str(Path(config.state_dir).resolve() / "logs" / f"{name}.log"),
                 "StandardErrorPath": str(
                     Path(config.state_dir).resolve() / "logs" / f"{name}.error.log"
@@ -105,13 +110,6 @@ class LaunchdScheduler:
             content = plistlib.dumps(payload, fmt=plistlib.FMT_XML, sort_keys=True).decode()
             rendered[destination / f"{label}.plist"] = content
         return rendered
-
-
-def _touchstone_executable() -> Path:
-    found = shutil.which("touchstone")
-    if not found:
-        raise RuntimeError("could not locate the touchstone executable")
-    return Path(found)
 
 
 __all__ = ["LaunchdScheduler"]

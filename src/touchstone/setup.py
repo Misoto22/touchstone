@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from touchstone import execution
-from touchstone.config import Config
+from touchstone.config import Config, ConfigError
 from touchstone.forge import Forge
 
 
@@ -30,12 +30,16 @@ def setup(config: Config, *, dry_run: bool, forge: Forge | None = None) -> Setup
     for label in labels:
         if label in existing:
             continue
-        if target_forge.ensure_label(
+        created_ok = target_forge.ensure_label(
             label,
             color="1d76db" if label != config.forge.escalation_label else "b60205",
             description="Managed by Touchstone",
-        ):
-            created.append(label)
+        )
+        if not created_ok:
+            raise ConfigError(
+                f"could not create GitHub label {label!r}; check gh authentication and permissions"
+            )
+        created.append(label)
     return SetupReport(labels, tuple(created), state_dir_created)
 
 

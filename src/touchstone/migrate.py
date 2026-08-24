@@ -52,7 +52,10 @@ def _migrate_v0(raw: dict[str, Any]) -> dict[str, Any]:
     forge.pop("audit_label", None)
     forge.pop("harness_label", None)
     forge.setdefault("provider", "github")
-    forge.setdefault("required_workflows", ["verify-deploy.yml", "ci.yml"])
+    # A migration cannot infer the target repository's workflow names. An
+    # empty list is visible to doctor and blocks live publication until the
+    # operator configures the real default-branch guarantees.
+    forge.setdefault("required_workflows", [])
 
     loops: dict[str, Any] = {}
     builtins = {

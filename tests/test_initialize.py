@@ -82,3 +82,45 @@ def test_non_interactive_init_is_available_from_the_cli(tmp_path: Path) -> None:
 
     assert code == 0
     assert load_config(repo / "touchstone.toml").forge.slug == "acme/widgets"
+
+
+def test_non_interactive_init_requires_an_explicit_workflow(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path, remote="git@github.com:acme/widgets.git")
+
+    code = main(
+        [
+            "init",
+            "--path",
+            str(repo),
+            "--non-interactive",
+            "--engine",
+            "codex",
+            "--model",
+            "gpt-test",
+        ]
+    )
+
+    assert code == 78
+    assert not (repo / "touchstone.toml").exists()
+
+
+def test_non_interactive_init_requires_an_explicit_schedule(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path, remote="git@github.com:acme/widgets.git")
+
+    code = main(
+        [
+            "init",
+            "--path",
+            str(repo),
+            "--non-interactive",
+            "--engine",
+            "codex",
+            "--model",
+            "gpt-test",
+            "--workflow",
+            "ci.yml",
+        ]
+    )
+
+    assert code == 78
+    assert not (repo / "touchstone.toml").exists()
