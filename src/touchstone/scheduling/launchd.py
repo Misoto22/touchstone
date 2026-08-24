@@ -82,7 +82,7 @@ class LaunchdScheduler:
         self, config: Any, *, target: Path | None = None, dry_run: bool = False
     ) -> InstallReport:
         destination = (target or self._home / "Library" / "LaunchAgents").resolve()
-        files = tuple(self._render(config, destination))
+        files = self._wake_files(destination)
         if target is None and not dry_run:
             domain = f"gui/{os.getuid()}"
             for path in files:
@@ -105,12 +105,13 @@ class LaunchdScheduler:
 
     def status(self, config: Any) -> SchedulerStatus:
         destination = self._home / "Library" / "LaunchAgents"
-        files = tuple(self._render(config, destination))
+        owned = self._wake_files(destination)
+        expected = tuple(self._render(config, destination))
         return SchedulerStatus(
             adapter=self.name,
             supported=True,
-            installed=tuple(path for path in files if path.exists()),
-            missing=tuple(path for path in files if not path.exists()),
+            installed=tuple(path for path in owned if path.exists()),
+            missing=tuple(path for path in expected if not path.exists()),
         )
 
     def _render(self, config: Any, destination: Path) -> dict[Path, str]:
@@ -134,6 +135,10 @@ class LaunchdScheduler:
         }
         content = plistlib.dumps(payload, fmt=plistlib.FMT_XML, sort_keys=True).decode()
         return {destination / f"{label}.plist": content}
+
+    def _wake_files(self, destination: Path) -> tuple[Path, ...]:
+        """The agent path this adapter owns, whether or not a schedule exists."""
+        return (destination / "io.touchstone.agent.wake.plist",)
 
     def _legacy_files(self, config: Any, destination: Path) -> tuple[Path, ...]:
         return tuple(

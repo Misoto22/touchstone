@@ -31,6 +31,7 @@ class _Spy:
     """Records the argv an executor would have run."""
 
     where = "local"
+    replaces_environment = True
 
     def __init__(self) -> None:
         self.sent: list[list[str]] = []
@@ -714,3 +715,54 @@ def test_a_large_new_file_cannot_push_a_tracked_edit_out_of_the_review(tmp_path)
 
     assert reviewable.refusal, "an oversized change was reviewed on whatever fit"
     assert not reviewable.diff
+
+
+def test_an_ssh_engine_keeps_the_remote_environment_it_was_configured_with() -> None:
+    """An ssh command cannot have its environment replaced, only added to.
+
+    Prepending a locally derived environment would override the configured
+    remote PATH and HOME and put a local API key on a remote command line.
+    """
+
+    class _RemoteSpy(_Spy):
+        where = "ssh my-server"
+        replaces_environment = False
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.environments: list[dict[str, str] | None] = []
+
+        def run(self, argv, **kwargs):  # type: ignore[no-untyped-def]
+            self.sent.append(argv)
+            self.environments.append(kwargs.get("env"))
+            return Result(0, '{"result":"ok"}', "")
+
+        def read_text(self, _path: str) -> str:
+            return '{"result":"ok"}'
+
+        def write_text(self, _path: str, _text: str) -> None:
+            return None
+
+    spy = _RemoteSpy()
+    config = SimpleNamespace(
+        engine=SimpleNamespace(
+            name="codex",
+            model="model",
+            audit_effort="medium",
+            review_effort="medium",
+            timeout_seconds=30,
+            extra_args=(),
+            budget=SimpleNamespace(audit=1.0, review=1.0),
+            sandbox="workspace-write",
+        ),
+        state_dir="/tmp/touchstone-remote-test",
+    )
+
+    CodexEngine(config, spy).author("brief", worktree="/remote/worktree", denied=())
+
+    model_calls = [
+        environment
+        for argv, environment in zip(spy.sent, spy.environments, strict=True)
+        if argv[0] == "codex"
+    ]
+    assert model_calls == [None]

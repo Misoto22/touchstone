@@ -70,8 +70,10 @@ class SystemdScheduler:
         self, config: Any, *, target: Path | None = None, dry_run: bool = False
     ) -> InstallReport:
         destination = (target or self._home / ".config" / "systemd" / "user").resolve()
-        files = tuple(self._render(config, destination))
-        timers = [path.name for path in files if path.suffix == ".timer"]
+        files = self._wake_files(destination)
+        # Disable only what is actually on disk: `systemctl disable` on a unit
+        # that was never installed fails, and uninstall must stay idempotent.
+        timers = [path.name for path in files if path.suffix == ".timer" and path.exists()]
         if target is None and not dry_run and timers:
             disabled = self._executor.run(
                 ["systemctl", "--user", "disable", "--now", *timers], timeout=60
@@ -90,12 +92,16 @@ class SystemdScheduler:
 
     def status(self, config: Any) -> SchedulerStatus:
         destination = self._home / ".config" / "systemd" / "user"
-        files = tuple(self._render(config, destination))
+        # Owned paths report what is installed, including a unit left behind
+        # after the last schedule was removed; expected paths report what is
+        # missing, so a repository with no schedule is not reported incomplete.
+        owned = self._wake_files(destination)
+        expected = tuple(self._render(config, destination))
         return SchedulerStatus(
             adapter=self.name,
             supported=True,
-            installed=tuple(path for path in files if path.exists()),
-            missing=tuple(path for path in files if not path.exists()),
+            installed=tuple(path for path in owned if path.exists()),
+            missing=tuple(path for path in expected if not path.exists()),
         )
 
     def _render(self, config: Any, destination: Path) -> dict[Path, str]:
@@ -134,6 +140,17 @@ class SystemdScheduler:
             destination / f"{unit}.service": service,
             destination / f"{unit}.timer": timer,
         }
+
+    def _wake_files(self, destination: Path) -> tuple[Path, ...]:
+        """The unit paths this adapter owns, whether or not a schedule exists.
+
+        `_render` produces nothing once the last Loop schedule is removed, so
+        deriving status and uninstall from it left an already-installed
+        `touchstone-wake.timer` enabled and still firing `run-due` while status
+        reported nothing installed.
+        """
+        unit = "touchstone-wake"
+        return (destination / f"{unit}.service", destination / f"{unit}.timer")
 
     def _legacy_files(self, config: Any, destination: Path) -> tuple[Path, ...]:
         files = []

@@ -17,6 +17,10 @@ from touchstone.execution.local import LocalExecutor
 
 
 class SshExecutor:
+    #: A remote environment is configured by `execution.ssh.env`, not replaced
+    #: from here.
+    replaces_environment = False
+
     def __init__(self, config: SshConfig) -> None:
         self._config = config
         self._local = LocalExecutor()

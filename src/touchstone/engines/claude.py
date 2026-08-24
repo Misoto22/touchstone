@@ -39,6 +39,19 @@ class ClaudeEngine:
         ]
         return json.dumps({"permissions": {"deny": rules}})
 
+    def _model_environment(self) -> dict[str, str] | None:
+        """The environment for a model call, when this executor can replace one.
+
+        Over ssh it cannot: assignments would be appended to the remote command,
+        overriding the configured remote `PATH` and `HOME` and putting a local
+        API key on a remote command line. The remote environment is configured
+        by `execution.ssh.env`, which is where an ssh installation's credentials
+        already belong.
+        """
+        if not self._exec.replaces_environment:
+            return None
+        return engine_environment(self.name)
+
     def author(self, brief: str, *, worktree: str, denied: tuple[str, ...]) -> Session:
         settings_path = f"{worktree}/.harness-settings.json"
         self._exec.write_text(settings_path, self._settings(denied))
@@ -71,7 +84,7 @@ class ClaudeEngine:
             argv,
             cwd=worktree,
             timeout=self._config.engine.timeout_seconds,
-            env=engine_environment(self.name),
+            env=self._model_environment(),
         )
         self._exec.run(["rm", "-f", settings_path], timeout=30)
         transcript = result.stdout + result.stderr
@@ -112,7 +125,7 @@ class ClaudeEngine:
             argv,
             cwd=worktree,
             timeout=self._config.engine.timeout_seconds,
-            env=engine_environment(self.name),
+            env=self._model_environment(),
         )
         cost, text = _payload(result.stdout)
         return Session(

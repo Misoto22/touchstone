@@ -44,6 +44,9 @@ All notable user-facing changes are documented here. The format follows [Keep a 
 - Hosted commits are authored by the publishing App's bot identity instead of an identity git synthesizes from the runner's user and hostname.
 - `reconcile` no longer treats an existing pull request as a finished publication: a partial write stays unresolved until the Loop and escalation labels a complete publication applies are actually present.
 - A partial publication now exits non-zero. A parked thread was read as a completed run before the outcome was consulted, so a publication that opened a pull request and then failed reported exit 0 and every exit-code monitor stayed silent.
+- A successful publication records its branch, so an operator can approve a parked draft. Only the partial-failure paths stored it, and a resume verifies the live pull request against the stored branch, so every normally parked hosted draft was impossible to approve.
+- A model process is given a replacement environment only where the executor can replace one. Over SSH the assignments were appended to the remote command, overriding the configured remote `PATH` and `HOME` and putting a local API key on a remote command line.
+- `scheduler-status` and `uninstall-scheduler` still see the shared wake unit after the last Loop schedule is removed, instead of reporting nothing while an enabled timer keeps firing `run-due`.
 - Owner App setup verifies repository scope and permissions with a short-lived App JWT before persisting only a non-secret attestation; later local checks label that evidence as cached.
 - Hosted bundles use AES-256-GCM with manifest AAD, fresh nonces, path-safe archives, configuration/Profile lineage checks, and ciphertext digests.
 - GitHub App private keys are sent to repository secrets through stdin and are never persisted by Touchstone.

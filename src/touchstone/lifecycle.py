@@ -329,12 +329,44 @@ class RepositoryLifecycle:
                     branch=request.branch,
                 )
             detail = f"{request.risk} / {request.verdict}: {request.review_reason}"
-            self._record(request, "awaiting_human", pr=number, head_sha=head, detail=detail)
-            return PublicationResult("awaiting_human", request.finding_id, number, head, detail)
+            # The branch is part of the record, not just of a failure. A resume
+            # verifies the live pull request against the branch and head it was
+            # parked with, so omitting it here made every normally parked draft
+            # impossible to approve.
+            self._record(
+                request,
+                "awaiting_human",
+                pr=number,
+                head_sha=head,
+                branch=request.branch,
+                detail=detail,
+            )
+            return PublicationResult(
+                "awaiting_human",
+                request.finding_id,
+                number,
+                head,
+                detail,
+                branch=request.branch,
+            )
 
         detail = "independent review approved; pull request awaits checks and human merge"
-        self._record(request, "awaiting_checks", pr=number, head_sha=head, detail=detail)
-        return PublicationResult("awaiting_checks", request.finding_id, number, head, detail)
+        self._record(
+            request,
+            "awaiting_checks",
+            pr=number,
+            head_sha=head,
+            branch=request.branch,
+            detail=detail,
+        )
+        return PublicationResult(
+            "awaiting_checks",
+            request.finding_id,
+            number,
+            head,
+            detail,
+            branch=request.branch,
+        )
 
     def reconcile(self, loop: LoopConfig, now: dt.datetime) -> ReconcileReport:
         merged: list[int] = []

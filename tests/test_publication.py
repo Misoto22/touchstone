@@ -317,3 +317,36 @@ def test_node_builds_publication_from_project_configuration() -> None:
         "Touchstone Bot",
         "bot@example.com",
     )
+
+
+def test_a_successful_publication_records_the_branch_a_resume_will_verify(
+    tmp_path: Path,
+) -> None:
+    """Approval compares the live pull request against the branch it was parked with."""
+    repo = _worktree(tmp_path)
+    ledger = Ledger(tmp_path / "events.jsonl")
+    lifecycle = RepositoryLifecycle(
+        MemoryForge(), ledger, reap_after_hours=6, executor=LocalExecutor()
+    )
+
+    result = lifecycle.publish(replace(_request(repo), risk="high", verdict="skipped"))
+    projection = ledger.projection(result.finding_id)
+
+    assert result.outcome == "awaiting_human"
+    assert projection is not None
+    assert projection.branch == result.branch != ""
+
+
+def test_an_approved_publication_also_records_its_branch(tmp_path: Path) -> None:
+    repo = _worktree(tmp_path)
+    ledger = Ledger(tmp_path / "events.jsonl")
+    lifecycle = RepositoryLifecycle(
+        MemoryForge(), ledger, reap_after_hours=6, executor=LocalExecutor()
+    )
+
+    result = lifecycle.publish(replace(_request(repo), risk="low", verdict="approve"))
+    projection = ledger.projection(result.finding_id)
+
+    assert result.outcome == "awaiting_checks"
+    assert projection is not None
+    assert projection.branch == result.branch != ""

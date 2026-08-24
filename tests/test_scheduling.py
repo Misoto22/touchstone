@@ -155,3 +155,50 @@ def test_systemd_uninstall_refuses_to_hide_a_disable_failure(tmp_path: Path) -> 
 
     with pytest.raises(RuntimeError, match="disable"):
         scheduler.uninstall(_config(tmp_path))
+
+
+def _unscheduled(tmp_path: Path):  # type: ignore[no-untyped-def]
+    config = _config(tmp_path)
+    config.loops = {
+        name: SimpleNamespace(name=loop.name, schedule=None) for name, loop in config.loops.items()
+    }
+    return config
+
+
+def test_a_wake_unit_stays_visible_after_the_last_schedule_is_removed(tmp_path: Path) -> None:
+    """Removing every Loop schedule must not hide an installed, still-firing unit."""
+    for scheduler in (
+        LaunchdScheduler(LocalExecutor(), executable=Path("/absolute/bin/touchstone")),
+        SystemdScheduler(LocalExecutor(), executable=Path("/absolute/bin/touchstone")),
+    ):
+        target = tmp_path / f"{scheduler.name}-units"
+        target.mkdir()
+        scheduler.install(_config(tmp_path), target=target)
+        assert sorted(path.name for path in target.iterdir()), scheduler.name
+
+        unscheduled = _unscheduled(tmp_path)
+        report = scheduler.uninstall(unscheduled, target=target)
+
+        assert report.changed, f"{scheduler.name} left its wake unit behind"
+        assert sorted(path.name for path in target.iterdir()) == []
+
+
+def test_status_reports_a_leaked_wake_unit_without_demanding_one(
+    tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    scheduler = SystemdScheduler(LocalExecutor(), executable=Path("/absolute/bin/touchstone"))
+    home = tmp_path / "home"
+    units = home / ".config" / "systemd" / "user"
+    units.mkdir(parents=True)
+    monkeypatch.setattr(scheduler, "_home", home)
+    scheduler.install(_config(tmp_path), target=units)
+
+    leaked = scheduler.status(_unscheduled(tmp_path))
+
+    # The unit is still on disk and still enabled; nothing is "missing" because
+    # no schedule asks for one.
+    assert [path.name for path in leaked.installed] == [
+        "touchstone-wake.service",
+        "touchstone-wake.timer",
+    ]
+    assert leaked.missing == ()

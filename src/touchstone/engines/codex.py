@@ -49,6 +49,19 @@ class CodexEngine:
             blocked=blocked,
         )
 
+    def _model_environment(self) -> dict[str, str] | None:
+        """The environment for a model call, when this executor can replace one.
+
+        Over ssh it cannot: assignments would be appended to the remote command,
+        overriding the configured remote `PATH` and `HOME` and putting a local
+        API key on a remote command line. The remote environment is configured
+        by `execution.ssh.env`, which is where an ssh installation's credentials
+        already belong.
+        """
+        if not self._exec.replaces_environment:
+            return None
+        return engine_environment(self.name)
+
     def author(self, brief: str, *, worktree: str, denied: tuple[str, ...]) -> Session:
         # `denied` is accepted and not used, deliberately. Codex has no
         # per-path deny list, and pretending otherwise by filtering the brief
@@ -63,7 +76,7 @@ class CodexEngine:
         result = self._exec.run(
             argv,
             timeout=self._config.engine.timeout_seconds,
-            env=engine_environment(self.name),
+            env=self._model_environment(),
         )
         transcript = result.stdout + result.stderr
         keep(self._config.state_dir, "engine-author.log", transcript)
@@ -83,7 +96,7 @@ class CodexEngine:
         result = self._exec.run(
             argv,
             timeout=self._config.engine.timeout_seconds,
-            env=engine_environment(self.name),
+            env=self._model_environment(),
         )
         answer = self._exec.read_text(answer_path) or ""
         transcript = result.stdout + result.stderr
