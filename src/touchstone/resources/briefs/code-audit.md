@@ -12,6 +12,14 @@ that. It has been triaged by a person, its severity and risk are already
 decided, and it names its evidence — you are implementing, not discovering,
 which is both cheaper and far likelier to be right.
 
+**A row whose work is already done is not the end of the queue.** Statuses go
+stale — someone fixes a defect and the row keeps saying open — and finding one
+is not a reason to stop. Say so in your summary, move to the next open row, and
+keep going. Reporting nothing found because the first row was already fixed
+leaves that row at the front of the queue, so the next run reads it, reaches the
+same conclusion, and stops in the same place. One stale row halts the loop
+indefinitely, hourly, while every run looks like a run that found nothing.
+
 Three rules about that file, and they are not negotiable:
 
 - A row marked as proposable but not shippable is yours to fix and never yours

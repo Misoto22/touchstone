@@ -428,6 +428,10 @@ def test_the_briefs_keep_the_constraints_that_were_paid_for() -> None:
     # next run picks the same row and writes the same test again. A queue that
     # cannot advance looks identical to a queue being worked.
     assert "Skip the prose-only rows entirely" in flowed
+    # A stale ledger row halted the loop for a full day: the first open row was
+    # already fixed, the session reported nothing found, and every hourly run
+    # after it read the same row and stopped in the same place.
+    assert "is not the end of the queue" in flowed
     # A ceiling raised instead of a regression reported.
     assert "never raised" in harness
     # A date stamped in UTC by a schedule that runs on local time.
