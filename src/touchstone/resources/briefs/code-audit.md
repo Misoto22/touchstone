@@ -40,12 +40,21 @@ only when the queue above is empty, and take the first row of either kind:
 
 **Check whether the register is yours to write before you plan to write it.** It
 is often protected, and for a reason — a session that can edit the standard it
-is measured against will eventually edit the standard. Where it is protected,
-do the work and leave the file alone: the count is a measurement, so removing a
-violation lowers it whether or not anyone writes the new number down, and
-whoever owns the register follows it down. Editing it anyway does not fail
-loudly; it makes the diff touch a protected path, which forces the change to
+is measured against will eventually edit the standard. Editing it anyway does
+not fail loudly: the diff touches a protected path, which forces the change to
 the highest risk class and parks it for a person. Every run, silently, forever.
+
+Where it is protected, **only the first kind of row is yours**. Removing a
+violation needs no entry: the count is a measurement, so it falls whether or not
+anyone writes the new number down, and whoever owns the register follows it.
+
+**Skip the prose-only rows entirely.** Writing the test without recording it
+leaves the row exactly as it was, so the next run picks the same row, writes the
+same test again, and the run after that does it once more — a queue that cannot
+advance, filling up with duplicate enforcers. It is also usually invalid on its
+own: a measurement with no register row pointing at it is the kind of thing a
+register check rejects. Those rows belong to whoever writes the register, and
+saying so is more useful than half-doing them.
 
 Three things about counts, and they decide whether this is safe:
 
