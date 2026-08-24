@@ -9,6 +9,12 @@ from typing import Literal
 
 DetectionVerdict = Literal["confirmed", "candidate", "unsupported"]
 
+#: Capabilities a Profile may enable on its own. A side-effect-minimal Gate
+#: reads repository state with a tool Touchstone already requires and runs no
+#: project-provided code, so enabling it needs no operator review. Everything
+#: else materializes as a disabled Validation Candidate.
+MINIMAL_CAPABILITIES = frozenset({"source-read"})
+
 
 @dataclass(frozen=True, slots=True)
 class Evidence:

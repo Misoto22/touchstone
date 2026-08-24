@@ -35,8 +35,10 @@ def _request(state: dict[str, Any], context: Any) -> PublicationRequest:
         rationale=finding.get("rationale", ""),
         review_reason=state.get("verdict_reason", ""),
         escalation=state.get("escalation", ""),
-        author_name=context.config.git.author_name,
-        author_email=context.config.git.author_email,
+        # A hosted run supplies the publishing App's own bot identity; a local
+        # run keeps the project's configured author.
+        author_name=state.get("author_name") or context.config.git.author_name,
+        author_email=state.get("author_email") or context.config.git.author_email,
         pre_staged=bool(state.get("pre_staged", False)),
         repository=context.config.forge.slug,
         isolated_push=bool(state.get("isolated_push", False)),

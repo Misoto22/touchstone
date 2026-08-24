@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from touchstone.profiles.model import (
+    MINIMAL_CAPABILITIES,
     ProfileCatalog,
     ProfileDefinition,
     ValidationCandidate,
@@ -92,6 +93,11 @@ def _parse(text: str, *, local: bool) -> ProfileDefinition:
             raise ValueError("Profile validation requires argv and a positive timeout")
         if not isinstance(capability, str) or not isinstance(enabled, bool):
             raise ValueError("Profile validation capability/enabled values are invalid")
+        if enabled and capability not in MINIMAL_CAPABILITIES:
+            raise ValueError(
+                f"Profile validation cannot enable capability {capability!r}; only "
+                "side-effect-minimal Gates are enabled without operator review"
+            )
         validation.append(ValidationCandidate(argv, timeout, capability, enabled))
     return ProfileDefinition(
         name=name,

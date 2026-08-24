@@ -44,7 +44,7 @@ argv = [
 ]
 timeout_seconds = 120
 capability = "source-read"
-enabled = false
+enabled = true
 
 [loop.code]
 protected_paths = [

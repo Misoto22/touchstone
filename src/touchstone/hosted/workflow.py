@@ -318,6 +318,7 @@ jobs:
         with:
           stage: publish
           github-token: ${{{{ steps.app-token.outputs.token }}}}
+          app-slug: ${{{{ steps.app-token.outputs.app-slug }}}}
           state-key: ${{{{ secrets.TOUCHSTONE_STATE_KEY }}}}
           candidate-id: ${{{{ inputs.candidate_id }}}}
           expected-candidate-id: ${{{{ needs.analysis.outputs.candidate_id }}}}

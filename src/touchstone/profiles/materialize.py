@@ -16,7 +16,13 @@ import tomli_w
 from touchstone.config import Config, ConfigError, load
 from touchstone.profiles.catalog import load_catalog
 from touchstone.profiles.detect import detect_profiles
-from touchstone.profiles.model import Evidence, ProfileCatalog, ProfileMatch, TargetCandidate
+from touchstone.profiles.model import (
+    MINIMAL_CAPABILITIES,
+    Evidence,
+    ProfileCatalog,
+    ProfileMatch,
+    TargetCandidate,
+)
 from touchstone.profiles.targets import TargetDiscovery, discover_targets
 
 _MANAGER_LOCKS = (
@@ -170,7 +176,10 @@ def materialize(
                     ),
                     "timeout_seconds": candidate.timeout_seconds,
                     "capability": candidate.capability,
-                    "enabled": candidate.enabled,
+                    # A Profile enables only side-effect-minimal Gates. Anything
+                    # that runs project code stays a disabled Candidate until the
+                    # project override accepts it.
+                    "enabled": candidate.capability in MINIMAL_CAPABILITIES,
                 }
                 if record not in validations:
                     validations.append(record)

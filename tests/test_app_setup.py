@@ -22,14 +22,18 @@ class FakeGitHub:
         self.secrets: dict[str, bytes] = {}
         self.opened: list[str] = []
         self.installation_credentials: list[tuple[int, bytes]] = []
+        self.scopes: list[tuple[str, bool]] = []
+        self.listed: list[bool] = []
 
-    def set_actions_secret(self, name: str, value: bytes) -> bool:
+    def set_actions_secret(self, name: str, value: bytes, *, organization: bool = False) -> bool:
         if name == self.fail_secret:
             return False
+        self.scopes.append((name, organization))
         self.secrets[name] = value
         return True
 
-    def actions_secret_names(self) -> set[str]:
+    def actions_secret_names(self, *, organization: bool = False) -> set[str]:
+        self.listed.append(organization)
         return set(self.secrets)
 
     def installation(self, app_id: int, private_key: bytes):  # type: ignore[no-untyped-def]
@@ -307,3 +311,69 @@ def test_setup_persists_only_the_required_permission_map(tmp_path: Path) -> None
 
     assert report.state == "complete"
     assert persisted["permissions"] == required_permissions()
+
+
+def test_a_user_owned_setup_writes_repository_secrets(tmp_path: Path) -> None:
+    github = FakeGitHub()
+    setup = ActionsSetup(
+        _config(tmp_path),
+        github=github,
+        code_provider=lambda _manifest, _state: "manifest-code",
+        exchange=lambda _code: _conversion(),
+        open_browser=lambda _url: None,
+        confirm_installation=lambda _url: True,
+    )
+
+    report = setup.run(SetupOptions(owner_type="user"))
+
+    assert report.state == "complete"
+    assert {name for name, _org in github.scopes} == {
+        "TOUCHSTONE_APP_ID",
+        "TOUCHSTONE_APP_PRIVATE_KEY",
+        "TOUCHSTONE_STATE_KEY",
+    }
+    assert all(org is False for _name, org in github.scopes)
+
+
+def test_an_organization_setup_writes_organization_secrets(tmp_path: Path) -> None:
+    github = FakeGitHub()
+    setup = ActionsSetup(
+        _config(tmp_path),
+        github=github,
+        code_provider=lambda _manifest, _state: "manifest-code",
+        exchange=lambda _code: _conversion(),
+        open_browser=lambda _url: None,
+        confirm_installation=lambda _url: True,
+    )
+
+    report = setup.run(SetupOptions(owner_type="organization"))
+
+    assert report.state == "complete"
+    assert all(org is True for _name, org in github.scopes)
+
+    # A later --check must look for those secrets where setup put them.
+    github.listed.clear()
+    setup.run(SetupOptions(check=True, owner_type="organization"))
+    assert github.listed and all(github.listed)
+
+
+def test_an_organization_secret_stays_scoped_to_the_selected_repository() -> None:
+    import subprocess
+
+    from touchstone.hosted.github_api import GitHubCLI
+
+    calls: list[list[str]] = []
+
+    def run(argv, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout=b"", stderr=b"")
+
+    github = GitHubCLI("acme/widgets", run=run)
+    assert github.set_actions_secret("TOUCHSTONE_APP_ID", b"42", organization=True)
+
+    argv = calls[0]
+    assert "--org" in argv and argv[argv.index("--org") + 1] == "acme"
+    assert "--visibility" in argv and argv[argv.index("--visibility") + 1] == "selected"
+    assert "--repos" in argv and argv[argv.index("--repos") + 1] == "widgets"
+    assert "--repo" not in argv
+    assert b"42" not in b" ".join(a.encode() for a in argv)

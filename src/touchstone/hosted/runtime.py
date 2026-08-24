@@ -1305,7 +1305,12 @@ def _publish_stage(
                         branch=metadata.branch,
                     )
                     raise
-            result = _publish_verified_candidate(config, metadata, publication_worktree)
+            result = _publish_verified_candidate(
+                config,
+                metadata,
+                publication_worktree,
+                author=_app_bot_identity(env),
+            )
 
     _write_state_bundle(
         config,
@@ -1544,6 +1549,8 @@ def _publish_verified_candidate(
     config: Config,
     metadata: CandidateMetadata,
     worktree: Path,
+    *,
+    author: tuple[str, str] | None = None,
 ) -> RunResult:
     from touchstone.nodes import publish
     from touchstone.nodes.context import configure
@@ -1564,6 +1571,8 @@ def _publish_verified_candidate(
             "pre_staged": True,
             "isolated_push": True,
         }
+        if author is not None:
+            state["author_name"], state["author_email"] = author
         payload = publish._publish_verified(state)
         legacy = str(payload.get("outcome") or "failed")
         lifecycle = {
@@ -1591,6 +1600,53 @@ def _publish_verified_candidate(
         )
     finally:
         _remove_worktree(config, worktree, delete_branch=not published, branch=metadata.branch)
+
+
+_APP_SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$", re.IGNORECASE)
+
+
+def _app_bot_identity(env: Mapping[str, str]) -> tuple[str, str] | None:
+    """Author hosted commits as the publishing App rather than the runner.
+
+    Without this, git synthesizes an identity from the runner's own user and
+    hostname, so a published commit carries no usable provenance. Returns None
+    when the workflow supplied no slug, which keeps a locally driven hosted
+    stage on the project's configured author.
+    """
+
+    slug = env.get("TOUCHSTONE_APP_SLUG", "").strip()
+    if not slug or not _APP_SLUG.fullmatch(slug):
+        return None
+    login = f"{slug}[bot]"
+    account = _github_account_id(login, env)
+    local = f"{account}+{login}" if account is not None else login
+    return login, f"{local}@users.noreply.github.com"
+
+
+def _github_account_id(login: str, env: Mapping[str, str]) -> int | None:
+    """Read the bot account's numeric ID so GitHub links the commit to the App."""
+
+    token = env.get("GH_TOKEN", "") or env.get("GITHUB_TOKEN", "")
+    if not token:
+        return None
+    request = urllib.request.Request(
+        f"https://api.github.com/users/{urllib.parse.quote(login, safe='')}",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "User-Agent": "touchstone-agent",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            payload = json.load(response)
+    except (OSError, urllib.error.HTTPError, urllib.error.URLError, ValueError):
+        return None
+    identifier = payload.get("id") if isinstance(payload, dict) else None
+    if isinstance(identifier, bool) or not isinstance(identifier, int) or identifier <= 0:
+        return None
+    return identifier
 
 
 def _snapshot_stage(

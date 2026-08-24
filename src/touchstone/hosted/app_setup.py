@@ -40,9 +40,11 @@ _REQUIRED_SECRETS = {
 
 
 class SetupGitHub(Protocol):
-    def set_actions_secret(self, name: str, value: bytes) -> bool: ...
+    def set_actions_secret(
+        self, name: str, value: bytes, *, organization: bool = False
+    ) -> bool: ...
 
-    def actions_secret_names(self) -> set[str]: ...
+    def actions_secret_names(self, *, organization: bool = False) -> set[str]: ...
 
     def installation(self, app_id: int, private_key: bytes) -> dict[str, Any] | None: ...
 
@@ -231,7 +233,7 @@ class ActionsSetup:
             PartialSetup(self.config.forge.slug, "partial", "app-created", app_id, app_slug)
         )
 
-        if not self.github.set_actions_secret("TOUCHSTONE_APP_ID", str(app_id).encode()):
+        if not self._store_secret("TOUCHSTONE_APP_ID", str(app_id).encode()):
             return self._record_secret_failure(app_id, app_slug, "app-id-secret")
         if not self._set_state_key():
             return self._record_secret_failure(app_id, app_slug, "state-key-secret")
@@ -262,7 +264,7 @@ class ActionsSetup:
             if verification.state != "complete":
                 self._write_state(self._state_from_report(verification))
                 return verification
-            if not self.github.set_actions_secret("TOUCHSTONE_APP_PRIVATE_KEY", bytes(private_key)):
+            if not self._store_secret("TOUCHSTONE_APP_PRIVATE_KEY", bytes(private_key)):
                 report = SetupReport(
                     state="partial",
                     step="private-key-repair-required",
@@ -294,7 +296,7 @@ class ActionsSetup:
             return self._partial("repository-mismatch", repair="remove stale local setup state")
         if previous.app_id is None or not previous.app_slug:
             return self._partial(previous.step, repair="rerun 'touchstone actions setup'")
-        secrets_present = self.github.actions_secret_names()
+        secrets_present = self._present_secrets()
         missing = sorted(_REQUIRED_SECRETS - secrets_present)
         if missing:
             return self._partial(
@@ -324,8 +326,8 @@ class ActionsSetup:
             return self._partial("repository-mismatch", repair="remove stale local setup state")
         if previous.app_id is None or not previous.app_slug:
             return self._partial(previous.step, repair="rerun 'touchstone actions setup'")
-        present = self.github.actions_secret_names()
-        if "TOUCHSTONE_APP_ID" not in present and not self.github.set_actions_secret(
+        present = self._present_secrets()
+        if "TOUCHSTONE_APP_ID" not in present and not self._store_secret(
             "TOUCHSTONE_APP_ID", str(previous.app_id).encode()
         ):
             return self._record_secret_failure(previous.app_id, previous.app_slug, "app-id-secret")
@@ -333,7 +335,7 @@ class ActionsSetup:
             return self._record_secret_failure(
                 previous.app_id, previous.app_slug, "state-key-secret"
             )
-        if "TOUCHSTONE_APP_PRIVATE_KEY" not in self.github.actions_secret_names():
+        if "TOUCHSTONE_APP_PRIVATE_KEY" not in self._present_secrets():
             report = self._partial(
                 "private-key-repair-required",
                 app_id=previous.app_id,
@@ -363,10 +365,21 @@ class ActionsSetup:
             self._write_state(self._state_from_report(report))
         return report
 
+    @property
+    def _organization(self) -> bool:
+        """Store App credentials where the owner created the App."""
+        return self._options.owner_type == "organization"
+
+    def _store_secret(self, name: str, value: bytes) -> bool:
+        return self.github.set_actions_secret(name, value, organization=self._organization)
+
+    def _present_secrets(self) -> set[str]:
+        return self.github.actions_secret_names(organization=self._organization)
+
     def _set_state_key(self) -> bool:
         state_key = bytearray(base64.urlsafe_b64encode(secrets.token_bytes(32)))
         try:
-            return self.github.set_actions_secret("TOUCHSTONE_STATE_KEY", bytes(state_key))
+            return self._store_secret("TOUCHSTONE_STATE_KEY", bytes(state_key))
         finally:
             for index in range(len(state_key)):
                 state_key[index] = 0

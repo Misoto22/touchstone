@@ -10,4 +10,4 @@ source_paths = []
 argv = ["git", "diff", "--check"]
 timeout_seconds = 120
 capability = "source-read"
-enabled = false
+enabled = true

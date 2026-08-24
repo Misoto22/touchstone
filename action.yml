@@ -16,6 +16,9 @@ inputs:
   github-token:
     description: Stage-scoped GitHub token mapped only into the runtime step
     required: false
+  app-slug:
+    description: Publishing App slug used only to author hosted commits
+    required: false
   candidate-id:
     description: Existing candidate to resume
     required: false
@@ -82,6 +85,7 @@ runs:
         ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
         TOUCHSTONE_STATE_KEY: ${{ inputs.state-key }}
         GH_TOKEN: ${{ inputs.github-token }}
+        TOUCHSTONE_APP_SLUG: ${{ inputs.app-slug }}
         TOUCHSTONE_CANDIDATE_ID: ${{ inputs.candidate-id }}
         TOUCHSTONE_EXPECTED_CANDIDATE_ID: ${{ inputs.expected-candidate-id }}
         TOUCHSTONE_EXPECTED_LOOP: ${{ inputs.expected-loop }}

@@ -31,6 +31,8 @@ All notable user-facing changes are documented here. The format follows [Keep a 
 - Target IDs prefer package identity, survive checkout-directory changes, and retain existing configured IDs by repository-relative path during Profile refresh.
 - Locked preparation is hook-free per package manager; Poetry reports a structured `policy-unsupported` result instead of installing with build hooks unless they are explicitly allowed.
 - `touchstone actions init` resolves the release tag matching the installed distribution instead of the Action repository's default branch.
+- Profiles enable only side-effect-minimal Validation Gates: `git diff --check` runs without review, every command that executes project code stays a disabled Candidate, and a repository-local Profile can no longer enable one.
+- `touchstone actions setup --organization` stores App secrets as organization secrets restricted to the selected repository, and later checks read organization and repository secrets together.
 
 ### Security
 
@@ -38,6 +40,7 @@ All notable user-facing changes are documented here. The format follows [Keep a 
 - Hosted candidates bind stable finding identity, base SHA, patch digest, run identity, Loop, and the full effective non-secret configuration; separate Verify and Publish runners prevent candidate-controlled Git state from crossing the credential boundary.
 - The publishing App token and installation are restricted to the selected repository and to exactly the required permission map, and partial remote writes block new analysis until explicit reconciliation.
 - A Publish job that fails or is cancelled without recording its outcome is reconstructed by Snapshot from the authenticated candidate as a `failed` partial marker.
+- Hosted commits are authored by the publishing App's bot identity instead of an identity git synthesizes from the runner's user and hostname.
 - Owner App setup verifies repository scope and permissions with a short-lived App JWT before persisting only a non-secret attestation; later local checks label that evidence as cached.
 - Hosted bundles use AES-256-GCM with manifest AAD, fresh nonces, path-safe archives, configuration/Profile lineage checks, and ciphertext digests.
 - GitHub App private keys are sent to repository secrets through stdin and are never persisted by Touchstone.
