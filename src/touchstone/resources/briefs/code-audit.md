@@ -33,11 +33,28 @@ only when the queue above is empty, and take the first row of either kind:
 
 - **A measured rule whose count is above zero.** Remove **one** violation. Not
   all of them: a diff that touches two hundred call sites cannot be reviewed by
-  anyone, and this one merges without a person. Then lower the recorded count by
-  exactly what you removed.
+  anyone, and this one merges without a person.
 - **A rule that exists only as prose**, with no test named as its home. Write
   the test that measures it, and record the row as measured at whatever count
   that test finds.
+
+**Check whether the register is yours to write before you plan to write it.** It
+is often protected, and for a reason — a session that can edit the standard it
+is measured against will eventually edit the standard. Editing it anyway does
+not fail loudly: the diff touches a protected path, which forces the change to
+the highest risk class and parks it for a person. Every run, silently, forever.
+
+Where it is protected, **only the first kind of row is yours**. Removing a
+violation needs no entry: the count is a measurement, so it falls whether or not
+anyone writes the new number down, and whoever owns the register follows it.
+
+**Skip the prose-only rows entirely.** Writing the test without recording it
+leaves the row exactly as it was, so the next run picks the same row, writes the
+same test again, and the run after that does it once more — a queue that cannot
+advance, filling up with duplicate enforcers. It is also usually invalid on its
+own: a measurement with no register row pointing at it is the kind of thing a
+register check rejects. Those rows belong to whoever writes the register, and
+saying so is more useful than half-doing them.
 
 Three things about counts, and they decide whether this is safe:
 
