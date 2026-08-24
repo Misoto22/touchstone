@@ -2,6 +2,12 @@
 
 All notable user-facing changes are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-08-24
+
+### Fixed
+
+- PyPI and GitHub now show the stable `pipx install touchstone-agent` onboarding path and link the current release.
+
 ## [0.1.0] - 2026-08-24
 
 ### Added
@@ -26,4 +32,5 @@ All notable user-facing changes are documented here. The format follows [Keep a 
 - Dry runs no longer reconcile or close live pull requests, and persisted failure notes exclude model output.
 - GitHub API payloads and native scheduler command results are validated before state advances.
 
+[0.1.1]: https://github.com/Misoto22/touchstone/releases/tag/v0.1.1
 [0.1.0]: https://github.com/Misoto22/touchstone/releases/tag/v0.1.0

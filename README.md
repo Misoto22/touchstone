@@ -240,7 +240,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the TDD and pull-request workflow. Us
 
 ### Release
 
-The current release is [v0.1.0](https://github.com/Misoto22/touchstone/releases/tag/v0.1.0), published as [`touchstone-agent` on PyPI](https://pypi.org/project/touchstone-agent/).
+The current release is [v0.1.1](https://github.com/Misoto22/touchstone/releases/tag/v0.1.1), published as [`touchstone-agent` on PyPI](https://pypi.org/project/touchstone-agent/).
 
 GitHub Actions verifies Python 3.12 and 3.13, builds the wheel and source distribution, checks package metadata, and smoke-tests the installed wheel. Publishing is triggered by a GitHub Release and uses PyPI trusted publishing through the protected `pypi` environment; the repository stores no PyPI API token.
 
