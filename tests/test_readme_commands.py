@@ -196,5 +196,7 @@ def test_readme_does_not_imply_the_hosted_backend_has_run() -> None:
     readme = " ".join(line.lstrip("> ") for line in raw.splitlines())
     readme = " ".join(readme.split())
 
-    assert "hosted stages have not yet been executed by a GitHub Actions runner" in readme
-    assert "unproven end to end until a run exists to point at" in readme
+    assert "Part of the hosted backend has now run on a GitHub Actions runner" in readme
+    assert "Treat publication as unproven until a run exists to point at" in readme
+    # Publication is the part that still needs an Owner App, so it must stay named.
+    assert "minting the App token, the Publish stage itself" in readme
