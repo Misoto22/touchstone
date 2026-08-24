@@ -1,5 +1,5 @@
 [project]
-name = "touchstone"
+name = "touchstone-agent"
 version = "0.1.0"
 description = "Scheduled agent loops that audit a repository and the harness that judges it"
 requires-python = ">=3.12"
@@ -9,6 +9,7 @@ dependencies = [
     # with the system it audits, and a checkpoint file next to the ledger is
     # one fewer thing that can be down when the loop needs to run.
     "langgraph-checkpoint-sqlite>=2.0",
+    "tomli-w>=1.2",
 ]
 
 [project.scripts]

@@ -83,6 +83,15 @@ def _setup(args: argparse.Namespace) -> int:
     return 0
 
 
+def _migrate_config(args: argparse.Namespace) -> int:
+    from touchstone.migrate import migrate_config
+
+    report = migrate_config(args.path)
+    print(f"migrated {report.path} from version {report.from_version} to {report.to_version}")
+    print(f"backup: {report.backup}")
+    return 0
+
+
 def _run(args: argparse.Namespace) -> int:
     from touchstone.runner import execute
 
@@ -139,6 +148,12 @@ def main(argv: list[str] | None = None) -> int:
     setup.add_argument("--dry-run", action="store_true")
     setup.add_argument("--json", action="store_true")
     setup.set_defaults(handler=_setup)
+
+    config = sub.add_parser("config", help="inspect or migrate configuration")
+    config_sub = config.add_subparsers(dest="config_command", required=True)
+    migrate = config_sub.add_parser("migrate", help="migrate an unversioned config")
+    migrate.add_argument("path", type=Path)
+    migrate.set_defaults(handler=_migrate_config)
 
     run = sub.add_parser("run", help="one iteration of a loop")
     run.add_argument("loop", help="which loop, by its [loop.*] name")

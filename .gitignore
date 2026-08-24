@@ -2,5 +2,16 @@ __pycache__/
 *.pyc
 .venv/
 .worktrees/
+.langgraph_api/
 .env
+.env.*
+!.env.example
+touchstone.toml
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+dry-run.diff
+dist/
+build/
+*.egg-info/
 uv.lock
