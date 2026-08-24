@@ -222,7 +222,9 @@ git commit -m "feat: run split hosted trust stages"
 
 ```python
 def test_manifest_uses_least_privilege_permissions() -> None:
-    manifest = build_manifest(owner="Misoto22", repository="touchstone", redirect_url="http://127.0.0.1:8917/callback")
+    manifest = build_manifest(
+        owner="Misoto22", repository="touchstone", redirect_url="http://127.0.0.1:8917/callback"
+    )
     assert manifest.permissions == {
         "contents": "write",
         "pull_requests": "write",
@@ -235,7 +237,9 @@ def test_interrupted_secret_write_never_persists_pem(tmp_path: Path, setup: Setu
     setup.fail_secret_write_once()
     report = setup.run()
     assert report.state == "partial"
-    assert not any("PRIVATE KEY" in p.read_text(errors="ignore") for p in tmp_path.rglob("*" ) if p.is_file())
+    assert not any(
+        "PRIVATE KEY" in p.read_text(errors="ignore") for p in tmp_path.rglob("*") if p.is_file()
+    )
 ```
 
 Test CSRF state validation, one-hour manifest-code expiry, loopback callback, manual code fallback, owner type URLs, create/install browser steps, one-time conversion, stdin-only secret writes, state-key generation, idempotent re-run, App exists/not installed, installation repo mismatch, replacement-key repair, no `gh app` assumption, and `--check` read-only behavior.

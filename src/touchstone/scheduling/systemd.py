@@ -16,6 +16,30 @@ from touchstone.scheduling.base import (
 )
 
 
+def _start_timeout(config: Any) -> int:
+    """Longer than every engine call one wake can make, deliberately.
+
+    `DefaultTimeoutStartUSec` is 90 seconds on a stock systemd, and a `oneshot`
+    service is held to it. An audit session runs for minutes — seven, measured
+    — so at the default every wake is killed before its first loop finishes.
+
+    It fails the worst way available. systemd kills the process, so no node
+    writes a ledger row and no verdict is recorded; what is left is a service
+    that ran and a queue that never moved, which reads as a loop finding
+    nothing rather than a loop being stopped. Firing every fifteen minutes, it
+    would repeat that forever.
+
+    One wake runs every loop that is due, and each loop makes up to two engine
+    calls — the audit and the independent review. Hence twice the engine
+    ceiling per loop, plus room for the git and forge work between them. Large,
+    and meant to be: systemd is the last resort against a wedged process, not a
+    competitor to the timeout that produces a diagnosis. Overlapping wakes are
+    already handled by the run lock, not by this.
+    """
+    loops = max(1, len(config.loops))
+    return loops * 2 * int(config.engine.timeout_seconds) + 600
+
+
 class SystemdScheduler:
     name = "systemd"
 
@@ -119,11 +143,16 @@ class SystemdScheduler:
         )
         service = (
             "[Unit]\n"
-            "Description=Wake due Touchstone loops\n\n"
+            "Description=Wake due Touchstone loops\n"
+            # A run needs the forge and the engine. Not a promise the network
+            # works, only that the job does not start before it could.
+            "After=network-online.target\n"
+            "Wants=network-online.target\n\n"
             "[Service]\n"
             "Type=oneshot\n"
             f"WorkingDirectory={_systemd_quote(str(Path(config.repo_path).resolve()))}\n"
             f"Environment={_systemd_quote(f'PATH={command_path(self._executable)}')}\n"
+            f"TimeoutStartSec={_start_timeout(config)}\n"
             f"ExecStart={command}\n"
         )
         timer = (
