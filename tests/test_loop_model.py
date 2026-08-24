@@ -56,3 +56,58 @@ def test_the_model_is_part_of_the_configuration_digest() -> None:
     base = SimpleNamespace(name="harness", brief="b", label="l", model="")
     named = SimpleNamespace(name="harness", brief="b", label="l", model="gpt-5.6-terra")
     assert _loop_config(base) != _loop_config(named)
+
+
+def test_the_banner_names_the_model_that_will_run(tmp_path) -> None:
+    """This line is the only place an operator reading the journal sees which
+    model ran. Reporting the global one said `gpt-5.6-sol` on the first run
+    after a loop moved to another model — evidence, where anyone would look,
+    that the change had not taken effect."""
+    from touchstone.config import load_config
+
+    path = tmp_path / "touchstone.toml"
+    path.write_text(
+        """version = 1
+
+[project]
+path = "."
+
+[forge]
+slug = "acme/widgets"
+
+[engine]
+name = "codex"
+model = "gpt-global"
+
+[loop.code]
+brief = "builtin:code-audit"
+label = "t:audit"
+
+[loop.code.context]
+project = "p"
+ledger = "l"
+protected = "x"
+register = "r"
+rules_clause = ""
+
+[loop.harness]
+brief = "builtin:harness-review"
+label = "t:harness"
+model = "gpt-5.6-terra"
+
+[loop.harness.context]
+spec = "s"
+rules = "r"
+ledger = "l"
+decisions = "d"
+writable = "w"
+rules_clause = ""
+""",
+        encoding="utf-8",
+    )
+    config = load_config(path)
+
+    assert "model=gpt-5.6-terra (loop)" in config.describe("harness")
+    assert "model=gpt-global" in config.describe("code")
+    # `run-due` wakes several loops; no single model is the one that will run.
+    assert "model=gpt-global" in config.describe()

@@ -213,13 +213,28 @@ class Config:
             return str(PurePosixPath(self.execution.ssh.state_dir) / "worktree")
         return str(self.state_dir / "worktree")
 
-    def describe(self) -> str:
+    def describe(self, loop: str | None = None) -> str:
+        """One line naming what is about to run.
+
+        Takes the loop because a loop may override the model, and this line is
+        the only place an operator reading the journal sees which one ran. A
+        banner that always reported the global setting said `gpt-5.6-sol` on the
+        first run after a loop was moved to another model — evidence, in the
+        one place anyone looks, that the change had not taken effect.
+
+        Without a loop — `run-due` wakes several — the global is the honest
+        answer, because no single model is the one that will run.
+        """
         where = self.execution.target
         if self.execution.target == "ssh" and self.execution.ssh is not None:
             where = f"ssh {self.execution.ssh.host}"
         slug = self.forge.slug or "discovered repository"
+        chosen = self.loops.get(loop) if loop else None
+        model = (
+            f"{chosen.model} (loop)" if chosen is not None and chosen.model else self.engine.model
+        )
         return (
-            f"{slug} · engine={self.engine.name} model={self.engine.model} "
+            f"{slug} · engine={self.engine.name} model={model} "
             f"effort={self.engine.audit_effort}/{self.engine.review_effort} · {where}"
         )
 
