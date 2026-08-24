@@ -389,6 +389,41 @@ def _migrate_config(args: argparse.Namespace) -> int:
     return 0
 
 
+def _migrate_config_v2(args: argparse.Namespace) -> int:
+    import difflib
+
+    from touchstone.migrate import apply_v2_migration, preview_v2_migration
+
+    preview = preview_v2_migration(
+        args.path,
+        timezone=args.timezone,
+        hourly_minute=args.hourly_minute,
+    )
+    current = preview.path.read_text(encoding="utf-8")
+    root_diff = difflib.unified_diff(
+        current.splitlines(keepends=True),
+        preview.root_text.splitlines(keepends=True),
+        fromfile=str(preview.path),
+        tofile=str(preview.path),
+    )
+    generated_diff = difflib.unified_diff(
+        (),
+        preview.generated_text.splitlines(keepends=True),
+        fromfile="/dev/null",
+        tofile=str(preview.generated_path),
+    )
+    print("".join((*root_diff, *generated_diff)))
+    for warning in preview.warnings:
+        print(f"warning: {warning}", file=sys.stderr)
+    if not args.write:
+        return 3
+    report = apply_v2_migration(preview)
+    print(f"migrated {report.path} from version 1 to version 2")
+    print(f"generated: {report.generated}")
+    print(f"backup: {report.backup}")
+    return 0
+
+
 def _run(args: argparse.Namespace) -> int:
     from touchstone.runner import execute
 
@@ -556,6 +591,18 @@ def main(argv: list[str] | None = None) -> int:
     migrate = config_sub.add_parser("migrate", help="migrate an unversioned config")
     migrate.add_argument("path", type=Path)
     migrate.set_defaults(handler=_migrate_config)
+    migrate_v2 = config_sub.add_parser(
+        "migrate-v2", help="preview or apply schema-v1 to schema-v2 migration"
+    )
+    migrate_v2.add_argument("path", type=Path)
+    migrate_v2.add_argument("--timezone", default="UTC", help="repository IANA timezone")
+    migrate_v2.add_argument(
+        "--hourly-minute", type=int, default=0, help="anchor legacy hourly schedules (0-59)"
+    )
+    migrate_mode = migrate_v2.add_mutually_exclusive_group()
+    migrate_mode.add_argument("--check", action="store_true", help="preview without writing")
+    migrate_mode.add_argument("--write", action="store_true", help="back up and migrate")
+    migrate_v2.set_defaults(handler=_migrate_config_v2)
 
     run = sub.add_parser("run", help="one iteration of a loop")
     run.add_argument("loop", help="which loop, by its [loop.*] name")

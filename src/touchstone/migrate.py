@@ -66,9 +66,7 @@ def migrate_config(path: Path) -> MigrationReport:
     return MigrationReport(source, backup, 0, 1)
 
 
-def preview_v2_migration(
-    path: Path, *, timezone: str, hourly_minute: int
-) -> MigrationPreview:
+def preview_v2_migration(path: Path, *, timezone: str, hourly_minute: int) -> MigrationPreview:
     source = path.expanduser().resolve()
     if not timezone.strip():
         raise ConfigError("timezone must be a non-empty IANA timezone string")
@@ -113,6 +111,10 @@ def preview_v2_migration(
         },
     }
     generated_path = source.parent / ".touchstone/generated.toml"
+    if generated_path.exists():
+        raise ConfigError(
+            f"v2 generated configuration already exists: {generated_path}; move it before migration"
+        )
     return MigrationPreview(
         path=source,
         generated_path=generated_path,
