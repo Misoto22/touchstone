@@ -1,0 +1,4 @@
+[project]
+name = "acceptance-api"
+version = "0.1.0"
+dependencies = ["Django>=5,<6"]
