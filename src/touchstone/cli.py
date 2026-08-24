@@ -50,6 +50,39 @@ def _init(args: argparse.Namespace) -> int:
     return 0
 
 
+def _doctor(args: argparse.Namespace) -> int:
+    from touchstone.doctor import build_context, run_doctor
+
+    config = load(args.config)
+    report = run_doctor(config, build_context(config, offline=args.offline))
+    if args.json:
+        print(report.to_json())
+    else:
+        for check in report.checks:
+            print(f"{check.level:4} {check.id}: {check.summary}")
+            if check.repair:
+                print(f"     repair: {check.repair}")
+    return report.exit_code
+
+
+def _setup(args: argparse.Namespace) -> int:
+    import json
+    from dataclasses import asdict
+
+    from touchstone.setup import setup
+
+    config = load(args.config)
+    report = setup(config, dry_run=args.dry_run)
+    if args.json:
+        print(json.dumps(asdict(report), indent=2))
+    else:
+        action = "would configure" if args.dry_run else "configured"
+        print(f"{action} state at {config.state_dir}")
+        for label in report.planned_labels:
+            print(f"  label: {label}")
+    return 0
+
+
 def _run(args: argparse.Namespace) -> int:
     from touchstone.runner import execute
 
@@ -96,6 +129,16 @@ def main(argv: list[str] | None = None) -> int:
     init.add_argument("--schedule", help="hourly, daily@HH:MM, or weekly@DAY,HH:MM")
     init.add_argument("--force", action="store_true", help="replace an existing config")
     init.set_defaults(handler=_init)
+
+    doctor = sub.add_parser("doctor", help="check prerequisites without changing them")
+    doctor.add_argument("--json", action="store_true")
+    doctor.add_argument("--offline", action="store_true", help="skip GitHub network checks")
+    doctor.set_defaults(handler=_doctor)
+
+    setup = sub.add_parser("setup", help="create state and configured GitHub labels")
+    setup.add_argument("--dry-run", action="store_true")
+    setup.add_argument("--json", action="store_true")
+    setup.set_defaults(handler=_setup)
 
     run = sub.add_parser("run", help="one iteration of a loop")
     run.add_argument("loop", help="which loop, by its [loop.*] name")

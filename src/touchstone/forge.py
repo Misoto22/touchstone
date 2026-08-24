@@ -61,6 +61,35 @@ class Forge:
             return payload
         return [pull for pull in payload if not pull.get("isDraft")]
 
+    def repository_info(self) -> dict[str, Any] | None:
+        payload = self._json(
+            ["repo", "view", "--json", "nameWithOwner,defaultBranchRef,autoMergeAllowed"]
+        )
+        return payload if isinstance(payload, dict) else None
+
+    def labels(self) -> set[str]:
+        payload = self._json(["label", "list", "--limit", "100", "--json", "name"]) or []
+        return {
+            str(item["name"])
+            for item in payload
+            if isinstance(item, dict) and item.get("name")
+        }
+
+    def ensure_label(self, name: str, *, color: str, description: str) -> bool:
+        ok, _ = self._gh(
+            [
+                "label",
+                "create",
+                name,
+                "--color",
+                color,
+                "--description",
+                description,
+                "--force",
+            ]
+        )
+        return ok
+
     def latest_run(self, workflow: str, *, branch: str | None = None) -> str:
         """A workflow's most recent conclusion, or `pending` when it has none.
 
