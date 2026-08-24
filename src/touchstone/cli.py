@@ -31,12 +31,15 @@ def _init(args: argparse.Namespace) -> int:
     workflows = tuple(args.workflow or ())
     schedule = args.schedule
     package_manager = args.package_manager
+    visibility = args.visibility
+    wake_minutes = args.wake_minutes
     if args.non_interactive:
         if not engine or not model or not workflows or not schedule:
             raise ConfigError(
                 "non-interactive init requires --engine, --model, --schedule, "
                 "and at least one --workflow"
             )
+        visibility = visibility or "public"
     else:
         engine = engine or input("Engine (codex or claude) [codex]: ").strip() or "codex"
         model = model or input("Model: ").strip()
@@ -44,6 +47,18 @@ def _init(args: argparse.Namespace) -> int:
             workflow = input("Required workflow [ci.yml]: ").strip() or "ci.yml"
             workflows = (workflow,)
         schedule = schedule or input("Schedule [hourly@00]: ").strip() or "hourly@00"
+        visibility = (
+            visibility
+            or input("Repository visibility (public or private) [public]: ").strip()
+            or "public"
+        )
+        default_wake = 15 if visibility == "public" else 60
+        if wake_minutes is None:
+            wake_raw = input(f"GitHub Actions wake minutes [{default_wake}]: ").strip()
+            try:
+                wake_minutes = int(wake_raw) if wake_raw else default_wake
+            except ValueError:
+                raise ConfigError("GitHub Actions wake minutes must be an integer") from None
         managers = detect_package_managers(discovered.root)
         ambiguous = ambiguous_package_managers(managers)
         if package_manager is None and ambiguous:
@@ -59,8 +74,8 @@ def _init(args: argparse.Namespace) -> int:
             workflows=workflows,
             schedule=schedule or "hourly@00",
             timezone=args.timezone,
-            visibility=args.visibility,
-            wake_minutes=args.wake_minutes,
+            visibility=visibility,
+            wake_minutes=wake_minutes,
             profiles=tuple(args.profile or ()),
             package_manager=package_manager,
             output=args.output,
@@ -500,7 +515,6 @@ def main(argv: list[str] | None = None) -> int:
     init.add_argument(
         "--visibility",
         choices=("public", "private"),
-        default="public",
         help="repository visibility used by hosted diagnostics",
     )
     init.add_argument(

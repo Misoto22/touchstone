@@ -91,7 +91,7 @@ touchstone doctor
 touchstone run code --dry-run
 ```
 
-`touchstone init` finds the Git root, GitHub slug, default branch, package managers, workspace Targets, and stack Profiles. It asks for the engine, model, required default-branch workflow, and schedule, then writes the project-owned and generated configuration files. The rehearsal runs the configured model and validation path but does not publish.
+`touchstone init` finds the Git root, GitHub slug, default branch, package managers, workspace Targets, and stack Profiles. It asks for the engine, model, required default-branch workflow, Loop schedule, repository visibility, and hosted wake cadence, then writes the project-owned and generated configuration files. The rehearsal runs the configured model and validation path but does not publish.
 
 **Prerequisites** — Python 3.12+, pipx, Git, authenticated `gh`, and an authenticated Codex or Claude CLI. Native scheduling is supported on macOS and Linux.
 

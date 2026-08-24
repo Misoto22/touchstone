@@ -49,6 +49,8 @@ def initialize(options: InitOptions, executor: Executor) -> InitReport:
         raise ConfigError("init requires an explicit model")
     if not options.timezone.strip():
         raise ConfigError("init requires a non-empty IANA timezone")
+    if options.visibility not in {"public", "private"}:
+        raise ConfigError("repository visibility must be 'public' or 'private'")
     wake_minutes = options.wake_minutes or (15 if options.visibility == "public" else 60)
     if wake_minutes not in {5, 10, 15, 20, 30, 60}:
         raise ConfigError("hosted wake cadence must be one of 5, 10, 15, 20, 30, or 60 minutes")
