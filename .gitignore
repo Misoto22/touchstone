@@ -3,3 +3,8 @@ __pycache__/
 .venv/
 .env
 uv.lock
+
+# Sibling sessions keep isolated worktrees here. They are checkouts of this
+# same repository, and committing one leaves a gitlink that clones as an empty
+# directory nobody can explain.
+.worktrees/
