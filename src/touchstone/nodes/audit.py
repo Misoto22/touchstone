@@ -103,6 +103,46 @@ def _clean(context: Any, state: dict[str, Any], detail: str, **extra: Any) -> di
     return {"finding": {"status": "none"}, "outcome": "clean", **extra}
 
 
+#: Above this an evidence section is refused rather than cut. A census is read
+#: to decide whether a ratchet regressed, and half a census cannot answer that
+#: while looking like it did — the same reason the review refuses an oversized
+#: diff instead of truncating it.
+EVIDENCE_LIMIT = 40_000
+
+
+def _evidence(context: Any, loop: Any, worktree: str) -> str:
+    """The sections the brief says were "collected before you".
+
+    Without this the promise is unkept and the session says so: kioku's nightly
+    harness review reported the census and the latest CI run unavailable, and
+    recorded itself inconclusive under R-HAR-6 — correctly, and every night,
+    because nothing ever appended them. A review that cannot verify a ratchet
+    is the one thing that review exists to do.
+
+    A command that fails produces a section saying it is unavailable, never a
+    missing section. The brief distinguishes the two: an absent heading reads
+    as evidence nobody asked for, and an unavailable one as evidence that was
+    asked for and could not be had. Only the second is true here.
+    """
+    if not loop.evidence:
+        return ""
+    parts = ["\n\n## Evidence collected for you\n"]
+    for heading, argv in loop.evidence:
+        result = context.executor.run(list(argv), cwd=worktree, timeout=600)
+        if not result.ok:
+            body = f"unavailable: `{' '.join(argv)}` exited {result.code}"
+        elif len(result.stdout) > EVIDENCE_LIMIT:
+            body = (
+                f"unavailable: `{' '.join(argv)}` produced {len(result.stdout)} characters, "
+                f"over the {EVIDENCE_LIMIT} this prompt carries. A partial answer here "
+                "would look like a whole one."
+            )
+        else:
+            body = f"```\n{result.stdout.strip()}\n```"
+        parts.append(f"\n### {heading}\n\n{body}\n")
+    return "".join(parts)
+
+
 def run(state: dict[str, Any]) -> dict[str, Any]:
     context = current()
     loop = context.loop(state["loop"])
@@ -113,6 +153,7 @@ def run(state: dict[str, Any]) -> dict[str, Any]:
     if handled:
         brief += "\n\n## Already handled — do not raise any of these again\n\n"
         brief += "\n".join(f"- {title}" for title in handled)
+    brief += _evidence(context, loop, worktree)
 
     session = context.engine.author(brief, worktree=worktree, denied=loop.protected_paths)
     if session.blocked:
