@@ -68,6 +68,7 @@ class ClaudeEngine:
             brief,
         ]
         result = self._exec.run(argv, cwd=worktree, timeout=self._config.engine.timeout_seconds)
+        self._exec.run(["rm", "-f", settings_path], timeout=30)
         cost, _ = _payload(result.stdout)
         return Session(
             ok=result.ok,

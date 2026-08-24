@@ -14,16 +14,24 @@ graph TD;
 	review(review)
 	merge(merge)
 	park(park)
+	await_person(await_person)
+	arm_merge(arm_merge)
+	record_closed(record_closed)
 	__end__([<p>__end__</p>]):::last
 	__start__ --> audit;
 	audit -.-> __end__;
 	audit -.-> classify;
+	await_person -.-> __end__;
+	await_person -.-> arm_merge;
+	await_person -.-> record_closed;
 	classify -.-> park;
 	classify -.-> review;
+	park --> await_person;
 	review -.-> merge;
 	review -.-> park;
+	arm_merge --> __end__;
 	merge --> __end__;
-	park --> __end__;
+	record_closed --> __end__;
 	classDef default fill:#f2f0ff,line-height:1.2
 	classDef first fill-opacity:0
 	classDef last fill:#bfb6fc

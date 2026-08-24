@@ -69,6 +69,9 @@ class CodexEngine:
         argv += ["--output-schema", schema_path, "--output-last-message", answer_path, brief]
         result = self._exec.run(argv, timeout=self._config.engine.timeout_seconds)
         answer = self._exec.read_text(answer_path) or ""
+        # Same reason: these are how this engine is asked and answered, not
+        # anything the repository should carry.
+        self._exec.run(["rm", "-f", schema_path, answer_path], timeout=30)
         return Session(
             ok=result.ok and bool(answer.strip()),
             text=answer,

@@ -15,8 +15,29 @@ RISKS = ("low", "medium", "high")
 
 
 def _changed(context, worktree: str, base: str) -> list[str]:  # type: ignore[no-untyped-def]
-    result = context.executor.run(["git", "-C", worktree, "diff", "--name-only", base], timeout=120)
-    return [line for line in result.stdout.splitlines() if line.strip()]
+    """Every path the commit will pick up, tracked or not.
+
+    `git diff --name-only` was the obvious choice and it is the wrong one: it
+    lists tracked changes, while `git add -A` sweeps up untracked files too. The
+    checks therefore ran against a smaller set than the commit did, and a run
+    confined to one directory published three of its own scratch files from the
+    repository root without either the confinement or the protected paths
+    noticing. A check that sees less than the action it guards is not a guard.
+    """
+    result = context.executor.run(
+        ["git", "-C", worktree, "status", "--porcelain", "--untracked-files=all"], timeout=120
+    )
+    paths: list[str] = []
+    for line in result.stdout.splitlines():
+        if not line.strip():
+            continue
+        # `XY path`, and for a rename `XY old -> new`. What the commit carries
+        # is the destination.
+        path = line[3:].strip()
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1]
+        paths.append(path.strip('"'))
+    return paths
 
 
 def _twinless(paths: list[str], context, worktree: str, base: str) -> list[str]:  # type: ignore[no-untyped-def]

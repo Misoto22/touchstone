@@ -51,6 +51,8 @@ class LoopState(TypedDict, total=False):
 
     verdict: Literal["approve", "reject", "skipped"]
     verdict_reason: str
+    #: What a person answered at `await_person`, once they have.
+    decision: Literal["merge", "close"]
 
     outcome: Literal["clean", "merging", "escalated", "held", "reaped", "inconclusive"]
     pr: int | None
@@ -83,28 +85,48 @@ def _merge(state: LoopState) -> LoopState:
 
 
 def park(state: LoopState) -> LoopState:
-    """Open the pull request as a draft, then stop and wait for a person.
+    """Open the draft. Nothing else — the waiting is the next node's job.
 
-    The interrupt is the point. A shell loop parked a draft and exited, so a
-    person's answer reached nothing — the next hour simply started over and the
-    ledger row was all that carried forward. Here the thread is checkpointed at
-    this node, and answering resumes it.
+    Separate from the interrupt on purpose, and this is not stylistic. A node
+    that interrupts re-executes from its first line when the thread resumes, so
+    publishing and waiting in one node opens a second pull request every time a
+    person answers. Splitting them puts a checkpoint between the side effect
+    and the wait, which is what makes the side effect happen once.
     """
     if state.get("dry_run"):
         return publish.rehearse(state, would="park")
-    published = publish.park(state)
+    return publish.park(state)
+
+
+def await_person(state: LoopState) -> LoopState:
+    """Stop, and let a person decide.
+
+    The interrupt is the point of the whole rewrite. A shell loop parked a
+    draft and exited, so an answer reached nothing: the next hour started over
+    and paid for another audit to reach the same conclusion. Here the thread is
+    checkpointed and resuming continues from this line.
+    """
+    if state.get("dry_run") or state.get("pr") is None:
+        return {}
+
     decision = interrupt(
         {
-            "pr": published["pr"],
+            "pr": state["pr"],
             "risk": state.get("risk"),
             "verdict": state.get("verdict", "skipped"),
             "reason": state.get("verdict_reason", ""),
             "question": "Merge this, or close it? Resume the thread with 'merge' or 'close'.",
         }
     )
-    if decision == "merge":
-        return publish.arm_merge({**state, **published})
-    return publish.record_closed({**state, **published})
+    return {"decision": "merge" if decision == "merge" else "close"}
+
+
+def _after_person(state: LoopState) -> str:
+    if state.get("decision") == "merge":
+        return "arm_merge"
+    if state.get("decision") == "close":
+        return "record_closed"
+    return END
 
 
 def build():  # type: ignore[no-untyped-def]
@@ -116,14 +138,24 @@ def build():  # type: ignore[no-untyped-def]
     graph.add_node("review", review.run)
     graph.add_node("merge", _merge)
     graph.add_node("park", park)
+    graph.add_node("await_person", await_person)
+    graph.add_node("arm_merge", publish.arm_merge)
+    graph.add_node("record_closed", publish.record_closed)
 
     graph.set_entry_point("audit")
     graph.add_conditional_edges("audit", _after_audit, {"classify": "classify", END: END})
     graph.add_conditional_edges("classify", _after_classify, {"review": "review", "park": "park"})
     graph.add_conditional_edges("review", _after_review, {"merge": "merge", "park": "park"})
     graph.add_edge("merge", END)
-    graph.add_edge("park", END)
+    graph.add_edge("park", "await_person")
+    graph.add_conditional_edges(
+        "await_person",
+        _after_person,
+        {"arm_merge": "arm_merge", "record_closed": "record_closed", END: END},
+    )
+    graph.add_edge("arm_merge", END)
+    graph.add_edge("record_closed", END)
     return graph
 
 
-__all__ = ["LoopState", "build", "park"]
+__all__ = ["LoopState", "await_person", "build", "park"]

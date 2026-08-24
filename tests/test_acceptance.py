@@ -410,3 +410,68 @@ def test_the_runner_asks_the_graph_whether_it_paused() -> None:
     assert len(records) == 1, f"expected only the gate-hold row, found {len(records)}"
     held_at = source.index("except Held")
     assert source.index("ledger.record") > held_at, "the surviving row is not the gate-hold one"
+
+
+def test_the_checks_see_everything_the_commit_will_carry() -> None:
+    """`git add -A` sweeps up untracked files; `git diff --name-only` does not.
+
+    Checking with the narrower view let a run confined to one directory publish
+    three of its own scratch files from the repository root, with neither the
+    confinement nor the protected paths noticing. A check that sees less than
+    the action it guards is not a guard.
+    """
+    import inspect
+
+    from touchstone.nodes import classify
+
+    source = inspect.getsource(classify._changed)
+    assert "--untracked-files=all" in source
+    assert "diff" not in source.split('"""')[-1], "still diffing rather than reading status"
+
+
+def test_the_loop_removes_its_own_scratch_files() -> None:
+    """Every file the loop writes into the worktree to talk to itself is read
+    once and deleted, so `git add -A` cannot find it."""
+    import inspect
+
+    from touchstone.engines import claude, codex
+    from touchstone.nodes import audit
+
+    assert "rm" in inspect.getsource(audit.run), "the finding file survives the run"
+    assert "rm" in inspect.getsource(codex.CodexEngine.review), "the schema and answer survive"
+    assert "rm" in inspect.getsource(claude.ClaudeEngine.author), "the settings file survives"
+
+
+def test_answering_a_parked_thread_does_not_open_a_second_pull_request() -> None:
+    """A node that interrupts re-executes from its first line when resumed.
+
+    Publishing and waiting in one node therefore opened a draft, stopped, and
+    opened another draft the moment a person answered. Splitting them puts a
+    checkpoint between the side effect and the wait, which is what makes the
+    side effect happen once — and only a real resume shows it, because the
+    first half looks perfect on its own.
+    """
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.types import Command
+
+    from touchstone import graph as G
+
+    for answer, expected in (("merge", "merging"), ("close", "escalated")):
+        calls: list[str] = []
+        G.publish.park = lambda s, c=calls: (c.append("park"), {"pr": 999})[1]  # type: ignore[assignment]
+        G.publish.arm_merge = lambda s, c=calls: (c.append("merge"), {"outcome": "merging"})[1]  # type: ignore[assignment]
+        G.publish.record_closed = lambda s, c=calls: (c.append("close"), {"outcome": "escalated"})[
+            1
+        ]  # type: ignore[assignment]
+        G.audit.run = lambda s: {"finding": {"status": "proposed", "risk": "medium", "title": "t"}}  # type: ignore[assignment]
+        G.classify.run = lambda s: {"risk": "medium"}  # type: ignore[assignment]
+
+        app = G.build().compile(checkpointer=InMemorySaver())
+        thread = {"configurable": {"thread_id": f"t-{answer}"}}
+        app.invoke({"loop": "h", "worktree": "/w", "branch": "b", "dry_run": False}, thread)
+
+        assert app.get_state(thread).next, f"{answer}: the thread did not pause"
+        final = app.invoke(Command(resume=answer), thread)
+
+        assert calls.count("park") == 1, f"{answer}: published {calls.count('park')} times"
+        assert final.get("outcome") == expected
