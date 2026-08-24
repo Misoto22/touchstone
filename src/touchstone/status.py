@@ -74,6 +74,7 @@ def reconcile_status(
         context.forge,
         context.ledger,
         reap_after_hours=config.forge.reap_after_hours,
+        escalation_label=config.forge.escalation_label,
     )
     for name, loop in sorted(config.loops.items()):
         report = lifecycle.reconcile(loop, observed_at)

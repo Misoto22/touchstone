@@ -33,6 +33,7 @@ All notable user-facing changes are documented here. The format follows [Keep a 
 - `touchstone actions init` resolves the release tag matching the installed distribution instead of the Action repository's default branch.
 - Profiles enable only side-effect-minimal Validation Gates: `git diff --check` runs without review, every command that executes project code stays a disabled Candidate, and a repository-local Profile can no longer enable one.
 - `touchstone actions setup --organization` stores App secrets as organization secrets restricted to the selected repository, and later checks read organization and repository secrets together.
+- `touchstone doctor` reports a `gh` release older than 2.64, which cannot complete `pr edit` since GitHub sunset Projects (classic) and therefore cannot label a published pull request.
 
 ### Security
 
@@ -41,6 +42,7 @@ All notable user-facing changes are documented here. The format follows [Keep a 
 - The publishing App token and installation are restricted to the selected repository and to exactly the required permission map, and partial remote writes block new analysis until explicit reconciliation.
 - A Publish job that fails or is cancelled without recording its outcome is reconstructed by Snapshot from the authenticated candidate as a `failed` partial marker.
 - Hosted commits are authored by the publishing App's bot identity instead of an identity git synthesizes from the runner's user and hostname.
+- `reconcile` no longer treats an existing pull request as a finished publication: a partial write stays unresolved until the Loop and escalation labels a complete publication applies are actually present.
 - Owner App setup verifies repository scope and permissions with a short-lived App JWT before persisting only a non-secret attestation; later local checks label that evidence as cached.
 - Hosted bundles use AES-256-GCM with manifest AAD, fresh nonces, path-safe archives, configuration/Profile lineage checks, and ciphertext digests.
 - GitHub App private keys are sent to repository secrets through stdin and are never persisted by Touchstone.

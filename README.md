@@ -255,7 +255,7 @@ touchstone run-due
 
 The scheduler is only a Wake Signal. `run-due` transactionally claims a repository-global Due Slot, coalesces missed periods, runs at most one active change at a time, and retries retryable failures up to three times with bounded backoff. The same evaluator is used locally and in GitHub Actions.
 
-`status` is pure and never mutates lifecycle state. Use `reconcile` when you intentionally want to compare recorded candidates with GitHub and record merged, closed, failed, or reaped transitions:
+`status` is pure and never mutates lifecycle state. Use `reconcile` when you intentionally want to compare recorded candidates with GitHub and record merged, closed, failed, or reaped transitions. A partial publication is resolved only once the pull request actually carries the Loop and escalation labels a complete publication applies; `reconcile` adds a missing label itself and leaves the record unresolved when it cannot:
 
 ```bash
 touchstone status --json

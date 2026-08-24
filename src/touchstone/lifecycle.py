@@ -115,11 +115,13 @@ class RepositoryLifecycle:
         *,
         reap_after_hours: int,
         executor: Executor | None = None,
+        escalation_label: str = "",
     ) -> None:
         self._forge = forge
         self._ledger = ledger
         self._reap_after_hours = reap_after_hours
         self._executor = executor
+        self._escalation_label = escalation_label
 
     def resume(self, request: ResumeRequest) -> ResumeResult:
         """Apply an operator decision only to the exact commit they reviewed."""
@@ -359,6 +361,15 @@ class RepositoryLifecycle:
                     partial_unresolved.append(projection.branch or projection.finding_id)
                     continue
                 if pull is not None:
+                    missing = self._missing_publication_labels(loop, pull)
+                    if missing:
+                        # The pull request exists but publication stopped before
+                        # it reached an operator's queue. Finish that exact step
+                        # rather than recording a park that nobody can see.
+                        missing = self._apply_missing_labels(pull, missing)
+                    if missing:
+                        partial_unresolved.append(projection.branch or str(pull.number))
+                        continue
                     self._ledger.append(
                         LifecycleEvent(
                             finding_id=projection.finding_id,
@@ -438,6 +449,34 @@ class RepositoryLifecycle:
             tuple(partial_resolved),
             tuple(partial_unresolved),
         )
+
+    def _missing_publication_labels(
+        self,
+        loop: LoopConfig,
+        pull: PullState,
+    ) -> tuple[str, ...]:
+        """Name the labels a complete publication would have applied.
+
+        An existing pull request is not proof of a finished publication. A park
+        that failed at its labelling step leaves a draft that carries the Loop
+        label and holds the slot, but not the escalation label that puts it in
+        an operator's queue.
+        """
+
+        expected = [loop.label]
+        if pull.draft:
+            expected.append(self._escalation_label)
+        present = set(pull.labels)
+        return tuple(name for name in expected if name and name not in present)
+
+    def _apply_missing_labels(self, pull: PullState, missing: tuple[str, ...]) -> tuple[str, ...]:
+        """Add the labels publication could not, and report what still failed."""
+
+        remaining = []
+        for name in missing:
+            if not self._forge.add_label(pull.number, name).ok:
+                remaining.append(name)
+        return tuple(remaining)
 
     def _transition(self, projection: FindingProjection, state: str, detail: str) -> None:
         self._ledger.append(

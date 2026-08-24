@@ -41,6 +41,7 @@ class PullState:
     closed: bool
     created_at: str
     url: str
+    labels: tuple[str, ...] = ()
 
 
 class Forge:
@@ -215,7 +216,8 @@ class Forge:
                 "view",
                 str(number),
                 "--json",
-                "number,headRefOid,headRefName,isDraft,state,mergedAt,createdAt,url,statusCheckRollup",
+                "number,headRefOid,headRefName,isDraft,state,mergedAt,"
+                "createdAt,url,statusCheckRollup,labels",
             ]
         )
         return _pull_state(payload) if isinstance(payload, dict) else None
@@ -232,7 +234,8 @@ class Forge:
                 "--limit",
                 "1",
                 "--json",
-                "number,headRefOid,headRefName,isDraft,state,mergedAt,createdAt,url,statusCheckRollup",
+                "number,headRefOid,headRefName,isDraft,state,mergedAt,"
+                "createdAt,url,statusCheckRollup,labels",
             ]
         )
         if not isinstance(payload, list):
@@ -304,7 +307,19 @@ def _pull_state(payload: dict[str, Any]) -> PullState | None:
         closed=state == "CLOSED" and not merged_at,
         created_at=str(payload.get("createdAt") or ""),
         url=str(payload.get("url") or ""),
+        labels=_labels(payload.get("labels")),
     )
+
+
+def _labels(raw: Any) -> tuple[str, ...]:
+    if not isinstance(raw, list):
+        return ()
+    names = [
+        row["name"]
+        for row in raw
+        if isinstance(row, dict) and isinstance(row.get("name"), str) and row["name"]
+    ]
+    return tuple(sorted(set(names)))
 
 
 def _check_state(raw: Any) -> str:

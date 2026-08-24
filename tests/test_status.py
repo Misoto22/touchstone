@@ -42,7 +42,12 @@ def test_status_is_read_only_and_reconcile_is_explicit(tmp_path: Path) -> None:
     config = SimpleNamespace(
         state_dir=tmp_path,
         source=SimpleNamespace(schema_version=1),
-        forge=SimpleNamespace(slug="acme/widgets", default_branch="main", reap_after_hours=6),
+        forge=SimpleNamespace(
+            slug="acme/widgets",
+            default_branch="main",
+            reap_after_hours=6,
+            escalation_label="touchstone:needs-review",
+        ),
         engine=SimpleNamespace(name="codex", model="gpt-test", audit_effort="high"),
         execution=SimpleNamespace(target="local", ssh=None),
         loops={"code": loop},
@@ -109,7 +114,7 @@ def test_status_never_calls_forge_mutations(tmp_path: Path) -> None:
     config = SimpleNamespace(
         state_dir=tmp_path,
         loops={},
-        forge=SimpleNamespace(reap_after_hours=6),
+        forge=SimpleNamespace(reap_after_hours=6, escalation_label="touchstone:needs-review"),
     )
     ledger = Ledger(tmp_path / "ledger.jsonl")
 

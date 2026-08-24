@@ -352,3 +352,56 @@ def test_doctor_reports_unresolved_package_manager_evidence(tmp_path: Path) -> N
 
     assert check.level == "WARN"
     assert "npm/yarn" in check.summary
+
+
+class _GhExecutor:
+    """Answer only the version probe doctor makes."""
+
+    def __init__(self, output: str, *, ok: bool = True) -> None:
+        self.output = output
+        self.ok = ok
+
+    def run(self, argv, **_kwargs):  # type: ignore[no-untyped-def]
+        from types import SimpleNamespace
+
+        assert argv == ["gh", "--version"]
+        return SimpleNamespace(ok=self.ok, stdout=self.output, stderr="", code=0 if self.ok else 1)
+
+
+def _gh_check(output: str, *, ok: bool = True):  # type: ignore[no-untyped-def]
+    from touchstone.doctor import DoctorContext, _gh_version_check
+
+    context = DoctorContext(
+        commands=frozenset({"gh"}),
+        forge=MemoryForge(),
+        scheduler="launchd",
+        executor=_GhExecutor(output, ok=ok),
+    )
+    return _gh_version_check(context)
+
+
+def test_a_gh_that_cannot_label_a_pull_request_fails_doctor() -> None:
+    check = _gh_check("gh version 2.63.2 (2024-12-05)\n")
+
+    assert check.level == "FAIL"
+    assert "2.63.2" in check.summary
+    assert "pr edit" in check.summary
+    assert check.repair is not None and "gh" in check.repair
+
+
+def test_a_supported_gh_passes_without_promising_future_versions() -> None:
+    check = _gh_check("gh version 2.98.0 (2026-08-20)\n")
+
+    assert check.level == "PASS"
+    # A version floor cannot promise the next API sunset will not break something.
+    assert "future GitHub API sunset" in check.summary
+
+
+def test_an_unreadable_gh_version_warns_rather_than_passing() -> None:
+    assert _gh_check("", ok=False).level == "WARN"
+    assert _gh_check("something unexpected\n").level == "WARN"
+
+
+def test_the_floor_is_the_first_release_that_completes_pr_edit() -> None:
+    assert _gh_check("gh version 2.64.0 (2025-01-01)\n").level == "PASS"
+    assert _gh_check("gh version 2.63.99 (2024-12-31)\n").level == "FAIL"

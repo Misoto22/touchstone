@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -133,6 +134,58 @@ def build_context(config: Config, *, offline: bool = False) -> DoctorContext:
     )
 
 
+#: The oldest `gh` known to complete `pr edit`. Older releases still request the
+#: sunset Projects (classic) `projectCards` field, which GitHub now answers with
+#: a hard error, so labelling a published pull request fails while every other
+#: `gh` call this project makes keeps working.
+_GH_LABEL_FLOOR = (2, 64)
+
+
+def _gh_version(executor: Executor | None) -> tuple[int, ...] | None:
+    if executor is None:
+        return None
+    result = executor.run(["gh", "--version"], timeout=30)
+    if not result.ok:
+        return None
+    found = re.search(r"gh version (\d+)\.(\d+)\.(\d+)", result.stdout)
+    return tuple(int(part) for part in found.groups()) if found else None
+
+
+def _gh_version_check(context: DoctorContext) -> CheckResult:
+    """Report a `gh` old enough to break publication labelling.
+
+    A version floor cannot promise the opposite. GitHub sunsets API fields on
+    its own schedule, and the next one will break a different subcommand at a
+    different version, so this check says what is known to be broken rather
+    than declaring any version safe.
+    """
+
+    version = _gh_version(context.executor)
+    if version is None:
+        return CheckResult(
+            "gh.version",
+            "WARN",
+            "could not read the 'gh' version",
+            "Run 'gh --version'; a release older than "
+            f"{_GH_LABEL_FLOOR[0]}.{_GH_LABEL_FLOOR[1]} cannot label a published pull request.",
+        )
+    rendered = ".".join(str(part) for part in version)
+    if version < _GH_LABEL_FLOOR:
+        return CheckResult(
+            "gh.version",
+            "FAIL",
+            f"gh {rendered} cannot complete 'pr edit'; publication cannot label a pull request",
+            "Upgrade the 'gh' CLI, for example with 'brew upgrade gh' or your "
+            "platform's package manager.",
+        )
+    return CheckResult(
+        "gh.version",
+        "PASS",
+        f"gh {rendered} is newer than the releases known to fail 'pr edit'; "
+        "a future GitHub API sunset can still break a subcommand",
+    )
+
+
 def _available_commands(executor: Executor) -> frozenset[str]:
     available: set[str] = set()
     for command in ("git", "gh", "codex", "claude"):
@@ -241,6 +294,8 @@ def run_doctor(config: Config, context: DoctorContext) -> DoctorReport:
                 else f"Install the '{command}' command and make it available on PATH.",
             )
         )
+    if "gh" in context.commands:
+        checks.append(_gh_version_check(context))
 
     engine_present = config.engine.name in context.commands
     checks.append(
