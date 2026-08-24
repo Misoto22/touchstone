@@ -16,6 +16,8 @@ import shutil
 import sys
 import time
 import uuid
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from langgraph.checkpoint.sqlite import SqliteSaver
@@ -24,7 +26,7 @@ from touchstone.config import Config, LoopConfig
 from touchstone.events import EventLog, run_event
 from touchstone.graph import build
 from touchstone.nodes.context import configure, current
-from touchstone.outcomes import RunOutcome, RunResult, from_legacy_outcome
+from touchstone.outcomes import ChangeState, RunOutcome, RunResult, from_legacy_outcome
 
 
 class Held(Exception):
@@ -335,3 +337,139 @@ def resume(config: Config, *, thread: str, answer: str) -> int:
         return 3
     finally:
         shutil.rmtree(lock, ignore_errors=True)
+
+
+@dataclass(frozen=True, slots=True)
+class RunDueReport:
+    started: tuple[str, ...]
+    results: tuple[RunResult, ...]
+    remaining_due: tuple[str, ...]
+
+    @property
+    def exit_code(self) -> int:
+        if any(result.outcome == RunOutcome.BLOCKED for result in self.results):
+            return 3
+        if any(result.outcome == RunOutcome.FAILED for result in self.results):
+            return 1
+        return 0
+
+
+def run_due(
+    config: Config,
+    *,
+    now: dt.datetime,
+    loop: str | None,
+    force: bool,
+    execute_loop: Callable[[Config, str], RunResult] | None = None,
+) -> RunDueReport:
+    from touchstone.scheduling.due import DueEvaluator, DueLoop, DueSlot
+    from touchstone.scheduling.store import DueStore
+
+    if now.tzinfo is None:
+        raise ValueError("run-due requires an aware datetime")
+    if force and loop is None:
+        raise ValueError("--force requires --loop")
+    if loop is not None and loop not in config.loops:
+        raise ValueError(f"unknown Loop {loop!r}")
+    state_dir = Path(config.state_dir)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    store = DueStore(state_dir / "due.sqlite")
+    current = now.astimezone(dt.UTC).replace(microsecond=0)
+    if force:
+        assert loop is not None
+        configured = config.loops[loop]
+        due = (
+            DueLoop(
+                DueSlot(loop, "manual", current, manual=True),
+                0,
+                dt.timedelta(),
+                configured.priority,
+            ),
+        )
+    else:
+        due = DueEvaluator(store).evaluate(config, current)
+        if loop is not None:
+            due = tuple(item for item in due if item.slot.loop_id == loop)
+
+    runner = execute_loop or _execute_loop_result
+    owner = f"{os.getpid()}:{uuid.uuid4().hex}"
+    started: list[str] = []
+    results: list[RunResult] = []
+    remaining = [item.slot.loop_id for item in due]
+    for item in due:
+        claimed = store.claim(
+            item.slot,
+            owner=owner,
+            now=current,
+            ttl=dt.timedelta(hours=2),
+            missed_count=item.missed_count,
+        )
+        if not claimed.acquired or claimed.claim is None:
+            continue
+        name = item.slot.loop_id
+        started.append(name)
+        remaining.remove(name)
+        try:
+            result = runner(config, name)
+        except Exception as exc:
+            result = RunResult(
+                RunOutcome.FAILED,
+                reason_code="runner-exception",
+                detail=type(exc).__name__,
+                retryable=True,
+            )
+        store.finish(
+            claimed.claim,
+            result,
+            now=current,
+            snapshot=f"run:{item.slot.id}",
+        )
+        results.append(result)
+        active = result.lifecycle in {
+            ChangeState.PROPOSED,
+            ChangeState.AWAITING_HUMAN,
+            ChangeState.AWAITING_CHECKS,
+        }
+        if active or result.outcome in {RunOutcome.BLOCKED, RunOutcome.FAILED}:
+            break
+    return RunDueReport(tuple(started), tuple(results), tuple(remaining))
+
+
+def _execute_loop_result(config: Config, loop: str) -> RunResult:
+    code = execute(config, loop=loop)
+    finished = [
+        row
+        for row in EventLog(Path(config.state_dir) / "events.jsonl").rows()
+        if row.get("kind") == "finished" and row.get("loop") == loop
+    ]
+    outcome = str(finished[-1].get("outcome") or "") if finished else ""
+    result = (
+        from_legacy_outcome(outcome, detail=str(finished[-1].get("detail") or ""))
+        if finished
+        else None
+    )
+    if result is None:
+        fallback = RunOutcome.BLOCKED if code == 3 else RunOutcome.FAILED
+        return RunResult(fallback, reason_code="missing-run-event", retryable=code != 3)
+    projections = [
+        projection
+        for projection in current().ledger.projections().values()
+        if projection.loop == loop
+    ]
+    if projections:
+        latest = max(projections, key=lambda projection: projection.ts)
+        if latest.state in {
+            ChangeState.PROPOSED,
+            ChangeState.AWAITING_HUMAN,
+            ChangeState.AWAITING_CHECKS,
+        }:
+            return RunResult(
+                result.outcome,
+                lifecycle=latest.state,
+                detail=result.detail,
+                pr_number=latest.pr,
+                candidate_id=latest.finding_id,
+                partial=latest.partial,
+                retryable=result.retryable,
+            )
+    return result

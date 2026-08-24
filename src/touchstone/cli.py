@@ -334,6 +334,29 @@ def _run(args: argparse.Namespace) -> int:
     return execute(config, loop=args.loop, dry_run=args.dry_run)
 
 
+def _run_due(args: argparse.Namespace) -> int:
+    import datetime as dt
+
+    from touchstone.runner import run_due
+
+    config = load(args.config)
+    try:
+        report = run_due(
+            config,
+            now=dt.datetime.now(dt.UTC),
+            loop=args.loop,
+            force=args.force,
+        )
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from None
+    for name, result in zip(report.started, report.results, strict=True):
+        lifecycle = f" / {result.lifecycle.value}" if result.lifecycle else ""
+        print(f"{name}: {result.outcome.value}{lifecycle}")
+    if report.remaining_due:
+        print(f"remaining due: {', '.join(report.remaining_due)}")
+    return report.exit_code
+
+
 def _resume(args: argparse.Namespace) -> int:
     from touchstone.runner import resume
 
@@ -449,6 +472,11 @@ def main(argv: list[str] | None = None) -> int:
         help="audit, classify and review for real; stop before publishing",
     )
     run.set_defaults(handler=_run)
+
+    run_due = sub.add_parser("run-due", help="claim and run currently due Loops")
+    run_due.add_argument("--loop", help="restrict evaluation to one Loop")
+    run_due.add_argument("--force", action="store_true", help="create a manual Due Slot")
+    run_due.set_defaults(handler=_run_due)
 
     resume = sub.add_parser("resume", help="answer a parked draft and continue that thread")
     resume.add_argument("thread", help="the thread id the parked run reported")

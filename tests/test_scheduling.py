@@ -31,12 +31,13 @@ def test_launchd_file_has_absolute_paths_and_no_environment_secrets(tmp_path: Pa
 
     report = scheduler.install(_config(tmp_path), target=target)
 
-    assert len(report.files) == 2
+    assert len(report.files) == 1
     with report.files[0].open("rb") as handle:
         plist = plistlib.load(handle)
     arguments = plist["ProgramArguments"]
     assert arguments[0] == "/absolute/bin/touchstone"
     assert str((tmp_path / "touchstone.toml").resolve()) in arguments
+    assert arguments[-1] == "run-due"
     text = report.files[0].read_text(encoding="utf-8")
     assert "GH_TOKEN" not in text
     assert "SECRET" not in text
@@ -49,14 +50,15 @@ def test_systemd_install_is_idempotent_and_skips_unscheduled_loops(tmp_path: Pat
     first = scheduler.install(_config(tmp_path), target=target)
     second = scheduler.install(_config(tmp_path), target=target)
 
-    assert len(first.files) == 4
+    assert len(first.files) == 2
     assert first.files == second.files
     assert second.changed == ()
-    service = (target / "touchstone-code.service").read_text(encoding="utf-8")
+    service = (target / "touchstone-wake.service").read_text(encoding="utf-8")
     assert "WorkingDirectory=" + str((tmp_path / "project").resolve()) in service
     assert 'Environment="PATH=' in service
     assert "GH_TOKEN" not in service
     assert "SECRET" not in service
+    assert service.rstrip().endswith("run-due")
 
 
 def test_scheduler_dry_run_writes_and_executes_nothing(tmp_path: Path) -> None:
@@ -65,7 +67,7 @@ def test_scheduler_dry_run_writes_and_executes_nothing(tmp_path: Path) -> None:
 
     report = scheduler.install(_config(tmp_path), target=target, dry_run=True)
 
-    assert len(report.files) == 4
+    assert len(report.files) == 2
     assert not target.exists()
 
 

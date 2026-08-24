@@ -190,7 +190,9 @@ class DueStore:
                 connection.rollback()
                 raise ValueError("Durable Claim is missing or owned by another worker")
             loop_id, generation, scheduled, attempts, _owner = row
-            terminal_failure = result.outcome == RunOutcome.FAILED and attempts >= self.max_attempts
+            terminal_failure = result.outcome == RunOutcome.FAILED and (
+                attempts >= self.max_attempts or not result.retryable
+            )
             consumed = result.outcome != RunOutcome.FAILED or terminal_failure or result.partial
             retry_at = None
             if not consumed:
@@ -233,6 +235,13 @@ class DueStore:
         with self._connect() as connection:
             row = connection.execute("SELECT * FROM slots WHERE slot_id = ?", (slot_id,)).fetchone()
         return _record(row) if row else None
+
+    def records(self) -> tuple[SlotRecord, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM slots ORDER BY scheduled_for DESC, loop_id"
+            ).fetchall()
+        return tuple(_record(row) for row in rows)
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=30)

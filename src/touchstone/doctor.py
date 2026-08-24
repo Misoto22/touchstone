@@ -133,6 +133,7 @@ def run_doctor(config: Config, context: DoctorContext) -> DoctorReport:
         )
     ]
     checks.extend(_profile_checks(config))
+    checks.extend(_schedule_checks(config))
     deprecated = tuple(
         name
         for name in (
@@ -492,6 +493,66 @@ def _profile_checks(config: Config) -> list[CheckResult]:
             "Use the base Profile or add a reviewed local declarative Profile."
             if unsupported
             else None,
+        )
+    )
+    return checks
+
+
+def _schedule_checks(config: Config) -> list[CheckResult]:
+    import datetime as dt
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+    try:
+        ZoneInfo(config.timezone)
+        timezone_valid = True
+    except ZoneInfoNotFoundError:
+        timezone_valid = False
+    checks = [
+        CheckResult(
+            "schedule.timezone",
+            "PASS" if timezone_valid else "FAIL",
+            f"repository timezone: {config.timezone}"
+            if timezone_valid
+            else f"unknown IANA timezone: {config.timezone}",
+            None if timezone_valid else "Set timezone to a valid IANA name.",
+        )
+    ]
+    path = Path(config.state_dir) / "due.sqlite"
+    if not path.is_file():
+        checks.append(
+            CheckResult(
+                "schedule.state",
+                "WARN",
+                "no durable Due Slot state exists yet",
+                "Run 'touchstone run-due' once or install a Wake Signal.",
+            )
+        )
+        return checks
+    from touchstone.scheduling.store import DueStore
+
+    records = DueStore(path).records()
+    active = [
+        record
+        for record in records
+        if record.claim_expires_at is not None and record.claim_expires_at > dt.datetime.now(dt.UTC)
+    ]
+    latest = records[0] if records else None
+    detail = "durable Due Slot state is readable"
+    if latest is not None:
+        detail += f"; last {latest.loop_id}={latest.outcome or 'claimed'}"
+        if latest.attempts > 1:
+            detail += f" after {latest.attempts} attempts"
+        if latest.missed_count:
+            detail += f"; coalesced {latest.missed_count} periods"
+    checks.append(CheckResult("schedule.state", "PASS", detail))
+    checks.append(
+        CheckResult(
+            "schedule.claim",
+            "WARN" if active else "PASS",
+            f"active claim owned by {active[0].claim_owner}"
+            if active
+            else "no active durable claim",
+            "Wait for the claim to expire before manual recovery." if active else None,
         )
     )
     return checks
