@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from touchstone.nodes.audit import _clean
 from touchstone.nodes.context import current
 
 RISKS = ("low", "medium", "high")
@@ -75,11 +76,7 @@ def run(state: dict[str, Any]) -> dict[str, Any]:
 
     paths = _changed(context, worktree, base)
     if not paths:
-        return {
-            "finding": {"status": "none"},
-            "outcome": "clean",
-            "notes": ["a finding was claimed but nothing changed on disk"],
-        }
+        return _clean(context, state, "a finding was claimed but nothing changed on disk")
 
     # A run that leaves nothing under the paths it exists to maintain opens no
     # pull request at all. Two merge-triggering loops on one `main` with
@@ -87,11 +84,7 @@ def run(state: dict[str, Any]) -> dict[str, Any]:
     if loop.require_change_under and not any(
         path.startswith(prefix) for path in paths for prefix in loop.require_change_under
     ):
-        return {
-            "finding": {"status": "none"},
-            "outcome": "clean",
-            "notes": ["nothing changed under the paths this loop maintains"],
-        }
+        return _clean(context, state, "nothing changed under the paths this loop maintains")
 
     for protected in loop.protected_paths:
         hit = [path for path in paths if path.startswith(protected.rstrip("/"))]

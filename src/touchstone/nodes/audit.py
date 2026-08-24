@@ -12,6 +12,26 @@ from touchstone.nodes.context import current
 FINDING_FILE = ".audit-finding.json"
 
 
+def _clean(context, state: dict[str, Any], detail: str, **extra: Any) -> dict[str, Any]:
+    """A run that found nothing, written down.
+
+    Recorded rather than passed over in silence, because the whole point of a
+    daily loop is that its absence is noticeable. R-HAR-7 puts it plainly:
+    silence in the report means the review did not run, and that is itself a
+    finding. A `clean` outcome that leaves no row makes "ran and found nothing"
+    indistinguishable from "never started" — which is the one distinction the
+    ledger exists to preserve.
+    """
+    context.ledger.record(
+        status="clean",
+        risk=None,
+        pr=None,
+        title=state.get("finding", {}).get("title", ""),
+        detail=detail,
+    )
+    return {"finding": {"status": "none"}, "outcome": "clean", **extra}
+
+
 def run(state: dict[str, Any]) -> dict[str, Any]:
     context = current()
     loop = context.loop(state["loop"])
@@ -41,16 +61,20 @@ def run(state: dict[str, Any]) -> dict[str, Any]:
         # No finding file is a clean pass, and a clean pass is the normal
         # outcome for most runs. Inventing a defect to have something to
         # report is the failure mode this makes cheap to avoid.
-        return {"finding": {"status": "none"}, "outcome": "clean", "cost": [session.cost]}
+        return _clean(context, state, "no finding file written", cost=[session.cost])
 
     try:
         finding = json.loads(raw)
     except json.JSONDecodeError:
-        return {
-            "finding": {"status": "none"},
-            "outcome": "clean",
-            "notes": ["the finding file was not valid JSON"],
-            "cost": [session.cost],
-        }
+        return _clean(
+            context,
+            state,
+            "the finding file was not valid JSON",
+            notes=["the finding file was not valid JSON"],
+            cost=[session.cost],
+        )
+
+    if finding.get("status") != "proposed":
+        return _clean(context, state, finding.get("summary", "nothing found"), cost=[session.cost])
 
     return {"finding": finding, "cost": [session.cost]}
