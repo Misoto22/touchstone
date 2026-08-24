@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 import tomllib
@@ -48,9 +49,22 @@ def test_readme_links_the_published_release() -> None:
     assert "Before the first PyPI release" not in readme
 
 
+def test_readme_resources_work_outside_github() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    targets = re.findall(r"]\(([^)\s]+)\)", readme)
+    targets.extend(re.findall(r'\b(?:src|srcset)="([^"]+)"', readme))
+    relative_targets = sorted(
+        target
+        for target in targets
+        if not target.startswith(("https://", "http://", "#", "mailto:"))
+    )
+
+    assert relative_targets == []
+
+
 def test_public_policy_files_are_linked_from_the_readme() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
     for path in ("LICENSE", "SECURITY.md", "CONTRIBUTING.md", "CHANGELOG.md"):
         assert (ROOT / path).is_file()
-        assert f"]({path})" in readme
+        assert f"](https://github.com/Misoto22/touchstone/blob/main/{path})" in readme
