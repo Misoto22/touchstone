@@ -479,7 +479,7 @@ def _run(args: argparse.Namespace) -> int:
     from touchstone.runner import execute
 
     config = load(args.config)
-    print(f"touchstone: {config.describe()}", file=sys.stderr)
+    print(f"touchstone: {config.describe(args.loop)}", file=sys.stderr)
     return execute(config, loop=args.loop, dry_run=args.dry_run)
 
 
