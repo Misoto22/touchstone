@@ -38,9 +38,7 @@ def run(state: dict[str, Any]) -> dict[str, Any]:
 
     from string import Template
 
-    brief = Template((loop.brief.parent / "review.md").read_text(encoding="utf-8")).safe_substitute(
-        dict(loop.context)
-    )
+    brief = Template(loop.review_prompt()).safe_substitute(dict(loop.context))
 
     diff = context.executor.run(["git", "-C", worktree, "diff", base], timeout=180).stdout
     finding = state.get("finding", {})

@@ -1,105 +1,56 @@
-# A worked configuration. Copy to ~/.config/touchstone/config.toml and edit.
-#
-# Every value here is a decision this code refuses to make for you. The
-# implementation it replaces hardcoded a repository path, a model, an effort
-# level, and the assumption that the machine holding the git clone was also the
-# machine running the model — and each of those turned out to be wrong at least
-# once.
+# Generated shape for a generic repository. `touchstone init` discovers the
+# repository and writes these values for the current project.
+version = 1
 
-repo_path = "/Users/macbook01/local-projects/personal-projects/kioku"
-state_dir = "~/.local/state/touchstone"
+[project]
+# Relative paths resolve from this file, not from the invoking shell.
+path = "."
 
 [forge]
-slug = "Misoto22/kioku"
+provider = "github"
+# Optional when `origin` points at GitHub; discovery fills it during init.
+slug = "owner/repository"
 default_branch = "main"
-audit_label = "auto:audit"
-harness_label = "auto:harness"
-escalation_label = "blocked:needs-henry"
-# A pull request CI has turned red never merges. Without reaping it would hold
-# the single slot forever and stop the loop dead.
+required_workflows = ["ci.yml"]
+escalation_label = "touchstone:needs-review"
 reap_after_hours = 6
 
 [engine]
-name = "codex"            # codex | claude
+name = "codex" # codex | claude
 model = "gpt-5.6-sol"
-# Pinned, not inherited. The default is undocumented on both engines and free
-# to move, and effort drives both what a run costs and whether a finding is
-# real.
 audit_effort = "high"
 review_effort = "high"
-# A wedged session otherwise holds the lock for as long as its process lives,
-# and a stale-lock check only breaks a lock whose pid is gone.
 timeout_seconds = 2700
 
 [engine.budget]
-# Claude only: Codex reports no cost and has no budget flag, so on that engine
-# the clock is the only ceiling and the spend is invisible. Derived from what
-# has been observed rather than picked round — audits at $7.62 and $9.55,
-# reviews at $1.13 — at roughly twice the worst real run.
+# Enforced by Claude. Codex currently reports no cost, so its ceiling is time.
 audit = 20.0
 review = 4.0
 
 [execution]
-# local | ssh
-#
-# `ssh` is the right answer for a scheduled loop. A laptop sleeps, so `local`
-# there means "whenever the lid opens"; and telling a latent defect from a live
-# one needs the production database, which only the server can reach.
-target = "local"
+target = "local" # local | ssh
 
+# Required only when execution.target = "ssh".
 [execution.ssh]
-host = "my-server"
-workdir = "/srv/touchstone/kioku"
+host = "audit-host"
+workdir = "/srv/touchstone/repository"
 state_dir = "/srv/touchstone/state"
-# ssh gives a non-login shell whose PATH has neither Homebrew nor ~/.local/bin.
-env = { PATH = "/usr/local/bin:/usr/bin:/bin", ECC_GATEGUARD = "off" }
+env = { PATH = "/usr/local/bin:/usr/bin:/bin" }
 
 [loop.code]
-brief = "briefs/code-audit.md"
-label = "auto:audit"
-# Enforced on the finished diff, because a permission layer models tools rather
-# than intent — and on Codex, whose sandbox grants the whole worktree, this is
-# the only check there is.
+brief = "builtin:code-audit"
+label = "touchstone:audit"
+schedule = "hourly"
 protected_paths = [
-    ".github/", "justfile", "alembic.ini", "migrations/",
-    "docs/agent-delivery/", "docs/engineering/rules.md", ".claude/", "AGENTS.md",
+    ".github/",
+    ".env",
+    ".env.*",
+    "migrations/",
+    "AGENTS.md",
 ]
 
-# What this project calls the things the brief talks about. The shipped briefs
-# carry behaviour learned the hard way and know nothing about any particular
-# repository; these names are how they learn about this one.
-#
-# Last in the section on purpose. A TOML sub-table swallows every key after it
-# until the next header, so a `context` placed above `protected_paths` quietly
-# moves the protected paths into it — and a loop with no protected paths is a
-# loop with its safety check switched off, configured to look fine.
 [loop.code.context]
-project = "the kioku backend and its database schema"
-ledger = "`docs/engineering/findings.md`"
-protected = "`.github/`, `justfile`, `alembic.ini`, `migrations/`, `docs/agent-delivery/`, `docs/engineering/rules.md`, `.claude/`, `AGENTS.md`"
-rules_clause = """
-- It breaks a rule in `docs/engineering/rules.md`. Read the rule before citing
-  it; several are narrower than they sound. Cite the rule id in your reason."""
-
-[loop.harness]
-brief = "briefs/harness-review.md"
-label = "auto:harness"
-protected_paths = [
-    ".github/", "justfile", "alembic.ini", "migrations/",
-    "docs/engineering/rules.md", ".claude/", "AGENTS.md",
-]
-# A run leaving nothing here opens no pull request at all. Two merge-triggering
-# loops on one branch with required checks otherwise invalidate each other's
-# runs every day.
-require_change_under = ["docs/engineering/"]
-# Anything outside is escalated. A loop that edits code while claiming to audit
-# paperwork is not the loop anyone agreed to run.
-confine_to = ["docs/engineering/"]
-
-[loop.harness.context]
-spec = "section 16 of `docs/engineering/rules.md`, rules R-HAR-1 through R-HAR-8"
-rules = "`docs/engineering/rules.md` section 15"
-ledger = "`docs/engineering/findings.md`"
-decisions = "`docs/decisions/index.md`"
-writable = "`docs/engineering/harness-health.md` and the section 15 register rows you changed"
+project = "this repository and its data model"
+ledger = "No project findings ledger is configured; treat the queue as empty."
+protected = "the configured protected paths"
 rules_clause = ""

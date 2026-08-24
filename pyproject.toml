@@ -32,6 +32,9 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/touchstone"]
 
+[tool.hatch.build]
+artifacts = ["src/touchstone/resources/briefs/*.md"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"
