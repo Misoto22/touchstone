@@ -169,8 +169,9 @@ The standard repository secrets are:
 > not. Verified on a runner: the composite Action and its hash-locked install, the
 > Agent CLI installed from its committed lock, the per-stage credential
 > boundaries, the artifact round-trip between jobs, the state artifact named by
-> the configuration digest, and Prepare, Analysis and Snapshot reaching their
-> recorded outcomes with Verify and Publish correctly skipped. Still unverified:
+> the configuration digest, restoring that snapshot on the next run, and
+> Prepare, Analysis and Snapshot reaching their recorded outcomes with Verify
+> and Publish correctly skipped. Still unverified:
 > minting the App token, the Publish stage itself, and recovery from a Publish
 > that fails partway — each needs an installed Owner App, which `touchstone
 > actions setup` creates through a browser handoff the repository owner performs.

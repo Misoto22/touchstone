@@ -6,6 +6,7 @@ import hashlib
 import io
 import json
 import re
+import urllib.request
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -826,6 +827,13 @@ def test_resume_download_queries_the_exact_candidate_artifact_name(
         return Response(archive.getvalue())
 
     monkeypatch.setattr(runtime.urllib.request, "urlopen", open_url)
+    # The archive itself is fetched through an opener that drops the API token
+    # on GitHub's redirect to signed storage, so it does not pass through urlopen.
+    monkeypatch.setattr(
+        runtime,
+        "_open_artifact_archive",
+        lambda url, headers, timeout: open_url(urllib.request.Request(url)),
+    )
     destination = tmp_path / "restored.bundle.json"
 
     reason = runtime._download_artifact_file(
