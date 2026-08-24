@@ -1682,6 +1682,7 @@ source = { editable = "." }
 dependencies = [
     { name = "langgraph" },
     { name = "langgraph-checkpoint-sqlite" },
+    { name = "packaging" },
     { name = "tomli-w" },
 ]
 
@@ -1702,6 +1703,7 @@ requires-dist = [
     { name = "langgraph", specifier = ">=1.0" },
     { name = "langgraph-checkpoint-sqlite", specifier = ">=2.0" },
     { name = "langgraph-cli", extras = ["inmem"], marker = "extra == 'dev'", specifier = ">=0.2" },
+    { name = "packaging", specifier = ">=24.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.9" },
     { name = "tomli-w", specifier = ">=1.2" },

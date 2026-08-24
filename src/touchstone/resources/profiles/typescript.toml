@@ -1,0 +1,17 @@
+name = "typescript"
+version = "1"
+category = "language"
+supported = ">=4,<7"
+audit_context = "Inspect TypeScript type boundaries and emitted runtime assumptions."
+protected_paths = ["tsconfig.json"]
+source_paths = ["src/", "app/"]
+
+[[detect]]
+kind = "file"
+path = "tsconfig.json"
+
+[[validation]]
+argv = ["npx", "tsc", "--noEmit"]
+timeout_seconds = 900
+capability = "package-executable"
+enabled = false

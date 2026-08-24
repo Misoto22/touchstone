@@ -1,0 +1,13 @@
+name = "generic"
+version = "1"
+category = "base"
+supported = ""
+audit_context = "Audit repository-owned behavior without framework assumptions."
+protected_paths = [".github/", ".env", ".env.*", "AGENTS.md"]
+source_paths = []
+
+[[validation]]
+argv = ["git", "diff", "--check"]
+timeout_seconds = 120
+capability = "source-read"
+enabled = false

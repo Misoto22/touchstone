@@ -1,0 +1,6 @@
+[project]
+name = "django-uv"
+dependencies = ["Django>=5,<6"]
+
+[tool.uv]
+package = true
