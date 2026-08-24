@@ -15,7 +15,7 @@ Codex or Claude findings become reviewable GitHub pull requests.
 
 <br />
 
-[Install](#getting-started) · [Loop graph](docs/graph.md) · [Example config](touchstone.example.toml) · [Report issue](https://github.com/Misoto22/touchstone/issues)
+[PyPI](https://pypi.org/project/touchstone-agent/) · [Install](#getting-started) · [Loop graph](docs/graph.md) · [Example config](touchstone.example.toml) · [Report issue](https://github.com/Misoto22/touchstone/issues)
 
 <br />
 
@@ -85,10 +85,10 @@ touchstone.example.toml     Generic version-1 configuration
 
 ### Getting Started
 
-Install the current public release candidate, then run the first audited rehearsal inside a GitHub repository that Touchstone may audit:
+Install Touchstone, then run the first audited rehearsal inside a GitHub repository that Touchstone may audit:
 
 ```bash
-pipx install git+https://github.com/Misoto22/touchstone.git
+pipx install touchstone-agent
 cd /path/to/your/repository
 touchstone init
 touchstone doctor
@@ -240,9 +240,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the TDD and pull-request workflow. Us
 
 ### Release
 
-GitHub Actions verifies Python 3.12 and 3.13, builds the wheel and source distribution, checks package metadata, and smoke-tests the installed wheel. Publishing is triggered by a GitHub Release and uses PyPI trusted publishing through the protected `pypi` environment; the repository stores no PyPI API token.
+The current release is [v0.1.0](https://github.com/Misoto22/touchstone/releases/tag/v0.1.0), published as [`touchstone-agent` on PyPI](https://pypi.org/project/touchstone-agent/).
 
-Before the first PyPI release, Getting Started installs the same verified package directly from public `main`. Once `v0.1.0` is published, the stable install becomes `pipx install touchstone-agent`.
+GitHub Actions verifies Python 3.12 and 3.13, builds the wheel and source distribution, checks package metadata, and smoke-tests the installed wheel. Publishing is triggered by a GitHub Release and uses PyPI trusted publishing through the protected `pypi` environment; the repository stores no PyPI API token.
 
 ---
 

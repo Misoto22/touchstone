@@ -23,7 +23,7 @@ def test_readme_starts_with_the_installable_first_run() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     getting_started = readme.split("### Getting Started", 1)[1].split("\n---\n", 1)[0]
     commands = [
-        "pipx install git+https://github.com/Misoto22/touchstone.git",
+        "pipx install touchstone-agent",
         "touchstone init",
         "touchstone doctor",
         "touchstone setup",
@@ -34,6 +34,15 @@ def test_readme_starts_with_the_installable_first_run() -> None:
     assert positions == sorted(positions)
     assert getting_started.count("touchstone doctor") == 2
     assert "touchstone install-scheduler" not in getting_started
+
+
+def test_readme_links_the_published_release() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "https://pypi.org/project/touchstone-agent/" in readme
+    assert "https://github.com/Misoto22/touchstone/releases/tag/v0.1.0" in readme
+    assert "release candidate" not in readme
+    assert "Before the first PyPI release" not in readme
 
 
 def test_public_policy_files_are_linked_from_the_readme() -> None:
