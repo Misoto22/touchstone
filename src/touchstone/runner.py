@@ -23,7 +23,7 @@ from touchstone.config import Config
 from touchstone.events import EventLog, run_event
 from touchstone.graph import build
 from touchstone.lifecycle import RepositoryLifecycle
-from touchstone.nodes.context import current
+from touchstone.nodes.context import configure, current
 
 
 class Held(Exception):
@@ -138,7 +138,7 @@ def _teardown(config: Config, path: str, branch: str, *, published: bool) -> Non
 def execute(config: Config, *, loop: str, dry_run: bool = False) -> int:
     state_dir = Path(config.state_dir)
     state_dir.mkdir(parents=True, exist_ok=True)
-    context = current()
+    context = configure(config)
     event_log = EventLog(state_dir / "events.jsonl")
     run_id = uuid.uuid4().hex
     started = time.monotonic()
@@ -244,6 +244,7 @@ def resume(config: Config, *, thread: str, answer: str) -> int:
     """
     from langgraph.types import Command
 
+    configure(config)
     state_dir = Path(config.state_dir)
     state_dir.mkdir(parents=True, exist_ok=True)
     try:

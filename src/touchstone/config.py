@@ -13,11 +13,6 @@ from typing import Any, Literal
 EngineName = Literal["codex", "claude"]
 Target = Literal["local", "ssh"]
 
-SEARCH = (
-    Path("/etc/touchstone/config.toml"),
-    Path.home() / ".config" / "touchstone" / "config.toml",
-)
-
 
 class ConfigError(ValueError):
     """The configuration is unusable, and the run should not start."""
@@ -353,9 +348,7 @@ def load_config(path: Path | None = None) -> Config:
             slug=str(forge_raw.get("slug", "")),
             provider="github",
             default_branch=str(forge_raw.get("default_branch", "main")),
-            escalation_label=str(
-                forge_raw.get("escalation_label", "touchstone:needs-review")
-            ),
+            escalation_label=str(forge_raw.get("escalation_label", "touchstone:needs-review")),
             required_workflows=tuple(forge_raw.get("required_workflows", ())),
             reap_after_hours=int(forge_raw.get("reap_after_hours", 6)),
         ),
@@ -379,10 +372,15 @@ def discover_config_path(start: Path | None = None) -> Path:
             return candidate
         if (directory / ".git").exists():
             break
-    for candidate in reversed(SEARCH):
+    xdg = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+    search = (
+        xdg / "touchstone" / "config.toml",
+        Path("/etc/touchstone/config.toml"),
+    )
+    for candidate in search:
         if candidate.exists():
             return candidate
-    searched = ", ".join(str(item) for item in SEARCH)
+    searched = ", ".join(str(item) for item in search)
     raise ConfigError(f"no configuration found from {current}; also looked in {searched}")
 
 

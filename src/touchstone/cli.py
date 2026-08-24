@@ -86,11 +86,11 @@ def _setup(args: argparse.Namespace) -> int:
 def _status(args: argparse.Namespace) -> int:
     import json
 
-    from touchstone.nodes.context import current
+    from touchstone.nodes.context import configure
     from touchstone.status import collect_status
 
     config = load(args.config)
-    report = collect_status(config, current())
+    report = collect_status(config, configure(config))
     if args.json:
         print(json.dumps(report.to_dict(), indent=2))
         return 0

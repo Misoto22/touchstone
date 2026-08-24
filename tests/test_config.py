@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from touchstone.config import ConfigError, load_config
+from touchstone.config import ConfigError, discover_config_path, load_config
 
 
 def _valid_config(*, project_path: str = ".", brief: str = "builtin:code-audit") -> str:
@@ -73,3 +73,14 @@ def test_unversioned_config_requires_migration(tmp_path: Path) -> None:
 
     with pytest.raises(ConfigError, match=r"touchstone config migrate"):
         load_config(path)
+
+
+def test_discovery_honours_xdg_config_home(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    start = tmp_path / "work"
+    start.mkdir()
+    xdg = tmp_path / "xdg"
+    expected = _write(xdg / "touchstone" / "config.toml", _valid_config())
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg))
+    monkeypatch.delenv("TOUCHSTONE_CONFIG", raising=False)
+
+    assert discover_config_path(start) == expected
