@@ -375,7 +375,7 @@ def test_a_rehearsal_is_stopped_only_by_the_kill_switch(tmp_path: Path) -> None:
     paused_at = source.index("PAUSED")
     dry_at = source.index("if dry_run")
     slot_at = source.index("open_pulls")
-    health_at = source.index("latest_run")
+    health_at = source.index("_health_gate(config)")
     assert paused_at < dry_at < slot_at, "the slot gate runs before the dry-run exit"
     assert dry_at < health_at, "the health gate runs before the dry-run exit"
 

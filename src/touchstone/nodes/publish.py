@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from touchstone.ledger import finding_id
-from touchstone.lifecycle import PublicationRequest, RepositoryLifecycle
+from touchstone.lifecycle import PublicationRequest, RepositoryLifecycle, ResumeRequest
 from touchstone.nodes.context import current
 
 
@@ -73,35 +73,43 @@ def park(state: dict[str, Any]) -> dict[str, Any]:
 
 def arm_merge(state: dict[str, Any]) -> dict[str, Any]:
     """A person said merge. Resumed here rather than re-audited from scratch."""
-    context = current()
-    number = state.get("pr")
-    if number is None:
-        return {"outcome": "held", "notes": ["asked to merge, but no pull request exists"]}
-    context.forge.arm_auto_merge(int(number))
-    context.ledger.record(
-        status="merging",
-        risk=state.get("risk"),
-        pr=number,
-        title=state.get("finding", {}).get("title", ""),
-        detail="a person approved the parked draft",
-    )
-    return {"outcome": "merging", "pr": number}
+    return _resume(state, "merge")
 
 
 def record_closed(state: dict[str, Any]) -> dict[str, Any]:
     """A person said no. Recorded so the finding is not raised again."""
+    return _resume(state, "close")
+
+
+def _resume(state: dict[str, Any], decision: str) -> dict[str, Any]:
     context = current()
     number = state.get("pr")
-    if number is not None:
-        context.forge.close(int(number), "Closed by the operator from the harness loop.")
-    context.ledger.record(
-        status="escalated",
-        risk=state.get("risk"),
-        pr=number,
-        title=state.get("finding", {}).get("title", ""),
-        detail="a person closed the parked draft",
+    identifier = state.get("finding_id")
+    reviewed_head = state.get("reviewed_head_sha")
+    if number is None or not identifier or not reviewed_head:
+        return {
+            "outcome": "held",
+            "pr": number,
+            "notes": ["the parked checkpoint is missing its pull request identity"],
+        }
+    lifecycle = RepositoryLifecycle(
+        context.forge,
+        context.ledger,
+        reap_after_hours=context.config.forge.reap_after_hours,
     )
-    return {"outcome": "escalated", "pr": number}
+    result = lifecycle.resume(
+        ResumeRequest(
+            finding_id=str(identifier),
+            pr=int(number),
+            decision="merge" if decision == "merge" else "close",
+            reviewed_head_sha=str(reviewed_head),
+        )
+    )
+    outcome = {"armed": "merging", "closed": "escalated"}.get(result.outcome, "held")
+    payload: dict[str, Any] = {"outcome": outcome, "pr": result.pr}
+    if result.detail and result.outcome == "held":
+        payload["notes"] = [result.detail]
+    return payload
 
 
 def rehearse(state: dict[str, Any], *, would: str) -> dict[str, Any]:

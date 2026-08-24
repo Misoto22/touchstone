@@ -84,13 +84,19 @@ def _gates(config: Config, loop_name: str, *, dry_run: bool) -> None:
     if held:
         raise Held(f"slot held by #{held[0]['number']}: {held[0].get('url', '')}")
 
-    # Only an explicit success passes. Treating "anything but failure" as
-    # healthy admits cancelled, timed-out and still-running checks, and those
-    # are not reassurance — they are the absence of an answer.
-    verify = context.forge.latest_run("verify-deploy.yml")
-    ci = context.forge.latest_run("ci.yml", branch=config.forge.default_branch)
-    if verify != "success" or ci != "success":
-        raise Held(f"production not known good: verify-deploy={verify} ci={ci}")
+    _health_gate(config)
+
+
+def _health_gate(config: Config) -> None:
+    """Require explicit success from every project-configured workflow."""
+    forge = current().forge
+    unhealthy: list[str] = []
+    for workflow in config.forge.required_workflows:
+        conclusion = forge.latest_run(workflow, branch=config.forge.default_branch)
+        if conclusion != "success":
+            unhealthy.append(f"{workflow}={conclusion}")
+    if unhealthy:
+        raise Held(f"production not known good: {' '.join(unhealthy)}")
 
 
 def _worktree(config: Config) -> tuple[str, str]:
@@ -192,8 +198,40 @@ def resume(config: Config, *, thread: str, answer: str) -> int:
     from langgraph.types import Command
 
     state_dir = Path(config.state_dir)
-    with SqliteSaver.from_conn_string(str(state_dir / "checkpoints.sqlite")) as saver:
-        app = build().compile(checkpointer=saver)
-        final = app.invoke(Command(resume=answer), {"configurable": {"thread_id": thread}})
-    print(f"{thread}: {final.get('outcome', 'unknown')}")
-    return 0
+    state_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        lock = _lock(state_dir)
+    except Held as held:
+        print(held)
+        return 0
+
+    try:
+        with SqliteSaver.from_conn_string(str(state_dir / "checkpoints.sqlite")) as saver:
+            app = build().compile(checkpointer=saver)
+            graph_config = {"configurable": {"thread_id": thread}}
+            checkpoint = app.get_state(graph_config)
+            values = checkpoint.values
+            if not checkpoint.next or not values:
+                raise Held(f"thread {thread!r} is not waiting for an operator decision")
+            loop_name = str(values.get("loop") or "")
+            if not loop_name:
+                raise Held(f"thread {thread!r} has no loop identity")
+
+            context = current()
+            RepositoryLifecycle(
+                context.forge,
+                context.ledger,
+                reap_after_hours=config.forge.reap_after_hours,
+            ).reconcile(config.loop(loop_name), dt.datetime.now(dt.UTC))
+            if answer == "merge":
+                _health_gate(config)
+            final = app.invoke(Command(resume=answer), graph_config)
+        print(f"{thread}: {final.get('outcome', 'unknown')}")
+        for note in final.get("notes", []):
+            print(f"  {note}")
+        return 0
+    except Held as held:
+        print(held)
+        return 0
+    finally:
+        shutil.rmtree(lock, ignore_errors=True)

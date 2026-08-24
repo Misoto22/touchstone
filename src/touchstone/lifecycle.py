@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime as dt
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
 from touchstone.config import LoopConfig
 from touchstone.execution import Executor
@@ -32,6 +32,8 @@ class LifecycleForge(Protocol):
     def arm_auto_merge(self, number: int) -> OperationResult: ...
 
     def to_draft(self, number: int) -> OperationResult: ...
+
+    def mark_ready(self, number: int) -> OperationResult: ...
 
     def add_label(self, number: int, label: str) -> OperationResult: ...
 
@@ -77,6 +79,21 @@ class PublicationResult:
     detail: str = ""
 
 
+@dataclass(frozen=True, slots=True)
+class ResumeRequest:
+    finding_id: str
+    pr: int
+    decision: Literal["merge", "close"]
+    reviewed_head_sha: str
+
+
+@dataclass(frozen=True, slots=True)
+class ResumeResult:
+    outcome: str
+    pr: int
+    detail: str = ""
+
+
 class RepositoryLifecycle:
     def __init__(
         self,
@@ -90,6 +107,55 @@ class RepositoryLifecycle:
         self._ledger = ledger
         self._reap_after_hours = reap_after_hours
         self._executor = executor
+
+    def resume(self, request: ResumeRequest) -> ResumeResult:
+        """Apply an operator decision only to the exact commit they reviewed."""
+        projection = self._ledger.projection(request.finding_id)
+        if projection is None:
+            return ResumeResult("held", request.pr, "the finding is absent from the ledger")
+        if projection.state != "parked" or projection.pr != request.pr:
+            return ResumeResult(
+                "held",
+                request.pr,
+                f"the finding is {projection.state}, not the parked pull request #{request.pr}",
+            )
+
+        pull = self._forge.pull(request.pr)
+        if pull is None:
+            return ResumeResult("held", request.pr, "could not verify the live pull request")
+        if pull.merged_at:
+            self._transition(projection, "merged", "GitHub reports the pull request merged")
+            return ResumeResult("merged", request.pr, "the pull request is already merged")
+        if pull.closed:
+            self._transition(projection, "closed", "GitHub reports the pull request closed")
+            return ResumeResult("closed", request.pr, "the pull request is already closed")
+        if not request.reviewed_head_sha or pull.head_sha != request.reviewed_head_sha:
+            return ResumeResult(
+                "held",
+                request.pr,
+                "the pull request head changed after it was parked; review the new commit first",
+            )
+
+        if request.decision == "close":
+            closed = self._forge.close(request.pr, "Closed by the operator through Touchstone.")
+            if not closed.ok:
+                return ResumeResult(
+                    "held", request.pr, closed.detail or "could not close the pull request"
+                )
+            self._transition(projection, "closed", "the operator closed the parked draft")
+            return ResumeResult("closed", request.pr)
+
+        if pull.draft:
+            ready = self._forge.mark_ready(request.pr)
+            if not ready.ok:
+                return ResumeResult(
+                    "held", request.pr, ready.detail or "could not mark the draft ready"
+                )
+        armed = self._forge.arm_auto_merge(request.pr)
+        if not armed.ok:
+            return ResumeResult("held", request.pr, armed.detail or "could not enable auto-merge")
+        self._transition(projection, "armed", "the operator approved the reviewed commit")
+        return ResumeResult("armed", request.pr)
 
     def publish(self, request: PublicationRequest) -> PublicationResult:
         """Publish once, and project only forge operations that succeeded."""
@@ -318,4 +384,6 @@ __all__ = [
     "PublicationResult",
     "ReconcileReport",
     "RepositoryLifecycle",
+    "ResumeRequest",
+    "ResumeResult",
 ]
