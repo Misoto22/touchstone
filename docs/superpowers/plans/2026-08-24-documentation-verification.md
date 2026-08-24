@@ -38,13 +38,30 @@
 
 ```python
 @pytest.mark.parametrize("fixture", ["next-app", "django-app", "mixed-monorepo"])
-def test_installed_wheel_initializes_detected_repository(wheel_env: WheelEnv, fixture_repo: Path, fixture: str) -> None:
-    result = wheel_env.run("touchstone", "init", "--non-interactive", "--engine", "codex", "--model", "test", "--workflow", "ci.yml", "--schedule", "hourly@00", cwd=fixture_repo / fixture)
+def test_installed_wheel_initializes_detected_repository(
+    wheel_env: WheelEnv, fixture_repo: Path, fixture: str
+) -> None:
+    result = wheel_env.run(
+        "touchstone",
+        "init",
+        "--non-interactive",
+        "--engine",
+        "codex",
+        "--model",
+        "test",
+        "--workflow",
+        "ci.yml",
+        "--schedule",
+        "hourly@00",
+        cwd=fixture_repo / fixture,
+    )
     assert result.returncode == 0
     assert (fixture_repo / fixture / ".touchstone/generated.toml").exists()
 
 
-def test_installed_wheel_renders_a_safe_actions_workflow(wheel_env: WheelEnv, next_repo: Path) -> None:
+def test_installed_wheel_renders_a_safe_actions_workflow(
+    wheel_env: WheelEnv, next_repo: Path
+) -> None:
     result = wheel_env.run("touchstone", "actions", "init", "--action-sha", "a" * 40, cwd=next_repo)
     assert result.returncode == 0
     assert "pull_request:" not in (next_repo / ".github/workflows/touchstone.yml").read_text()

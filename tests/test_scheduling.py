@@ -17,6 +17,9 @@ def _config(tmp_path: Path):  # type: ignore[no-untyped-def]
         source=SimpleNamespace(path=(tmp_path / "touchstone.toml").resolve()),
         repo_path=(tmp_path / "project").resolve(),
         state_dir=(tmp_path / "state").resolve(),
+        # The wake unit's start timeout is derived from this: systemd must not
+        # win a race against the timeout that produces a diagnosis.
+        engine=SimpleNamespace(timeout_seconds=2700),
         loops={
             "code": SimpleNamespace(name="code", schedule="hourly"),
             "weekly": SimpleNamespace(name="weekly", schedule="weekly@MON,09:30"),
@@ -202,3 +205,27 @@ def test_status_reports_a_leaked_wake_unit_without_demanding_one(
         "touchstone-wake.timer",
     ]
     assert leaked.missing == ()
+
+
+def test_the_wake_unit_outlives_every_engine_call_it_can_make(tmp_path: Path) -> None:
+    """A `oneshot` service inherits `DefaultTimeoutStartUSec`, 90 seconds on a
+    stock systemd, while one audit session runs for minutes. One wake runs every
+    due loop, so the default bounds several engine sessions at once — and a
+    systemd kill writes no ledger row, so the loop reads as finding nothing.
+    """
+    from touchstone.scheduling.systemd import _start_timeout
+
+    config = _config(tmp_path)
+    rendered = SystemdScheduler(LocalExecutor(), executable=Path("/bin/touchstone"))._render(
+        config, tmp_path
+    )
+    service = next(text for path, text in rendered.items() if path.suffix == ".service")
+
+    timeout = _start_timeout(config)
+    assert f"TimeoutStartSec={timeout}\n" in service
+    scheduled = [loop for loop in config.loops.values() if loop.schedule]
+    assert timeout >= len(scheduled) * 2 * config.engine.timeout_seconds, (
+        "systemd would kill the wake before its due loops reach their own "
+        "ceilings, and a systemd kill records nothing"
+    )
+    assert "After=network-online.target" in service

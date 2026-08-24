@@ -195,7 +195,9 @@ def test_due_slot_identity_includes_schedule_generation() -> None:
 def test_expired_claim_can_be_reacquired(store: DueStore) -> None:
     slot = slot_at(UTC_NOON)
     first = store.claim(slot, owner="one", now=UTC_NOON, ttl=timedelta(minutes=5))
-    second = store.claim(slot, owner="two", now=UTC_NOON + timedelta(minutes=6), ttl=timedelta(minutes=5))
+    second = store.claim(
+        slot, owner="two", now=UTC_NOON + timedelta(minutes=6), ttl=timedelta(minutes=5)
+    )
     assert first.acquired and second.acquired
 ```
 

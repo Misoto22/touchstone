@@ -267,7 +267,10 @@ def test_init_writes_project_and_generated_files(next_repo: Path) -> None:
     assert report.root.name == "touchstone.toml"
     assert report.generated == next_repo / ".touchstone/generated.toml"
     assert load(report.root).targets["next-repo"].profiles == (
-        "javascript", "typescript", "react", "nextjs"
+        "javascript",
+        "typescript",
+        "react",
+        "nextjs",
     )
 
 
