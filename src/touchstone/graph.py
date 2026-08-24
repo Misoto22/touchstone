@@ -77,6 +77,8 @@ def _after_classify(state: LoopState) -> str:
 
 
 def _after_review(state: LoopState) -> str:
+    if state.get("outcome") == "inconclusive":
+        return END
     return "merge" if state.get("verdict") == "approve" else "park"
 
 
@@ -147,7 +149,9 @@ def build():  # type: ignore[no-untyped-def]
     graph.set_entry_point("audit")
     graph.add_conditional_edges("audit", _after_audit, {"classify": "classify", END: END})
     graph.add_conditional_edges("classify", _after_classify, {"review": "review", "park": "park"})
-    graph.add_conditional_edges("review", _after_review, {"merge": "merge", "park": "park"})
+    graph.add_conditional_edges(
+        "review", _after_review, {"merge": "merge", "park": "park", END: END}
+    )
     graph.add_edge("merge", END)
     graph.add_edge("park", "await_person")
     graph.add_conditional_edges(

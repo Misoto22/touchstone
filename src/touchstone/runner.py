@@ -13,11 +13,14 @@ from __future__ import annotations
 import datetime as dt
 import os
 import shutil
+import time
+import uuid
 from pathlib import Path
 
 from langgraph.checkpoint.sqlite import SqliteSaver
 
 from touchstone.config import Config
+from touchstone.events import EventLog, run_event
 from touchstone.graph import build
 from touchstone.lifecycle import RepositoryLifecycle
 from touchstone.nodes.context import current
@@ -136,11 +139,32 @@ def execute(config: Config, *, loop: str, dry_run: bool = False) -> int:
     state_dir = Path(config.state_dir)
     state_dir.mkdir(parents=True, exist_ok=True)
     context = current()
+    event_log = EventLog(state_dir / "events.jsonl")
+    run_id = uuid.uuid4().hex
+    started = time.monotonic()
+    event_log.append(run_event(config, run_id=run_id, kind="started", loop=loop))
+    final_outcome = "held"
+    final_detail = ""
+    final_cost: float | None = None
+    final_risk = ""
+    final_verdict = ""
+    final_pr: int | None = None
 
     try:
         lock = _lock(state_dir)
     except Held as held:
         print(held)
+        event_log.append(
+            run_event(
+                config,
+                run_id=run_id,
+                kind="finished",
+                loop=loop,
+                outcome="held",
+                duration_seconds=time.monotonic() - started,
+                detail=str(held),
+            )
+        )
         return 0
 
     path = branch = ""
@@ -171,6 +195,13 @@ def execute(config: Config, *, loop: str, dry_run: bool = False) -> int:
         # what actually reached the forge. Recording again here produced two
         # rows for one run, disagreeing with each other.
         outcome = final.get("outcome") or ("escalated" if paused else "clean")
+        final_outcome = outcome
+        final_pr = int(final["pr"]) if final.get("pr") is not None else None
+        final_risk = str(final.get("risk") or "")
+        final_verdict = str(final.get("verdict") or "")
+        reported_costs = [value for value in final.get("cost", []) if value is not None]
+        final_cost = sum(reported_costs) if reported_costs else None
+        final_detail = "; ".join(str(note) for note in final.get("notes", []))
         published = outcome in {"merging", "escalated"}
         print(f"{loop}: {outcome}" + (f" #{final['pr']}" if final.get("pr") else ""))
         for note in final.get("notes", []):
@@ -180,12 +211,28 @@ def execute(config: Config, *, loop: str, dry_run: bool = False) -> int:
         return 0
     except Held as held:
         print(held)
+        final_detail = str(held)
         context.ledger.record(status="held", title="", detail=str(held))
         return 0
     finally:
         if path:
             _teardown(config, path, branch, published=published)
         shutil.rmtree(lock, ignore_errors=True)
+        event_log.append(
+            run_event(
+                config,
+                run_id=run_id,
+                kind="finished",
+                loop=loop,
+                outcome=final_outcome,
+                duration_seconds=time.monotonic() - started,
+                cost=final_cost,
+                risk_to=final_risk,
+                verdict=final_verdict,
+                pr=final_pr,
+                detail=final_detail,
+            )
+        )
 
 
 def resume(config: Config, *, thread: str, answer: str) -> int:

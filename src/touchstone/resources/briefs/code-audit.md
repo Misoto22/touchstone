@@ -127,6 +127,7 @@ Found and fixed one:
 `commit_subject` is an English imperative under 72 characters, in this
 repository's existing style — read `git log --oneline -20` and match it.
 
-Leaving that file unwritten is read as a clean pass, which is the right answer
-more often than not. Finding nothing is a successful run. Do not invent a defect
-to have something to report.
+Always write the file, including for a clean pass. A missing or malformed file
+is inconclusive because the runner cannot distinguish "nothing found" from an
+interrupted session. Finding nothing is a successful run. Do not invent a
+defect to have something to report.

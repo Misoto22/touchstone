@@ -83,6 +83,27 @@ def _setup(args: argparse.Namespace) -> int:
     return 0
 
 
+def _status(args: argparse.Namespace) -> int:
+    import json
+
+    from touchstone.nodes.context import current
+    from touchstone.status import collect_status
+
+    config = load(args.config)
+    report = collect_status(config, current())
+    if args.json:
+        print(json.dumps(report.to_dict(), indent=2))
+        return 0
+    if not report.findings:
+        print("no recorded findings")
+    for finding in report.findings:
+        pull = f" #{finding['pr']}" if finding.get("pr") is not None else ""
+        print(f"{finding['loop']}: {finding['state']}{pull} — {finding['title']}")
+    for run in report.last_runs:
+        print(f"last {run.get('loop', 'unknown')}: {run.get('outcome', 'unknown')}")
+    return 0
+
+
 def _migrate_config(args: argparse.Namespace) -> int:
     from touchstone.migrate import migrate_config
 
@@ -148,6 +169,10 @@ def main(argv: list[str] | None = None) -> int:
     setup.add_argument("--dry-run", action="store_true")
     setup.add_argument("--json", action="store_true")
     setup.set_defaults(handler=_setup)
+
+    status = sub.add_parser("status", help="reconcile and report repository lifecycle state")
+    status.add_argument("--json", action="store_true")
+    status.set_defaults(handler=_status)
 
     config = sub.add_parser("config", help="inspect or migrate configuration")
     config_sub = config.add_subparsers(dest="config_command", required=True)
