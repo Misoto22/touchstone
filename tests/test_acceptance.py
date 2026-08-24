@@ -411,15 +411,11 @@ def test_the_runner_asks_the_graph_whether_it_paused() -> None:
     source = inspect.getsource(runner.execute)
     assert "get_state(thread).next" in source
 
-    # The nodes own the rows for anything that reached them; recording again
-    # after the graph returned made two rows for one run that disagreed with
-    # each other. A gate hold is the exception and keeps its row here, because
-    # a run stopped at a gate never reaches a node at all, so nothing else
-    # would ever write it down.
+    # Change lifecycle rows belong only to actual candidates. Gate holds and
+    # rehearsals are Run Outcomes in events.jsonl, not fake candidate states.
     records = [line for line in source.splitlines() if "ledger.record" in line]
-    assert len(records) == 1, f"expected only the gate-hold row, found {len(records)}"
-    held_at = source.index("except Held")
-    assert source.index("ledger.record") > held_at, "the surviving row is not the gate-hold one"
+    assert records == []
+    assert "RunOutcome.BLOCKED" in source
 
 
 def test_the_checks_see_everything_the_commit_will_carry() -> None:
@@ -472,7 +468,7 @@ def test_answering_a_parked_thread_does_not_open_a_second_pull_request(
 
     from touchstone import graph as G
 
-    for answer, expected in (("merge", "merging"), ("close", "escalated")):
+    for answer, expected in (("approve", "awaiting_checks"), ("close", "closed")):
         calls: list[str] = []
         monkeypatch.setattr(
             G.publish, "park", lambda s, c=calls: (c.append("park"), {"pr": 999})[1]
@@ -480,12 +476,12 @@ def test_answering_a_parked_thread_does_not_open_a_second_pull_request(
         monkeypatch.setattr(
             G.publish,
             "arm_merge",
-            lambda s, c=calls: (c.append("merge"), {"outcome": "merging"})[1],
+            lambda s, c=calls: (c.append("approve"), {"outcome": "awaiting_checks"})[1],
         )
         monkeypatch.setattr(
             G.publish,
             "record_closed",
-            lambda s, c=calls: (c.append("close"), {"outcome": "escalated"})[1],
+            lambda s, c=calls: (c.append("close"), {"outcome": "closed"})[1],
         )
         monkeypatch.setattr(
             G.audit,
@@ -531,9 +527,9 @@ def test_every_ending_leaves_a_row_in_the_ledger() -> None:
         )
 
     # Publishing routes through the lifecycle service, which appends one event
-    # for each successful forge transition. Rehearsals keep their own row, and
-    # the runner independently records every run's terminal outcome.
+    # for each candidate transition. Rehearsals are Run Outcomes only, while
+    # the runner records every terminal outcome.
     assert "RepositoryLifecycle" in inspect.getsource(publish._publish)
     assert "RepositoryLifecycle" in inspect.getsource(publish._resume)
-    assert "ledger.record" in inspect.getsource(publish.rehearse)
+    assert "ledger.record" not in inspect.getsource(publish.rehearse)
     assert 'kind="finished"' in inspect.getsource(runner.execute)

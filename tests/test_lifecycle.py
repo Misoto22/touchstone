@@ -107,7 +107,7 @@ def test_reaper_never_closes_parked_drafts(tmp_path: Path) -> None:
 
     assert report.reaped == ()
     assert forge.closed == []
-    assert ledger.projection(identifier).state == "parked"  # type: ignore[union-attr]
+    assert ledger.projection(identifier).state == "awaiting_human"  # type: ignore[union-attr]
 
 
 def test_github_lookup_failure_is_inconclusive_and_mutates_nothing(tmp_path: Path) -> None:
@@ -117,4 +117,4 @@ def test_github_lookup_failure_is_inconclusive_and_mutates_nothing(tmp_path: Pat
     report = RepositoryLifecycle(MemoryForge(), ledger, reap_after_hours=6).reconcile(_loop(), NOW)
 
     assert report.inconclusive == (12,)
-    assert ledger.projection(identifier).state == "armed"  # type: ignore[union-attr]
+    assert ledger.projection(identifier).state == "awaiting_checks"  # type: ignore[union-attr]

@@ -23,8 +23,8 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from touchstone.config import Config, LoopConfig
 from touchstone.events import EventLog, run_event
 from touchstone.graph import build
-from touchstone.lifecycle import RepositoryLifecycle
 from touchstone.nodes.context import configure, current
+from touchstone.outcomes import RunOutcome, RunResult, from_legacy_outcome
 
 
 class Held(Exception):
@@ -114,8 +114,6 @@ def _publication_gate(config: Config, loop: LoopConfig) -> None:
     repository = forge.repository_info()
     if repository is None:
         raise Held("GitHub repository is not accessible; run touchstone doctor")
-    if not repository.get("autoMergeAllowed"):
-        raise Held("GitHub auto-merge is disabled; enable it before unattended runs")
     expected = {loop.label, config.forge.escalation_label}
     missing = sorted(expected - forge.labels())
     if missing:
@@ -180,12 +178,12 @@ def _teardown(config: Config, path: str, branch: str, *, published: bool) -> tup
 def execute(config: Config, *, loop: str, dry_run: bool = False) -> int:
     state_dir = Path(config.state_dir)
     state_dir.mkdir(parents=True, exist_ok=True)
-    context = configure(config)
+    configure(config)
     event_log = EventLog(state_dir / "events.jsonl")
     run_id = uuid.uuid4().hex
     started = time.monotonic()
     event_log.append(run_event(config, run_id=run_id, kind="started", loop=loop))
-    final_outcome = "held"
+    final_outcome = RunOutcome.FAILED.value
     final_detail = ""
     final_cost: float | None = None
     final_risk = ""
@@ -202,22 +200,16 @@ def execute(config: Config, *, loop: str, dry_run: bool = False) -> int:
                 run_id=run_id,
                 kind="finished",
                 loop=loop,
-                outcome="held",
+                outcome=RunOutcome.BLOCKED.value,
                 duration_seconds=time.monotonic() - started,
                 detail=str(held),
             )
         )
-        return 0
+        return 3
 
     path = branch = ""
     published = False
     try:
-        if not dry_run:
-            RepositoryLifecycle(
-                context.forge,
-                context.ledger,
-                reap_after_hours=config.forge.reap_after_hours,
-            ).reconcile(config.loop(loop), dt.datetime.now(dt.UTC))
         _gates(config, loop, dry_run=dry_run)
         path, branch = _worktree(config)
         thread_id = f"{loop}-{branch}"
@@ -237,29 +229,44 @@ def execute(config: Config, *, loop: str, dry_run: bool = False) -> int:
         # The nodes keep their own ledger rows: they are the only ones that know
         # what actually reached the forge. Recording again here produced two
         # rows for one run, disagreeing with each other.
-        outcome = final.get("outcome") or ("escalated" if paused else "clean")
-        final_outcome = outcome
+        outcome = str(final.get("outcome") or ("awaiting_human" if paused else "clean"))
         final_pr = int(final["pr"]) if final.get("pr") is not None else None
         final_risk = str(final.get("risk") or "")
         final_verdict = str(final.get("verdict") or "")
         reported_costs = [value for value in final.get("cost", []) if value is not None]
         final_cost = sum(reported_costs) if reported_costs else None
         final_detail = "; ".join(str(note) for note in final.get("notes", []))
-        published = outcome in {"merging", "escalated"}
-        print(f"{loop}: {outcome}" + (f" #{final['pr']}" if final.get("pr") else ""))
+        result = from_legacy_outcome(
+            outcome,
+            dry_run=dry_run,
+            paused=paused,
+            pr=final_pr,
+            detail=final_detail,
+        )
+        final_outcome = result.outcome.value
+        published = result.lifecycle is not None
+        lifecycle = f" / {result.lifecycle.value}" if result.lifecycle is not None else ""
+        print(
+            f"{loop}: {result.outcome.value}{lifecycle}"
+            + (f" #{final['pr']}" if final.get("pr") else "")
+        )
         for note in final.get("notes", []):
             print(f"  {note}")
         if paused:
             parked_head = str(final.get("reviewed_head_sha") or "")
             if parked_head:
                 print(f"  parked head: {parked_head}")
-            print(f"  parked; resume with: touchstone resume {thread_id} merge|close")
-        return 0
+            print(f"  parked; resume with: touchstone resume {thread_id} approve|close|reanalyze")
+        return result.exit_code
     except Held as held:
         print(held)
         final_detail = str(held)
-        context.ledger.record(status="held", title="", detail=str(held))
-        return 0
+        final_outcome = RunOutcome.BLOCKED.value
+        return RunResult(
+            RunOutcome.BLOCKED,
+            reason_code="safety-gate",
+            detail=str(held),
+        ).exit_code
     finally:
         if path:
             cleanup_errors = _teardown(config, path, branch, published=published)
@@ -315,13 +322,7 @@ def resume(config: Config, *, thread: str, answer: str) -> int:
             if not loop_name:
                 raise Held(f"thread {thread!r} has no loop identity")
 
-            context = current()
-            RepositoryLifecycle(
-                context.forge,
-                context.ledger,
-                reap_after_hours=config.forge.reap_after_hours,
-            ).reconcile(config.loop(loop_name), dt.datetime.now(dt.UTC))
-            if answer == "merge":
+            if answer == "approve":
                 _health_gate(config)
                 _publication_gate(config, config.loop(loop_name))
             final = app.invoke(Command(resume=answer), graph_config)
@@ -331,6 +332,6 @@ def resume(config: Config, *, thread: str, answer: str) -> int:
         return 0
     except Held as held:
         print(held)
-        return 0
+        return 3
     finally:
         shutil.rmtree(lock, ignore_errors=True)

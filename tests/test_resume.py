@@ -65,34 +65,34 @@ def test_resume_refuses_a_pull_whose_head_changed(tmp_path: Path) -> None:
     forge = MemoryForge(_pull(head="changed"))
     lifecycle, ledger, identifier = _lifecycle(tmp_path, forge)
 
-    result = lifecycle.resume(ResumeRequest(identifier, 12, "merge", "abc123"))
+    result = lifecycle.resume(ResumeRequest(identifier, 12, "approve", "abc123"))
 
     assert result.outcome == "held"
     assert "changed" in result.detail
     assert forge.transitions == []
-    assert ledger.projection(identifier).state == "parked"  # type: ignore[union-attr]
+    assert ledger.projection(identifier).state == "awaiting_human"  # type: ignore[union-attr]
 
 
-def test_resume_marks_the_same_reviewed_draft_ready_then_arms_it(tmp_path: Path) -> None:
+def test_resume_marks_the_same_reviewed_draft_ready_without_auto_merge(tmp_path: Path) -> None:
     forge = MemoryForge(_pull())
     lifecycle, ledger, identifier = _lifecycle(tmp_path, forge)
 
-    result = lifecycle.resume(ResumeRequest(identifier, 12, "merge", "abc123"))
+    result = lifecycle.resume(ResumeRequest(identifier, 12, "approve", "abc123"))
 
-    assert result.outcome == "armed"
-    assert forge.transitions == ["ready:12", "auto-merge:12"]
-    assert ledger.projection(identifier).state == "armed"  # type: ignore[union-attr]
+    assert result.outcome == "awaiting_checks"
+    assert forge.transitions == ["ready:12"]
+    assert ledger.projection(identifier).state == "awaiting_checks"  # type: ignore[union-attr]
 
 
-def test_resume_does_not_arm_when_auto_merge_fails(tmp_path: Path) -> None:
+def test_resume_never_calls_auto_merge_even_when_repository_disables_it(tmp_path: Path) -> None:
     forge = MemoryForge(_pull(), arm_ok=False)
     lifecycle, ledger, identifier = _lifecycle(tmp_path, forge)
 
-    result = lifecycle.resume(ResumeRequest(identifier, 12, "merge", "abc123"))
+    result = lifecycle.resume(ResumeRequest(identifier, 12, "approve", "abc123"))
 
-    assert result.outcome == "held"
-    assert "auto-merge disabled" in result.detail
-    assert ledger.projection(identifier).state == "parked"  # type: ignore[union-attr]
+    assert result.outcome == "awaiting_checks"
+    assert forge.transitions == ["ready:12"]
+    assert ledger.projection(identifier).state == "awaiting_checks"  # type: ignore[union-attr]
 
 
 def test_resume_close_records_the_completed_operator_decision(tmp_path: Path) -> None:
@@ -140,7 +140,7 @@ def test_health_gate_refuses_unattended_publish_without_a_workflow(monkeypatch) 
         runner._health_gate(config)  # type: ignore[arg-type]
 
 
-def test_publication_gate_requires_auto_merge_and_setup_labels(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_publication_gate_requires_setup_labels_but_not_auto_merge(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     import pytest
 
     from touchstone import runner
@@ -156,7 +156,7 @@ def test_publication_gate_requires_auto_merge_and_setup_labels(monkeypatch) -> N
     loop = SimpleNamespace(label="touchstone:audit")
     monkeypatch.setattr(runner, "current", lambda: SimpleNamespace(forge=ForgeWithoutAutoMerge()))
 
-    with pytest.raises(runner.Held, match="auto-merge"):
+    with pytest.raises(runner.Held, match="labels"):
         runner._publication_gate(config, loop)  # type: ignore[arg-type]
 
 

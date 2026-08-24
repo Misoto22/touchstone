@@ -5,12 +5,13 @@ from __future__ import annotations
 import datetime as dt
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Protocol
 
 from touchstone.config import LoopConfig
 from touchstone.execution import Executor
 from touchstone.forge import ForgeUnavailable, OperationResult, PullState
 from touchstone.ledger import FindingProjection, Ledger, LifecycleEvent
+from touchstone.outcomes import ChangeState, ResumeDecision
 
 
 class LifecycleForge(Protocol):
@@ -77,14 +78,17 @@ class PublicationResult:
     pr: int | None
     head_sha: str | None
     detail: str = ""
+    partial: bool = False
+    branch: str = ""
 
 
 @dataclass(frozen=True, slots=True)
 class ResumeRequest:
     finding_id: str
     pr: int
-    decision: Literal["merge", "close"]
+    decision: ResumeDecision | str
     reviewed_head_sha: str
+    lineage: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,7 +117,7 @@ class RepositoryLifecycle:
         projection = self._ledger.projection(request.finding_id)
         if projection is None:
             return ResumeResult("held", request.pr, "the finding is absent from the ledger")
-        if projection.state != "parked" or projection.pr != request.pr:
+        if projection.state != ChangeState.AWAITING_HUMAN or projection.pr != request.pr:
             return ResumeResult(
                 "held",
                 request.pr,
@@ -136,14 +140,27 @@ class RepositoryLifecycle:
                 "the pull request head changed after it was parked; review the new commit first",
             )
 
-        if request.decision == "close":
-            closed = self._forge.close(request.pr, "Closed by the operator through Touchstone.")
+        try:
+            decision = ResumeDecision(request.decision)
+        except ValueError:
+            return ResumeResult("failed", request.pr, "unsupported resume decision")
+
+        if decision in {ResumeDecision.CLOSE, ResumeDecision.REANALYZE}:
+            comment = (
+                "Closed for reanalysis from current default-branch state."
+                if decision == ResumeDecision.REANALYZE
+                else "Closed by the operator through Touchstone."
+            )
+            closed = self._forge.close(request.pr, comment)
             if not closed.ok:
                 return ResumeResult(
                     "held", request.pr, closed.detail or "could not close the pull request"
                 )
             self._transition(projection, "closed", "the operator closed the parked draft")
-            return ResumeResult("closed", request.pr)
+            return ResumeResult(
+                "reanalyze" if decision == ResumeDecision.REANALYZE else "closed",
+                request.pr,
+            )
 
         if pull.draft:
             ready = self._forge.mark_ready(request.pr)
@@ -151,11 +168,12 @@ class RepositoryLifecycle:
                 return ResumeResult(
                     "held", request.pr, ready.detail or "could not mark the draft ready"
                 )
-        armed = self._forge.arm_auto_merge(request.pr)
-        if not armed.ok:
-            return ResumeResult("held", request.pr, armed.detail or "could not enable auto-merge")
-        self._transition(projection, "armed", "the operator approved the reviewed commit")
-        return ResumeResult("armed", request.pr)
+        self._transition(
+            projection,
+            "awaiting_checks",
+            "the operator approved the reviewed commit; auto-merge remains disabled",
+        )
+        return ResumeResult("awaiting_checks", request.pr)
 
     def publish(self, request: PublicationRequest) -> PublicationResult:
         """Publish once, and project only forge operations that succeeded."""
@@ -164,22 +182,45 @@ class RepositoryLifecycle:
 
         error = self._commit_and_push(request)
         if error:
-            self._record(request, "proposed", detail=error)
-            return PublicationResult("held", request.finding_id, None, None, error)
+            self._record(request, "failed", branch=request.branch, partial=True, detail=error)
+            return PublicationResult(
+                "failed",
+                request.finding_id,
+                None,
+                None,
+                error,
+                partial=True,
+                branch=request.branch,
+            )
 
         head = self._git(request.worktree, ["rev-parse", "HEAD"])
         if not head:
             detail = "could not resolve the published commit"
             self._record(request, "proposed", detail=detail)
-            return PublicationResult("held", request.finding_id, None, None, detail)
+            return PublicationResult("failed", request.finding_id, None, None, detail)
 
         park = request.risk != "low" or request.verdict != "approve"
         try:
             pull = self._forge.pull_for_branch(request.branch)
         except ForgeUnavailable:
             detail = "could not verify existing pull requests for the published branch"
-            self._record(request, "proposed", head_sha=head, detail=detail)
-            return PublicationResult("held", request.finding_id, None, head, detail)
+            self._record(
+                request,
+                "failed",
+                head_sha=head,
+                branch=request.branch,
+                partial=True,
+                detail=detail,
+            )
+            return PublicationResult(
+                "failed",
+                request.finding_id,
+                None,
+                head,
+                detail,
+                partial=True,
+                branch=request.branch,
+            )
         number = (
             pull.number
             if pull is not None
@@ -194,33 +235,75 @@ class RepositoryLifecycle:
         )
         if number is None:
             detail = "could not open or find the pull request"
-            self._record(request, "proposed", head_sha=head, detail=detail)
-            return PublicationResult("held", request.finding_id, None, head, detail)
+            self._record(
+                request,
+                "failed",
+                head_sha=head,
+                branch=request.branch,
+                partial=True,
+                detail=detail,
+            )
+            return PublicationResult(
+                "failed",
+                request.finding_id,
+                None,
+                head,
+                detail,
+                partial=True,
+                branch=request.branch,
+            )
 
         if park:
             if pull is not None and not pull.draft:
                 drafted = self._forge.to_draft(number)
                 if not drafted.ok:
                     detail = drafted.detail or "could not convert the pull request to a draft"
-                    self._record(request, "proposed", pr=number, head_sha=head, detail=detail)
-                    return PublicationResult("held", request.finding_id, number, head, detail)
+                    self._record(
+                        request,
+                        "failed",
+                        pr=number,
+                        head_sha=head,
+                        branch=request.branch,
+                        partial=True,
+                        detail=detail,
+                    )
+                    return PublicationResult(
+                        "failed",
+                        request.finding_id,
+                        number,
+                        head,
+                        detail,
+                        partial=True,
+                        branch=request.branch,
+                    )
             labelled = self._forge.add_label(number, request.escalation_label)
             if not labelled.ok:
                 detail = labelled.detail or "could not add the escalation label"
-                self._record(request, "proposed", pr=number, head_sha=head, detail=detail)
-                return PublicationResult("held", request.finding_id, number, head, detail)
+                self._record(
+                    request,
+                    "failed",
+                    pr=number,
+                    head_sha=head,
+                    branch=request.branch,
+                    partial=True,
+                    detail=detail,
+                )
+                return PublicationResult(
+                    "failed",
+                    request.finding_id,
+                    number,
+                    head,
+                    detail,
+                    partial=True,
+                    branch=request.branch,
+                )
             detail = f"{request.risk} / {request.verdict}: {request.review_reason}"
-            self._record(request, "parked", pr=number, head_sha=head, detail=detail)
-            return PublicationResult("parked", request.finding_id, number, head, detail)
+            self._record(request, "awaiting_human", pr=number, head_sha=head, detail=detail)
+            return PublicationResult("awaiting_human", request.finding_id, number, head, detail)
 
-        armed = self._forge.arm_auto_merge(number)
-        if not armed.ok:
-            detail = armed.detail or "could not enable auto-merge"
-            self._record(request, "proposed", pr=number, head_sha=head, detail=detail)
-            return PublicationResult("held", request.finding_id, number, head, detail)
-        detail = "independent review approved; auto-merge armed"
-        self._record(request, "armed", pr=number, head_sha=head, detail=detail)
-        return PublicationResult("armed", request.finding_id, number, head, detail)
+        detail = "independent review approved; pull request awaits checks and human merge"
+        self._record(request, "awaiting_checks", pr=number, head_sha=head, detail=detail)
+        return PublicationResult("awaiting_checks", request.finding_id, number, head, detail)
 
     def reconcile(self, loop: LoopConfig, now: dt.datetime) -> ReconcileReport:
         merged: list[int] = []
@@ -232,7 +315,14 @@ class RepositoryLifecycle:
         for projection in self._ledger.projections().values():
             if projection.loop not in {loop.name, "legacy"}:
                 continue
-            if projection.state not in {"armed", "parked"} or projection.pr is None:
+            if (
+                projection.state
+                not in {
+                    ChangeState.AWAITING_CHECKS,
+                    ChangeState.AWAITING_HUMAN,
+                }
+                or projection.pr is None
+            ):
                 continue
             pull = self._forge.pull(projection.pr)
             if pull is None:
@@ -247,7 +337,7 @@ class RepositoryLifecycle:
                 closed.append(projection.pr)
                 continue
             if (
-                projection.state == "armed"
+                projection.state == ChangeState.AWAITING_CHECKS
                 and not pull.draft
                 and pull.check_state == "failure"
                 and _age_hours(pull.created_at, now) >= self._reap_after_hours
@@ -335,6 +425,8 @@ class RepositoryLifecycle:
         pr: int | None = None,
         head_sha: str | None = None,
         detail: str = "",
+        branch: str = "",
+        partial: bool = False,
     ) -> None:
         self._ledger.append(
             LifecycleEvent(
@@ -346,6 +438,8 @@ class RepositoryLifecycle:
                 pr=pr,
                 head_sha=head_sha,
                 detail=detail,
+                branch=branch,
+                partial=partial,
             )
         )
 

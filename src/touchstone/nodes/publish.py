@@ -58,7 +58,7 @@ def _publish(state: dict[str, Any]) -> dict[str, Any]:
             if not result.ok
         ]
         return {
-            "outcome": "held",
+            "outcome": "blocked",
             "pr": None,
             "notes": ["Validation blocked publication: " + "; ".join(details)],
         }
@@ -69,14 +69,14 @@ def _publish(state: dict[str, Any]) -> dict[str, Any]:
         executor=context.executor,
     )
     result = lifecycle.publish(_request(state, context))
-    outcome = {"armed": "merging", "parked": "escalated"}.get(result.outcome, "held")
+    outcome = result.outcome
     payload: dict[str, Any] = {
         "outcome": outcome,
         "pr": result.pr,
         "finding_id": result.finding_id,
         "reviewed_head_sha": result.head_sha,
     }
-    if result.outcome == "held" and result.detail:
+    if result.outcome == "failed" and result.detail:
         payload["notes"] = [result.detail]
     return payload
 
@@ -92,13 +92,17 @@ def park(state: dict[str, Any]) -> dict[str, Any]:
 
 
 def arm_merge(state: dict[str, Any]) -> dict[str, Any]:
-    """A person said merge. Resumed here rather than re-audited from scratch."""
-    return _resume(state, "merge")
+    """A person approved. Resumed here rather than re-audited from scratch."""
+    return _resume(state, "approve")
 
 
 def record_closed(state: dict[str, Any]) -> dict[str, Any]:
     """A person said no. Recorded so the finding is not raised again."""
     return _resume(state, "close")
+
+
+def record_reanalysis(state: dict[str, Any]) -> dict[str, Any]:
+    return _resume(state, "reanalyze")
 
 
 def _resume(state: dict[str, Any], decision: str) -> dict[str, Any]:
@@ -108,7 +112,7 @@ def _resume(state: dict[str, Any], decision: str) -> dict[str, Any]:
     reviewed_head = state.get("reviewed_head_sha")
     if number is None or not identifier or not reviewed_head:
         return {
-            "outcome": "held",
+            "outcome": "blocked",
             "pr": number,
             "notes": ["the parked checkpoint is missing its pull request identity"],
         }
@@ -121,13 +125,13 @@ def _resume(state: dict[str, Any], decision: str) -> dict[str, Any]:
         ResumeRequest(
             finding_id=str(identifier),
             pr=int(number),
-            decision="merge" if decision == "merge" else "close",
+            decision=decision,
             reviewed_head_sha=str(reviewed_head),
         )
     )
-    outcome = {"armed": "merging", "closed": "escalated"}.get(result.outcome, "held")
+    outcome = result.outcome
     payload: dict[str, Any] = {"outcome": outcome, "pr": result.pr}
-    if result.detail and result.outcome == "held":
+    if result.detail and result.outcome in {"held", "failed"}:
         payload["notes"] = [result.detail]
     return payload
 
@@ -150,18 +154,6 @@ def rehearse(state: dict[str, Any], *, would: str) -> dict[str, Any]:
     stat = context.executor.run(
         ["git", "-C", worktree, "diff", "--shortstat", base], timeout=60
     ).stdout.strip()
-
-    # Recorded, so the ledger is a complete account of what the loop did rather
-    # than only of what it published. `rehearsed` is deliberately not in the
-    # handled allowlist: a rehearsal disposes of nothing, and feeding its title
-    # back as already-seen would hide a defect nobody has fixed.
-    context.ledger.record(
-        status="rehearsed",
-        risk=state.get("risk"),
-        pr=None,
-        title=state.get("finding", {}).get("title", ""),
-        detail=f"would {would}; review {state.get('verdict', 'skipped')}",
-    )
 
     return {
         "outcome": "rehearsed",

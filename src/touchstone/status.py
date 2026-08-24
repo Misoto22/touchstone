@@ -1,4 +1,4 @@
-"""Reconciled operator status as one human/JSON projection."""
+"""Read-only operator status plus an explicit reconciliation operation."""
 
 from __future__ import annotations
 
@@ -34,17 +34,6 @@ def collect_status(
     now: dt.datetime | None = None,
     scheduler: Any | None = None,
 ) -> StatusReport:
-    observed_at = now or dt.datetime.now(dt.UTC)
-    reconciliation: dict[str, dict[str, list[int]]] = {}
-    lifecycle = RepositoryLifecycle(
-        context.forge,
-        context.ledger,
-        reap_after_hours=config.forge.reap_after_hours,
-    )
-    for name, loop in sorted(config.loops.items()):
-        report = lifecycle.reconcile(loop, observed_at)
-        reconciliation[name] = {key: list(value) for key, value in asdict(report).items()}
-
     findings = tuple(
         asdict(projection)
         for projection in sorted(
@@ -68,9 +57,28 @@ def collect_status(
     return StatusReport(
         findings=findings,
         last_runs=tuple(last_by_loop[name] for name in sorted(last_by_loop)),
-        reconciliation=reconciliation,
+        reconciliation={},
         scheduler=scheduler_payload,
     )
 
 
-__all__ = ["StatusReport", "collect_status"]
+def reconcile_status(
+    config: Any,
+    context: Any,
+    *,
+    now: dt.datetime | None = None,
+) -> dict[str, dict[str, list[int]]]:
+    observed_at = now or dt.datetime.now(dt.UTC)
+    result: dict[str, dict[str, list[int]]] = {}
+    lifecycle = RepositoryLifecycle(
+        context.forge,
+        context.ledger,
+        reap_after_hours=config.forge.reap_after_hours,
+    )
+    for name, loop in sorted(config.loops.items()):
+        report = lifecycle.reconcile(loop, observed_at)
+        result[name] = {key: list(value) for key, value in asdict(report).items()}
+    return result
+
+
+__all__ = ["StatusReport", "collect_status", "reconcile_status"]

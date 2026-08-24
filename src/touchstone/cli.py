@@ -217,6 +217,26 @@ def _status(args: argparse.Namespace) -> int:
     return 0
 
 
+def _reconcile(args: argparse.Namespace) -> int:
+    import json
+
+    from touchstone.nodes.context import configure
+    from touchstone.status import reconcile_status
+
+    config = load(args.config)
+    report = reconcile_status(config, configure(config))
+    if args.json:
+        print(json.dumps(report, indent=2))
+    else:
+        for loop, fields in report.items():
+            summary = ", ".join(
+                f"{name}={len(values)}" for name, values in fields.items() if values
+            )
+            print(f"{loop}: {summary or 'no lifecycle changes'}")
+    failed = any(fields["failed"] or fields["inconclusive"] for fields in report.values())
+    return 1 if failed else 0
+
+
 def _scheduler(config):  # type: ignore[no-untyped-def]
     from touchstone.execution.local import LocalExecutor
     from touchstone.scheduling import current_scheduler
@@ -385,9 +405,13 @@ def main(argv: list[str] | None = None) -> int:
     setup.add_argument("--json", action="store_true")
     setup.set_defaults(handler=_setup)
 
-    status = sub.add_parser("status", help="reconcile and report repository lifecycle state")
+    status = sub.add_parser("status", help="read repository lifecycle state without mutation")
     status.add_argument("--json", action="store_true")
     status.set_defaults(handler=_status)
+
+    reconcile = sub.add_parser("reconcile", help="compare lifecycle state with GitHub")
+    reconcile.add_argument("--json", action="store_true")
+    reconcile.set_defaults(handler=_reconcile)
 
     install_scheduler = sub.add_parser(
         "install-scheduler", help="install native per-user loop timers"
@@ -428,7 +452,7 @@ def main(argv: list[str] | None = None) -> int:
 
     resume = sub.add_parser("resume", help="answer a parked draft and continue that thread")
     resume.add_argument("thread", help="the thread id the parked run reported")
-    resume.add_argument("answer", choices=("merge", "close"))
+    resume.add_argument("answer", choices=("approve", "close", "reanalyze"))
     resume.set_defaults(handler=_resume)
 
     graph = sub.add_parser("graph", help="draw the graph")

@@ -17,6 +17,7 @@ graph TD;
 	await_person(await_person)
 	arm_merge(arm_merge)
 	record_closed(record_closed)
+	record_reanalysis(record_reanalysis)
 	__end__([<p>__end__</p>]):::last
 	__start__ --> audit;
 	audit -.-> __end__;
@@ -24,6 +25,7 @@ graph TD;
 	await_person -.-> __end__;
 	await_person -.-> arm_merge;
 	await_person -.-> record_closed;
+	await_person -.-> record_reanalysis;
 	classify -.-> park;
 	classify -.-> review;
 	park --> await_person;
@@ -33,6 +35,7 @@ graph TD;
 	arm_merge --> __end__;
 	merge --> __end__;
 	record_closed --> __end__;
+	record_reanalysis --> __end__;
 	classDef default fill:#f2f0ff,line-height:1.2
 	classDef first fill-opacity:0
 	classDef last fill:#bfb6fc

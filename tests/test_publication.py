@@ -88,7 +88,7 @@ def _request(repo: Path, *, risk: str = "low", verdict: str = "approve") -> Publ
     )
 
 
-def test_failed_auto_merge_is_held_and_not_armed(tmp_path: Path) -> None:
+def test_approved_publication_does_not_enable_auto_merge(tmp_path: Path) -> None:
     repo = _worktree(tmp_path)
     ledger = Ledger(tmp_path / "events.jsonl")
     forge = MemoryForge(arm_ok=False)
@@ -96,9 +96,9 @@ def test_failed_auto_merge_is_held_and_not_armed(tmp_path: Path) -> None:
 
     result = lifecycle.publish(_request(repo))
 
-    assert result.outcome == "held"
-    assert "auto-merge disabled" in result.detail
-    assert ledger.projection(result.finding_id).state == "proposed"  # type: ignore[union-attr]
+    assert result.outcome == "awaiting_checks"
+    assert "auto-merge:12" not in forge.transitions
+    assert ledger.projection(result.finding_id).state == "awaiting_checks"  # type: ignore[union-attr]
 
 
 def test_retry_reuses_existing_pull_for_branch(tmp_path: Path) -> None:
@@ -121,7 +121,7 @@ def test_retry_reuses_existing_pull_for_branch(tmp_path: Path) -> None:
 
     result = lifecycle.publish(_request(repo))
 
-    assert result.outcome == "armed"
+    assert result.outcome == "awaiting_checks"
     assert result.pr == 12
     assert forge.created_pull_count == 0
 
@@ -135,7 +135,7 @@ def test_high_risk_publication_opens_a_draft_and_parks(tmp_path: Path) -> None:
 
     result = lifecycle.publish(_request(repo, risk="high", verdict="skipped"))
 
-    assert result.outcome == "parked"
+    assert result.outcome == "awaiting_human"
     assert forge.transitions[0] == "create:draft"
     assert "auto-merge:12" not in forge.transitions
 
@@ -153,8 +153,10 @@ def test_publication_holds_when_existing_pull_state_is_unavailable(tmp_path: Pat
 
     result = lifecycle.publish(_request(repo))
 
-    assert result.outcome == "held"
+    assert result.outcome == "failed"
     assert "verify existing pull" in result.detail
+    assert result.partial is True
+    assert result.branch == "touchstone/run-1"
     assert forge.created_pull_count == 0
 
 

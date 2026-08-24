@@ -32,7 +32,7 @@ class MemoryScheduler:
         )
 
 
-def test_status_reconciles_live_pull_truth_before_projecting(tmp_path: Path) -> None:
+def test_status_is_read_only_and_reconcile_is_explicit(tmp_path: Path) -> None:
     loop = LoopConfig(
         name="code",
         brief="builtin:code-audit",
@@ -85,7 +85,34 @@ def test_status_reconciles_live_pull_truth_before_projecting(tmp_path: Path) -> 
     )
 
     payload = report.to_dict()
-    assert payload["findings"][0]["state"] == "merged"
+    assert payload["findings"][0]["state"] == "awaiting_checks"
     assert payload["last_runs"][0]["outcome"] == "armed"
     assert payload["scheduler"]["adapter"] == "launchd"
     assert payload["scheduler"]["installed"] == [str(tmp_path / "touchstone-code.plist")]
+
+    from touchstone.status import reconcile_status
+
+    reconciled = reconcile_status(
+        config,
+        SimpleNamespace(forge=forge, ledger=ledger),
+        now=dt.datetime(2026, 8, 24, 12, tzinfo=dt.UTC),
+    )
+    assert reconciled["code"]["merged"] == [12]
+    assert ledger.projection(identifier).state == "merged"  # type: ignore[union-attr]
+
+
+def test_status_never_calls_forge_mutations(tmp_path: Path) -> None:
+    class ExplodingForge:
+        def __getattr__(self, name: str):
+            raise AssertionError(f"status accessed Forge method {name}")
+
+    config = SimpleNamespace(
+        state_dir=tmp_path,
+        loops={},
+        forge=SimpleNamespace(reap_after_hours=6),
+    )
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+
+    report = collect_status(config, SimpleNamespace(forge=ExplodingForge(), ledger=ledger))
+
+    assert report.findings == ()

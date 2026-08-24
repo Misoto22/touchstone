@@ -298,15 +298,11 @@ def run_doctor(config: Config, context: DoctorContext) -> DoctorReport:
                 else "Configure branch protection or a ruleset for the default branch.",
             )
         )
-    auto_merge = bool(repository and repository.get("autoMergeAllowed"))
     checks.append(
         CheckResult(
             "forge.auto_merge",
-            "PASS" if auto_merge else ("FAIL" if context.online else "WARN"),
-            "GitHub auto-merge is enabled" if auto_merge else "GitHub auto-merge is not confirmed",
-            None
-            if auto_merge
-            else "Enable auto-merge in the repository settings before unattended runs.",
+            "PASS",
+            "PR-only mode does not enable or require GitHub auto-merge",
         )
     )
 
