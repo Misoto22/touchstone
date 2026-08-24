@@ -6,6 +6,7 @@ import json
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
+from touchstone.engines.base import engine_environment
 from touchstone.nodes.context import current
 
 #: The session writes here rather than to stdout, so a chatty model cannot
@@ -119,26 +120,43 @@ def _evidence(context: Any, loop: Any, worktree: str) -> str:
     because nothing ever appended them. A review that cannot verify a ratchet
     is the one thing that review exists to do.
 
+    Run without credentials. A hosted Analysis step holds the model key and
+    `TOUCHSTONE_STATE_KEY`, and the environment is already scrubbed before the
+    model, preparation and validation subprocesses for exactly that reason.
+    An evidence command is repository-authored — `just census` is whatever the
+    justfile and its dependencies say it is today — so inheriting that
+    environment would route both secrets around a boundary the rest of the
+    system keeps. `engine_environment` is the same allowlist those subprocesses
+    get, with no engine named, so no model key is in it either.
+
     A command that fails produces a section saying it is unavailable, never a
     missing section. The brief distinguishes the two: an absent heading reads
     as evidence nobody asked for, and an unavailable one as evidence that was
-    asked for and could not be had. Only the second is true here.
+    asked for and could not be had. Only the second is true here — which is why
+    a command that cannot even start is caught rather than allowed to end the
+    run, and why the entries after it are still collected.
     """
     if not loop.evidence:
         return ""
+    environment = engine_environment("")
     parts = ["\n\n## Evidence collected for you\n"]
     for heading, argv in loop.evidence:
-        result = context.executor.run(list(argv), cwd=worktree, timeout=600)
-        if not result.ok:
-            body = f"unavailable: `{' '.join(argv)}` exited {result.code}"
-        elif len(result.stdout) > EVIDENCE_LIMIT:
-            body = (
-                f"unavailable: `{' '.join(argv)}` produced {len(result.stdout)} characters, "
-                f"over the {EVIDENCE_LIMIT} this prompt carries. A partial answer here "
-                "would look like a whole one."
-            )
+        shown = " ".join(argv)
+        try:
+            result = context.executor.run(list(argv), cwd=worktree, timeout=600, env=environment)
+        except OSError as error:
+            body = f"unavailable: `{shown}` could not start ({error.strerror or error})"
         else:
-            body = f"```\n{result.stdout.strip()}\n```"
+            if not result.ok:
+                body = f"unavailable: `{shown}` exited {result.code}"
+            elif len(result.stdout) > EVIDENCE_LIMIT:
+                body = (
+                    f"unavailable: `{shown}` produced {len(result.stdout)} characters, "
+                    f"over the {EVIDENCE_LIMIT} this prompt carries. A partial answer "
+                    "here would look like a whole one."
+                )
+            else:
+                body = f"```\n{result.stdout.strip()}\n```"
         parts.append(f"\n### {heading}\n\n{body}\n")
     return "".join(parts)
 

@@ -13,7 +13,7 @@ class _Executor:
         self._results = list(results)
         self.calls: list[tuple[list[str], str | None]] = []
 
-    def run(self, argv, *, cwd=None, timeout=None):  # type: ignore[no-untyped-def]
+    def run(self, argv, *, cwd=None, timeout=None, env=None):  # type: ignore[no-untyped-def]
         self.calls.append((argv, cwd))
         return self._results.pop(0)
 
@@ -75,3 +75,89 @@ def test_sections_keep_the_order_they_were_configured_in() -> None:
     text = _evidence(SimpleNamespace(executor=executor), loop, "/tree")
 
     assert text.index("The census") < text.index("The latest CI run")
+
+
+def test_evidence_runs_without_the_credentials_around_it(monkeypatch) -> None:
+    """A hosted Analysis step holds the model key and `TOUCHSTONE_STATE_KEY`,
+    and an evidence command is repository-authored — `just census` is whatever
+    the justfile and its dependencies say today. The rest of the system already
+    scrubs the environment before every model, preparation and validation
+    subprocess; this must not be the way around that."""
+    for name, value in (
+        ("OPENAI_API_KEY", "sk-secret"),
+        ("ANTHROPIC_API_KEY", "sk-ant-secret"),
+        ("TOUCHSTONE_STATE_KEY", "state-secret"),
+        ("GITHUB_TOKEN", "ghs-secret"),
+        ("PATH", "/usr/bin"),
+    ):
+        monkeypatch.setenv(name, value)
+
+    seen: dict[str, str] = {}
+
+    class _Recording:
+        def run(self, argv, *, cwd=None, timeout=None, env=None):  # type: ignore[no-untyped-def]
+            seen.update(env or {})
+            return Result(code=0, stdout="ok", stderr="")
+
+    _evidence(
+        SimpleNamespace(executor=_Recording()),
+        _loop(("The census", ("just", "census"))),
+        "/tree",
+    )
+
+    assert "PATH" in seen, "a scrubbed environment still has to be able to run anything"
+    for secret in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "TOUCHSTONE_STATE_KEY", "GITHUB_TOKEN"):
+        assert secret not in seen, f"{secret} reached a repository-authored command"
+    assert "secret" not in "".join(seen.values())
+
+
+def test_a_command_that_cannot_start_does_not_end_the_run() -> None:
+    """`subprocess.run` raises rather than returning a code when the executable
+    is absent. Uncaught, a host without `just` aborts the whole audit instead of
+    producing the headed `unavailable` section this promises — and the entries
+    after it are never collected either."""
+
+    class _Missing:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def run(self, argv, *, cwd=None, timeout=None, env=None):  # type: ignore[no-untyped-def]
+            self.calls += 1
+            if argv[0] == "just":
+                raise FileNotFoundError(2, "No such file or directory")
+            return Result(code=0, stdout="later output", stderr="")
+
+    executor = _Missing()
+    text = _evidence(
+        SimpleNamespace(executor=executor),
+        _loop(("The census", ("just", "census")), ("The latest CI run", ("gh", "run"))),
+        "/tree",
+    )
+
+    assert "### The census" in text
+    assert "could not start" in text
+    assert "later output" in text, "collection stopped at the first missing executable"
+    assert executor.calls == 2
+
+
+def test_changing_evidence_changes_the_configuration_digest() -> None:
+    """Evidence lands in the audit prompt, so it is an Analysis input. Left out
+    of the digest, a changed command keeps naming the same state artifact and a
+    snapshot taken under the old evidence is restored as compatible."""
+    from touchstone.hosted.snapshot import _loop_config
+
+    base = SimpleNamespace(
+        name="code",
+        brief="builtin:code-audit",
+        label="touchstone:audit",
+        evidence=(("The census", ("just", "census")),),
+    )
+    changed_command = SimpleNamespace(
+        **{**vars(base), "evidence": (("The census", ("just", "c")),)}
+    )
+    changed_heading = SimpleNamespace(
+        **{**vars(base), "evidence": (("The ratchet census", ("just", "census")),)}
+    )
+
+    assert _loop_config(base) != _loop_config(changed_command)
+    assert _loop_config(base) != _loop_config(changed_heading)

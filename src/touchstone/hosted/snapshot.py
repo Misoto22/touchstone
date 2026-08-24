@@ -166,6 +166,13 @@ def _loop_config(loop: Any) -> dict[str, Any]:
         "confine_to": getattr(loop, "confine_to", ()),
         "targets": getattr(loop, "targets", ()),
         "context": getattr(loop, "context", ()),
+        # Evidence lands in the audit prompt, so a changed heading or command
+        # is a changed Analysis input. Left out, the digest would keep naming
+        # the same state artifact and a snapshot taken under the old evidence
+        # would be restored as compatible.
+        "evidence": tuple(
+            (heading, tuple(argv)) for heading, argv in getattr(loop, "evidence", ())
+        ),
     }
 
 
