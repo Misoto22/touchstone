@@ -10,20 +10,20 @@ import argparse
 import sys
 from pathlib import Path
 
-from harness_loop import visualise
-from harness_loop.config import ConfigError, load
+from touchstone import visualise
+from touchstone.config import ConfigError, load
 
 
 def _run(args: argparse.Namespace) -> int:
-    from harness_loop.runner import execute
+    from touchstone.runner import execute
 
     config = load(args.config)
-    print(f"harness-loop: {config.describe()}", file=sys.stderr)
+    print(f"touchstone: {config.describe()}", file=sys.stderr)
     return execute(config, loop=args.loop, dry_run=args.dry_run)
 
 
 def _resume(args: argparse.Namespace) -> int:
-    from harness_loop.runner import resume
+    from touchstone.runner import resume
 
     config = load(args.config)
     return resume(config, thread=args.thread, answer=args.answer)
@@ -46,7 +46,7 @@ def _graph(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="harness-loop", description=__doc__)
+    parser = argparse.ArgumentParser(prog="touchstone", description=__doc__)
     parser.add_argument("--config", type=Path, help="a TOML file; discovered when omitted")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -78,7 +78,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return int(args.handler(args))
     except ConfigError as exc:
-        print(f"harness-loop: {exc}", file=sys.stderr)
+        print(f"touchstone: {exc}", file=sys.stderr)
         return 78  # EX_CONFIG, the same code launchd uses for a job it cannot start
 
 

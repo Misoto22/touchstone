@@ -1,4 +1,4 @@
-# harness-loop
+# touchstone
 
 Scheduled agent loops that audit a repository, and the harness that judges it.
 
@@ -25,7 +25,7 @@ what it was doing, and a check that can be argued down is not a check.
 
 ## The graph
 
-See [docs/graph.md](docs/graph.md), which is generated from the code — `harness-loop
+See [docs/graph.md](docs/graph.md), which is generated from the code — `touchstone
 graph --check` fails when the picture stops matching the edges.
 
 `park` is an interrupt, not an exit. The thread is checkpointed to SQLite and
@@ -34,16 +34,16 @@ starting a fresh twenty-minute audit. That is what "waits for a person" should
 always have meant.
 
 ```bash
-harness-loop run code                 # one iteration
-harness-loop run harness --dry-run    # everything except publishing
-harness-loop resume code-audit/… merge
+touchstone run code                 # one iteration
+touchstone run harness --dry-run    # everything except publishing
+touchstone resume code-audit/… merge
 langgraph dev                         # Studio: live state, time travel, resume
 ```
 
 ## Nothing is hardcoded
 
 Engine, model, effort, budget, and **where the work runs** are configuration.
-See [harness-loop.example.toml](harness-loop.example.toml).
+See [touchstone.example.toml](touchstone.example.toml).
 
 ```toml
 [engine]

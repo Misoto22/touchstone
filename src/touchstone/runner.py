@@ -17,9 +17,9 @@ from pathlib import Path
 
 from langgraph.checkpoint.sqlite import SqliteSaver
 
-from harness_loop.config import Config
-from harness_loop.graph import build
-from harness_loop.nodes.context import current
+from touchstone.config import Config
+from touchstone.graph import build
+from touchstone.nodes.context import current
 
 
 class Held(Exception):
@@ -149,7 +149,7 @@ def execute(config: Config, *, loop: str, dry_run: bool = False) -> int:
             + (f" #{final['pr']}" if final.get("pr") else "")
         )
         if final.get("outcome") == "escalated":
-            print(f"  parked; resume with: harness-loop resume {loop}-{branch} merge|close")
+            print(f"  parked; resume with: touchstone resume {loop}-{branch} merge|close")
         context.ledger.record(
             status=final.get("outcome", "clean"),
             risk=final.get("risk"),

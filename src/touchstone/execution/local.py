@@ -5,7 +5,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from harness_loop.execution.base import Result
+from touchstone.execution.base import Result
 
 
 class LocalExecutor:

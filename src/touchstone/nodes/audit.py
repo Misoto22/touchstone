@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from harness_loop.nodes.context import current
+from touchstone.nodes.context import current
 
 #: The session writes here rather than to stdout, so a chatty model cannot
 #: corrupt the contract.
@@ -17,7 +17,7 @@ def run(state: dict[str, Any]) -> dict[str, Any]:
     loop = context.loop(state["loop"])
     worktree = state["worktree"]
 
-    brief = loop.brief.read_text(encoding="utf-8")
+    brief = loop.prompt()
     handled = context.ledger.handled_titles()
     if handled:
         brief += "\n\n## Already handled — do not raise any of these again\n\n"

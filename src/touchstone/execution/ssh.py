@@ -11,9 +11,9 @@ from __future__ import annotations
 
 import shlex
 
-from harness_loop.config import SshConfig
-from harness_loop.execution.base import Result
-from harness_loop.execution.local import LocalExecutor
+from touchstone.config import SshConfig
+from touchstone.execution.base import Result
+from touchstone.execution.local import LocalExecutor
 
 
 class SshExecutor:
@@ -78,8 +78,8 @@ class SshExecutor:
         # A heredoc with a quoted delimiter: the content is never expanded, and
         # the delimiter is one no prose will contain.
         remote = (
-            f"mkdir -p $(dirname {quoted}) && cat > {quoted} <<'HARNESS_LOOP_EOF'\n"
-            f"{text}\nHARNESS_LOOP_EOF"
+            f"mkdir -p $(dirname {quoted}) && cat > {quoted} <<'TOUCHSTONE_LOOP_EOF'\n"
+            f"{text}\nTOUCHSTONE_LOOP_EOF"
         )
         result = self._ssh(remote, timeout=120)
         if not result.ok:

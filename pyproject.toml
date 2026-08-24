@@ -1,5 +1,5 @@
 [project]
-name = "harness-loop"
+name = "touchstone"
 version = "0.1.0"
 description = "Scheduled agent loops that audit a repository and the harness that judges it"
 requires-python = ">=3.12"
@@ -12,7 +12,7 @@ dependencies = [
 ]
 
 [project.scripts]
-harness-loop = "harness_loop.cli:main"
+touchstone = "touchstone.cli:main"
 
 [dependency-groups]
 dev = [
@@ -30,7 +30,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/harness_loop"]
+packages = ["src/touchstone"]
 
 [tool.ruff]
 line-length = 100

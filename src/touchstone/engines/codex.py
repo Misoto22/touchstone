@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import PurePosixPath
 
-from harness_loop.engines.base import Session
-from harness_loop.execution import Executor
+from touchstone.engines.base import Session
+from touchstone.execution import Executor
 
 
 class CodexEngine:

@@ -26,9 +26,9 @@ Target = Literal["local", "ssh"]
 #: Where a config file is looked for when none is named. Later entries win, so
 #: a checkout's own file overrides the one installed for the machine.
 SEARCH = (
-    Path("/etc/harness-loop/config.toml"),
-    Path.home() / ".config" / "harness-loop" / "config.toml",
-    Path("harness-loop.toml"),
+    Path("/etc/touchstone/config.toml"),
+    Path.home() / ".config" / "touchstone" / "config.toml",
+    Path("touchstone.toml"),
 )
 
 
@@ -126,6 +126,28 @@ class LoopConfig:
     require_change_under: tuple[str, ...] = ()
     #: When set, a diff touching anything outside these paths is escalated.
     confine_to: tuple[str, ...] = ()
+    #: Names the brief substitutes into itself. The shipped briefs carry the
+    #: behaviour that was learned the hard way — say latent when it is latent,
+    #: one defect at a time, a verdict is a field — and know nothing about any
+    #: particular repository. What a project calls its ledger, its rules and
+    #: its risk policy belongs here.
+    context: tuple[tuple[str, str], ...] = ()
+
+    def prompt(self) -> str:
+        """The brief with this loop's names substituted in.
+
+        `string.Template` rather than `str.format`: a brief is mostly prose and
+        JSON examples, and `{` appears in it constantly. A formatter would
+        either choke or silently eat a brace from an example the session is
+        meant to copy.
+
+        `safe_substitute`, so an unnamed placeholder survives as itself rather
+        than aborting the run — a brief with one stale name still audits, and
+        failing the whole iteration over a word would be the worse trade.
+        """
+        from string import Template
+
+        return Template(self.brief.read_text(encoding="utf-8")).safe_substitute(dict(self.context))
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,6 +195,7 @@ def _loops(raw: dict[str, Any]) -> dict[str, LoopConfig]:
             protected_paths=tuple(table.get("protected_paths", ())),
             require_change_under=tuple(table.get("require_change_under", ())),
             confine_to=tuple(table.get("confine_to", ())),
+            context=tuple(sorted(dict(table.get("context", {})).items())),
         )
     if not loops:
         raise ConfigError("no [loop.*] sections; there is nothing to run")
@@ -197,14 +220,14 @@ def load(path: Path | None = None) -> Config:
     engine_raw = raw.get("engine", {})
     budget_raw = engine_raw.get("budget", {})
     engine = EngineConfig(
-        name=os.environ.get("HARNESS_ENGINE", engine_raw.get("name", "codex")),  # type: ignore[arg-type]
-        model=os.environ.get("HARNESS_MODEL", engine_raw.get("model", "gpt-5.6-sol")),
-        audit_effort=os.environ.get("HARNESS_EFFORT", engine_raw.get("audit_effort", "high")),
+        name=os.environ.get("TOUCHSTONE_ENGINE", engine_raw.get("name", "codex")),  # type: ignore[arg-type]
+        model=os.environ.get("TOUCHSTONE_MODEL", engine_raw.get("model", "gpt-5.6-sol")),
+        audit_effort=os.environ.get("TOUCHSTONE_EFFORT", engine_raw.get("audit_effort", "high")),
         review_effort=os.environ.get(
-            "HARNESS_REVIEW_EFFORT", engine_raw.get("review_effort", "high")
+            "TOUCHSTONE_REVIEW_EFFORT", engine_raw.get("review_effort", "high")
         ),
         timeout_seconds=int(
-            os.environ.get("HARNESS_TIMEOUT", engine_raw.get("timeout_seconds", 2700))
+            os.environ.get("TOUCHSTONE_TIMEOUT", engine_raw.get("timeout_seconds", 2700))
         ),
         budget=Budget(
             audit=float(budget_raw.get("audit", 20.0)),
@@ -228,7 +251,7 @@ def load(path: Path | None = None) -> Config:
             connect_timeout=int(ssh_raw.get("connect_timeout", 15)),
         )
     execution = ExecutionConfig(
-        target=os.environ.get("HARNESS_TARGET", execution_raw.get("target", "local")),  # type: ignore[arg-type]
+        target=os.environ.get("TOUCHSTONE_TARGET", execution_raw.get("target", "local")),  # type: ignore[arg-type]
         ssh=ssh,
     )
     if execution.target not in ("local", "ssh"):
@@ -246,10 +269,10 @@ def load(path: Path | None = None) -> Config:
 
     return Config(
         repo_path=Path(
-            os.environ.get("HARNESS_REPO", _require(raw, "repo_path", "the configuration"))
+            os.environ.get("TOUCHSTONE_REPO", _require(raw, "repo_path", "the configuration"))
         ),
         state_dir=Path(
-            os.environ.get("HARNESS_STATE", raw.get("state_dir", "~/.local/state/harness-loop"))
+            os.environ.get("TOUCHSTONE_STATE", raw.get("state_dir", "~/.local/state/touchstone"))
         ).expanduser(),
         forge=forge,
         engine=engine,

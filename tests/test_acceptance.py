@@ -15,14 +15,14 @@ from pathlib import Path
 
 import pytest
 
-from harness_loop import ledger, visualise
-from harness_loop.config import ConfigError, SshConfig, load
-from harness_loop.engines.claude import ClaudeEngine, _payload
-from harness_loop.engines.codex import CodexEngine
-from harness_loop.execution.base import Result
-from harness_loop.execution.ssh import SshExecutor
-from harness_loop.graph import _after_classify, _after_review
-from harness_loop.nodes import review
+from touchstone import ledger, visualise
+from touchstone.config import ConfigError, SshConfig, load
+from touchstone.engines.claude import ClaudeEngine, _payload
+from touchstone.engines.codex import CodexEngine
+from touchstone.execution.base import Result
+from touchstone.execution.ssh import SshExecutor
+from touchstone.graph import _after_classify, _after_review
+from touchstone.nodes import review
 
 
 class _Spy:
@@ -238,8 +238,8 @@ def test_the_environment_overrides_only_the_volatile_values(
         '[engine]\nname = "codex"\nmodel = "gpt-5.6-terra"\n'
         '[loop.code]\nbrief = "b.md"\nlabel = "l"\n',
     )
-    monkeypatch.setenv("HARNESS_MODEL", "gpt-5.6-sol")
-    monkeypatch.setenv("HARNESS_EFFORT", "xhigh")
+    monkeypatch.setenv("TOUCHSTONE_MODEL", "gpt-5.6-sol")
+    monkeypatch.setenv("TOUCHSTONE_EFFORT", "xhigh")
     loaded = load(path)
     assert loaded.engine.model == "gpt-5.6-sol"
     assert loaded.engine.audit_effort == "xhigh"
@@ -259,3 +259,70 @@ def test_the_description_names_the_model_before_anything_is_spent(tmp_path: Path
     assert "gpt-5.6-sol" in described
     assert "codex" in described
     assert "local" in described
+
+
+# --- the shipped configuration and briefs agree with each other -------------
+
+
+def test_the_shipped_example_still_has_its_protected_paths() -> None:
+    """A TOML sub-table swallows every key after it until the next header.
+
+    Writing `[loop.code.context]` above `protected_paths` moved the protected
+    paths into the context — leaving a loop whose safety check was switched
+    off, in a file that looked entirely reasonable. Nothing failed; the check
+    simply had nothing to check.
+    """
+    import tomllib
+
+    root = Path(__file__).resolve().parents[1]
+    raw = tomllib.loads((root / "touchstone.example.toml").read_text(encoding="utf-8"))
+    for name, table in raw["loop"].items():
+        assert table.get("protected_paths"), f"[loop.{name}] has no protected paths"
+        assert "protected_paths" not in table.get("context", {}), (
+            f"[loop.{name}.context] swallowed protected_paths; move the context table last"
+        )
+
+
+def test_every_placeholder_a_brief_uses_is_supplied() -> None:
+    """A brief names what it needs; the configuration says what this project
+    calls it. An unnamed placeholder survives as `$word` in the prompt, which is
+    a session being asked to audit something whose name is literally a dollar
+    sign."""
+    import re
+    import tomllib
+
+    root = Path(__file__).resolve().parents[1]
+    raw = tomllib.loads((root / "touchstone.example.toml").read_text(encoding="utf-8"))
+    shared = re.findall(r"\$(\w+)", (root / "briefs" / "review.md").read_text(encoding="utf-8"))
+
+    for name, table in raw["loop"].items():
+        brief = root / table["brief"]
+        assert brief.exists(), f"[loop.{name}] points at a brief that is not there: {brief}"
+        used = set(re.findall(r"\$(\w+)", brief.read_text(encoding="utf-8"))) | set(shared)
+        missing = used - set(table.get("context", {}))
+        assert not missing, f"[loop.{name}.context] is missing {sorted(missing)}"
+
+
+def test_the_briefs_keep_the_constraints_that_were_paid_for() -> None:
+    """Each of these sentences is in a brief because its absence cost something.
+
+    A rewrite is free to reword them. It is not free to drop them, and a test
+    that names them makes deleting one a deliberate act rather than a tidy-up.
+    """
+    root = Path(__file__).resolve().parents[1] / "briefs"
+    audit = (root / "code-audit.md").read_text(encoding="utf-8")
+    harness = (root / "harness-review.md").read_text(encoding="utf-8")
+    review = (root / "review.md").read_text(encoding="utf-8")
+
+    # A finding reported as an outage that had never happened.
+    assert "latent" in audit and "past tense" in audit
+    # A translated document left on its seed version, drifting daily.
+    assert "twin" in audit and "twin" in harness
+    # A ceiling raised instead of a regression reported.
+    assert "never raised" in harness
+    # A date stamped in UTC by a schedule that runs on local time.
+    assert "not UTC" in harness
+    # A reviewer that agreed by default is not a reviewer.
+    assert "owe it nothing" in review
+    # Understating risk to get something merged.
+    assert "Understating risk" in audit and "Understating risk" in harness

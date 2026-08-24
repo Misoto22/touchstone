@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
-from harness_loop.execution import Executor
+from touchstone.execution import Executor
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,8 +67,8 @@ class Engine(Protocol):
 
 def build(config, executor: Executor) -> Engine:  # type: ignore[no-untyped-def]
     """The engine a configuration asks for."""
-    from harness_loop.engines.claude import ClaudeEngine
-    from harness_loop.engines.codex import CodexEngine
+    from touchstone.engines.claude import ClaudeEngine
+    from touchstone.engines.codex import CodexEngine
 
     if config.engine.name == "claude":
         return ClaudeEngine(config, executor)

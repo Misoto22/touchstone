@@ -24,7 +24,7 @@ from typing import Annotated, Any, Literal, TypedDict
 from langgraph.graph import END, StateGraph
 from langgraph.types import interrupt
 
-from harness_loop.nodes import audit, classify, publish, review
+from touchstone.nodes import audit, classify, publish, review
 
 
 class LoopState(TypedDict, total=False):

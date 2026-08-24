@@ -1,4 +1,4 @@
-# A worked configuration. Copy to ~/.config/harness-loop/config.toml and edit.
+# A worked configuration. Copy to ~/.config/touchstone/config.toml and edit.
 #
 # Every value here is a decision this code refuses to make for you. The
 # implementation it replaces hardcoded a repository path, a model, an effort
@@ -7,7 +7,7 @@
 # once.
 
 repo_path = "/Users/macbook01/local-projects/personal-projects/kioku"
-state_dir = "~/.local/state/harness-loop"
+state_dir = "~/.local/state/touchstone"
 
 [forge]
 slug = "Misoto22/kioku"
@@ -49,8 +49,8 @@ target = "local"
 
 [execution.ssh]
 host = "my-server"
-workdir = "/srv/harness-loop/kioku"
-state_dir = "/srv/harness-loop/state"
+workdir = "/srv/touchstone/kioku"
+state_dir = "/srv/touchstone/state"
 # ssh gives a non-login shell whose PATH has neither Homebrew nor ~/.local/bin.
 env = { PATH = "/usr/local/bin:/usr/bin:/bin", ECC_GATEGUARD = "off" }
 
@@ -64,6 +64,22 @@ protected_paths = [
     ".github/", "justfile", "alembic.ini", "migrations/",
     "docs/agent-delivery/", "docs/engineering/rules.md", ".claude/", "AGENTS.md",
 ]
+
+# What this project calls the things the brief talks about. The shipped briefs
+# carry behaviour learned the hard way and know nothing about any particular
+# repository; these names are how they learn about this one.
+#
+# Last in the section on purpose. A TOML sub-table swallows every key after it
+# until the next header, so a `context` placed above `protected_paths` quietly
+# moves the protected paths into it — and a loop with no protected paths is a
+# loop with its safety check switched off, configured to look fine.
+[loop.code.context]
+project = "the kioku backend and its database schema"
+ledger = "`docs/engineering/findings.md`"
+protected = "`.github/`, `justfile`, `alembic.ini`, `migrations/`, `docs/agent-delivery/`, `docs/engineering/rules.md`, `.claude/`, `AGENTS.md`"
+rules_clause = """
+- It breaks a rule in `docs/engineering/rules.md`. Read the rule before citing
+  it; several are narrower than they sound. Cite the rule id in your reason."""
 
 [loop.harness]
 brief = "briefs/harness-review.md"
@@ -79,3 +95,11 @@ require_change_under = ["docs/engineering/"]
 # Anything outside is escalated. A loop that edits code while claiming to audit
 # paperwork is not the loop anyone agreed to run.
 confine_to = ["docs/engineering/"]
+
+[loop.harness.context]
+spec = "section 16 of `docs/engineering/rules.md`, rules R-HAR-1 through R-HAR-8"
+rules = "`docs/engineering/rules.md` section 15"
+ledger = "`docs/engineering/findings.md`"
+decisions = "`docs/decisions/index.md`"
+writable = "`docs/engineering/harness-health.md` and the section 15 register rows you changed"
+rules_clause = ""

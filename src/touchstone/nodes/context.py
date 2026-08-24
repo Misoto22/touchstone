@@ -11,10 +11,10 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
-from harness_loop import engines, execution
-from harness_loop.config import Config, LoopConfig, load
-from harness_loop.forge import Forge
-from harness_loop.ledger import Ledger
+from touchstone import engines, execution
+from touchstone.config import Config, LoopConfig, load
+from touchstone.forge import Forge
+from touchstone.ledger import Ledger
 
 
 @dataclass(frozen=True, slots=True)

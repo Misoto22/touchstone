@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from harness_loop.nodes.context import current
+from touchstone.nodes.context import current
 
 SCHEMA = {
     "type": "object",
@@ -36,8 +36,11 @@ def run(state: dict[str, Any]) -> dict[str, Any]:
     worktree = state["worktree"]
     base = f"origin/{context.config.forge.default_branch}"
 
-    brief_path = loop.brief.parent / "review.md"
-    brief = brief_path.read_text(encoding="utf-8")
+    from string import Template
+
+    brief = Template((loop.brief.parent / "review.md").read_text(encoding="utf-8")).safe_substitute(
+        dict(loop.context)
+    )
 
     diff = context.executor.run(["git", "-C", worktree, "diff", base], timeout=180).stdout
     finding = state.get("finding", {})
