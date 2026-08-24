@@ -115,6 +115,9 @@ def render_config(
             "visibility": "public",
             "wake_minutes": 15,
             "artifact_retention_days": 90,
+            "node_version": "24",
+            "codex_cli_version": "0.149.1",
+            "claude_code_version": "2.1.241",
             "auto_merge": False,
         },
         "loop": {

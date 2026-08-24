@@ -215,6 +215,22 @@ def _actions_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def _hosted(args: argparse.Namespace) -> int:
+    from touchstone.hosted.runtime import CandidateIntegrityError, run_stage
+
+    config = load(args.config)
+    try:
+        result = run_stage(config, args.stage)
+    except CandidateIntegrityError as exc:
+        print(f"touchstone hosted: {exc}", file=sys.stderr)
+        return 3
+    if result.outcome == "blocked":
+        return 3
+    if result.outcome == "failed":
+        return 1
+    return 0
+
+
 def _status(args: argparse.Namespace) -> int:
     import json
 
@@ -463,6 +479,10 @@ def main(argv: list[str] | None = None) -> int:
         "--check", action="store_true", help="report drift without writing (exit 3 on drift)"
     )
     actions_init.set_defaults(handler=_actions_init)
+
+    hosted = sub.add_parser("hosted", help="run an internal GitHub-hosted trust stage")
+    hosted.add_argument("stage", choices=("prepare", "analysis", "publish", "snapshot"))
+    hosted.set_defaults(handler=_hosted)
 
     status = sub.add_parser("status", help="read repository lifecycle state without mutation")
     status.add_argument("--json", action="store_true")

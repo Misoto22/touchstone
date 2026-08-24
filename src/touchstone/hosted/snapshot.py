@@ -50,7 +50,7 @@ def snapshot_state(
         repository=config.forge.slug,
         loop=loop,
         schema_version=config.source.schema_version,
-        config_digest=_config_digest(config),
+        config_digest=config_digest(config),
         profile_digest=profile_digest,
         lineage=run.candidate_id or f"run:{run_id}",
         run_id=run_id,
@@ -71,7 +71,7 @@ def compatibility(
         (manifest.repository, config.forge.slug, "repository-mismatch"),
         (manifest.loop, loop, "loop-mismatch"),
         (manifest.schema_version, config.source.schema_version, "schema-mismatch"),
-        (manifest.config_digest, _config_digest(config), "config-mismatch"),
+        (manifest.config_digest, config_digest(config), "config-mismatch"),
         (
             manifest.profile_digest,
             config.generated_metadata.source_digest
@@ -87,7 +87,7 @@ def compatibility(
     return CompatibilityResult(True)
 
 
-def _config_digest(config: Any) -> str:
+def config_digest(config: Any) -> str:
     safe = {
         "schema": config.source.schema_version,
         "repository": config.forge.slug,
@@ -105,5 +105,6 @@ __all__ = [
     "CompatibilityResult",
     "SnapshotPlan",
     "compatibility",
+    "config_digest",
     "snapshot_state",
 ]

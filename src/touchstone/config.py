@@ -108,6 +108,9 @@ class ActionsConfig:
     visibility: Literal["public", "private"] = "public"
     wake_minutes: int = 15
     artifact_retention_days: int = 90
+    node_version: str = "24"
+    codex_cli_version: str = "0.149.1"
+    claude_code_version: str = "2.1.241"
     action_sha: str = ""
     approval_environment: str = ""
     auto_merge: bool = False
@@ -245,6 +248,9 @@ _ACTIONS = {
     "visibility",
     "wake_minutes",
     "artifact_retention_days",
+    "node_version",
+    "codex_cli_version",
+    "claude_code_version",
     "action_sha",
     "approval_environment",
     "auto_merge",
@@ -353,7 +359,14 @@ def _validate(raw: dict[str, Any]) -> None:
         raise ConfigError("execution.ssh.env must be a table of string values")
     for key in ("author_name", "author_email"):
         _string(git, key, "git")
-    for key in ("visibility", "action_sha", "approval_environment"):
+    for key in (
+        "visibility",
+        "node_version",
+        "codex_cli_version",
+        "claude_code_version",
+        "action_sha",
+        "approval_environment",
+    ):
         _string(actions, key, "actions")
     for key in ("wake_minutes", "artifact_retention_days"):
         _positive_int(actions, key, "actions")
@@ -361,6 +374,15 @@ def _validate(raw: dict[str, Any]) -> None:
         raise ConfigError("actions.auto_merge must be a boolean")
     if actions.get("visibility", "public") not in {"public", "private"}:
         raise ConfigError("actions.visibility must be 'public' or 'private'")
+    node_version = actions.get("node_version", "24")
+    if not re.fullmatch(r"[0-9]+(?:\.[0-9]+(?:\.[0-9]+)?)?", node_version):
+        raise ConfigError("actions.node_version must be a numeric Node.js release")
+    for key in ("codex_cli_version", "claude_code_version"):
+        value = actions.get(key)
+        if value is not None and not re.fullmatch(
+            r"[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?", value
+        ):
+            raise ConfigError(f"actions.{key} must be an exact semantic version")
     for name, value in loops.items():
         if not isinstance(value, dict):
             raise ConfigError(f"[loop.{name}] must be a table")
@@ -525,6 +547,9 @@ def _build_config(
                 )
             ),
             artifact_retention_days=int(actions_raw.get("artifact_retention_days", 90)),
+            node_version=str(actions_raw.get("node_version", "24")),
+            codex_cli_version=str(actions_raw.get("codex_cli_version", "0.149.1")),
+            claude_code_version=str(actions_raw.get("claude_code_version", "2.1.241")),
             action_sha=str(actions_raw.get("action_sha", "")),
             approval_environment=str(actions_raw.get("approval_environment", "")),
             auto_merge=bool(actions_raw.get("auto_merge", False)),

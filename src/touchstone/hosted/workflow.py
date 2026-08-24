@@ -23,6 +23,7 @@ class ActionPins:
 
     checkout: str = "3d3c42e5aac5ba805825da76410c181273ba90b1"
     setup_python: str = "5fda3b95a4ea91299a34e894583c3862153e4b97"
+    setup_node: str = "249970729cb0ef3589644e2896645e5dc5ba9c38"
     upload_artifact: str = "ea165f8d65b6e75b540449e92b4886f43607fa02"
     download_artifact: str = "634f93cb2916e3fdff6788551b99b062d0335ce0"
     app_token: str = "67018539274d69449ef7c02e8e71183d1719ab42"
@@ -31,6 +32,7 @@ class ActionPins:
         for name, value in (
             ("checkout", self.checkout),
             ("setup_python", self.setup_python),
+            ("setup_node", self.setup_node),
             ("upload_artifact", self.upload_artifact),
             ("download_artifact", self.download_artifact),
             ("app_token", self.app_token),
@@ -147,10 +149,15 @@ jobs:
           python-version: '3.12'
       - id: touchstone
         uses: Misoto22/touchstone@{sha}
+        env:
+          GH_TOKEN: ${{{{ github.token }}}}
+          TOUCHSTONE_CANDIDATE_ID: ${{{{ inputs.candidate_id }}}}
+          TOUCHSTONE_DECISION: ${{{{ inputs.decision }}}}
         with:
           stage: prepare
           version: '{package_version}'
       - uses: actions/upload-artifact@{pins.upload_artifact}
+        if: always()
         with:
           name: touchstone-prepare-${{{{ github.run_id }}}}
           path: .touchstone/hosted/prepare
@@ -174,6 +181,9 @@ jobs:
       - uses: actions/setup-python@{pins.setup_python}
         with:
           python-version: '3.12'
+      - uses: actions/setup-node@{pins.setup_node}
+        with:
+          node-version: '{config.actions.node_version}'
       - uses: actions/download-artifact@{pins.download_artifact}
         with:
           name: touchstone-prepare-${{{{ github.run_id }}}}
@@ -183,10 +193,13 @@ jobs:
         env:
           OPENAI_API_KEY: ${{{{ secrets.OPENAI_API_KEY }}}}
           TOUCHSTONE_STATE_KEY: ${{{{ secrets.TOUCHSTONE_STATE_KEY }}}}
+          TOUCHSTONE_CANDIDATE_ID: ${{{{ inputs.candidate_id }}}}
+          TOUCHSTONE_DECISION: ${{{{ inputs.decision }}}}
         with:
           stage: analysis
           version: '{package_version}'
       - uses: actions/upload-artifact@{pins.upload_artifact}
+        if: always()
         with:
           name: touchstone-candidate-${{{{ github.run_id }}}}
           path: .touchstone/hosted/candidate
@@ -203,9 +216,16 @@ jobs:
     outputs:
       change_state: ${{{{ steps.touchstone.outputs.change_state }}}}
     steps:
+      - id: app-token
+        uses: actions/create-github-app-token@{pins.app_token}
+        with:
+          app-id: ${{{{ secrets.TOUCHSTONE_APP_ID }}}}
+          private-key: ${{{{ secrets.TOUCHSTONE_APP_PRIVATE_KEY }}}}
+          owner: ${{{{ github.repository_owner }}}}
       - uses: actions/checkout@{pins.checkout}
         with:
-          persist-credentials: false
+          token: ${{{{ steps.app-token.outputs.token }}}}
+          persist-credentials: true
       - uses: actions/setup-python@{pins.setup_python}
         with:
           python-version: '3.12'
@@ -213,21 +233,18 @@ jobs:
         with:
           name: touchstone-candidate-${{{{ github.run_id }}}}
           path: .touchstone/hosted/candidate
-      - id: app-token
-        uses: actions/create-github-app-token@{pins.app_token}
-        with:
-          app-id: ${{{{ secrets.TOUCHSTONE_APP_ID }}}}
-          private-key: ${{{{ secrets.TOUCHSTONE_APP_PRIVATE_KEY }}}}
-          owner: ${{{{ github.repository_owner }}}}
       - id: touchstone
         uses: Misoto22/touchstone@{sha}
         env:
           GH_TOKEN: ${{{{ steps.app-token.outputs.token }}}}
           TOUCHSTONE_STATE_KEY: ${{{{ secrets.TOUCHSTONE_STATE_KEY }}}}
+          TOUCHSTONE_CANDIDATE_ID: ${{{{ inputs.candidate_id }}}}
+          TOUCHSTONE_DECISION: ${{{{ inputs.decision }}}}
         with:
           stage: publish
           version: '{package_version}'
       - uses: actions/upload-artifact@{pins.upload_artifact}
+        if: always()
         with:
           name: touchstone-publish-${{{{ github.run_id }}}}
           path: .touchstone/hosted/publish

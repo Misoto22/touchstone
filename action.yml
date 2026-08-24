@@ -7,9 +7,27 @@ inputs:
   version:
     description: Exact touchstone-agent package version
     required: true
+outputs:
+  run_id:
+    value: ${{ steps.runtime.outputs.run_id }}
+  outcome:
+    value: ${{ steps.runtime.outputs.outcome }}
+  candidate_id:
+    value: ${{ steps.runtime.outputs.candidate_id }}
+  change_state:
+    value: ${{ steps.runtime.outputs.change_state }}
+  reason_code:
+    value: ${{ steps.runtime.outputs.reason_code }}
+  clean_start_reason:
+    value: ${{ steps.runtime.outputs.clean_start_reason }}
+  should_run:
+    value: ${{ steps.runtime.outputs.should_run }}
+  partial:
+    value: ${{ steps.runtime.outputs.partial }}
 runs:
   using: composite
   steps:
     - name: Run Touchstone stage
+      id: runtime
       shell: bash
       run: '$GITHUB_ACTION_PATH/scripts/action-entrypoint.sh "${{ inputs.stage }}" "${{ inputs.version }}"'

@@ -19,6 +19,7 @@ def _config(tmp_path: Path, *, visibility: str = "public"):  # type: ignore[no-u
             visibility=visibility,
             wake_minutes=15 if visibility == "public" else 60,
             artifact_retention_days=90,
+            node_version="24",
             approval_environment="",
             auto_merge=False,
         ),

@@ -29,6 +29,9 @@ def _root_config(*, generated: str = ".touchstone/generated.toml") -> dict[str, 
             "visibility": "private",
             "wake_minutes": 60,
             "artifact_retention_days": 90,
+            "node_version": "24",
+            "codex_cli_version": "0.149.1",
+            "claude_code_version": "2.1.241",
             "auto_merge": False,
         },
         "loop": {
@@ -112,6 +115,9 @@ def test_v2_loads_generated_then_project_override(tmp_path: Path) -> None:
     assert config.generated_metadata is not None
     assert config.actions.visibility == "private"
     assert config.actions.wake_minutes == 60
+    assert config.actions.node_version == "24"
+    assert config.actions.codex_cli_version == "0.149.1"
+    assert config.actions.claude_code_version == "2.1.241"
     assert config.actions.auto_merge is False
     assert config.generated_metadata.source_digest == "sha256:test"
 
