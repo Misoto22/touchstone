@@ -189,6 +189,10 @@ def test_composite_entrypoint_executes_a_real_hosted_prepare_stage(
         "GITHUB_RUN_ID": "12345",
         "GITHUB_RUN_ATTEMPT": "1",
         "RUNNER_TEMP": str(runner_temp),
+        # Name the fixture's own repository. Inheriting this from a real CI run
+        # would make the stage reject its own configuration, which is the check
+        # working rather than the stage failing.
+        "GITHUB_REPOSITORY": "acme/next-app",
     }
     for name in (
         "OPENAI_API_KEY",

@@ -140,7 +140,7 @@ def test_analysis_reuses_the_exact_credential_free_preparation(tmp_path: Path) -
     modules = repository / "node_modules"
     modules.mkdir()
     (modules / "marker.txt").write_text("prepared\n", encoding="utf-8")
-    install_stage(config, for_stage="analysis", env={})
+    install_stage(config, for_stage="verify", env={})
     worktree = _worktree(repository, tmp_path / "analysis-worktree")
 
     reason = _reuse_prepared_dependencies(
@@ -158,7 +158,7 @@ def test_analysis_reuses_the_exact_credential_free_preparation(tmp_path: Path) -
 def test_a_stale_attestation_fails_closed_beside_a_model_credential(tmp_path: Path) -> None:
     repository = _repository(tmp_path)
     config = _config(repository)
-    install_stage(config, for_stage="analysis", env={})
+    install_stage(config, for_stage="verify", env={})
     (repository / "src" / "extra.js").write_text("export default 2;\n", encoding="utf-8")
     _git(repository, "add", "-A")
     _git(repository, "commit", "-m", "move HEAD")
@@ -178,7 +178,7 @@ def test_a_stale_attestation_fails_closed_beside_a_model_credential(tmp_path: Pa
 def test_a_changed_lockfile_fails_closed_beside_a_model_credential(tmp_path: Path) -> None:
     repository = _repository(tmp_path)
     config = _config(repository)
-    install_stage(config, for_stage="analysis", env={})
+    install_stage(config, for_stage="verify", env={})
     worktree = _worktree(repository, tmp_path / "analysis-worktree")
     (worktree / "package-lock.json").write_text('{"lockfileVersion":4}\n', encoding="utf-8")
 
@@ -243,7 +243,7 @@ def test_a_blocked_preparation_stops_the_credential_free_install(
     )
 
     with pytest.raises(ConfigError, match="before credentials"):
-        install_stage(config, for_stage="analysis", env={})
+        install_stage(config, for_stage="verify", env={})
 
 
 def test_an_attestation_directory_cannot_escape_the_repository(tmp_path: Path) -> None:
@@ -261,7 +261,7 @@ def test_an_attestation_directory_cannot_escape_the_repository(tmp_path: Path) -
 def test_a_corrupt_attestation_fails_closed_but_stays_recoverable(tmp_path: Path) -> None:
     repository = _repository(tmp_path)
     config = _config(repository)
-    install_stage(config, for_stage="analysis", env={})
+    install_stage(config, for_stage="verify", env={})
     (repository / ".touchstone" / "hosted" / "install" / "preparation.json").write_text(
         "not json at all", encoding="utf-8"
     )
@@ -284,3 +284,29 @@ def test_a_corrupt_attestation_fails_closed_but_stays_recoverable(tmp_path: Path
 
     assert with_credential == "preparation-attestation-invalid"
     assert without_credential == ""
+
+
+def test_the_analysis_install_also_prepares_the_agent_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only the analysis stage installs the Agent CLI; every stage prepares the project."""
+    from touchstone.hosted import runtime
+
+    repository = _repository(tmp_path)
+    config = _config(repository)
+    calls: list[str] = []
+    monkeypatch.setattr(
+        runtime,
+        "_ensure_engine",
+        lambda _config, _env, allow_install=False: calls.append(f"install={allow_install}"),
+    )
+
+    analysis = install_stage(config, for_stage="analysis", env={})
+    calls_after_analysis = list(calls)
+    verify = install_stage(config, for_stage="verify", env={})
+
+    assert calls_after_analysis == ["install=True"]
+    # Verify prepares the project without touching the Agent runtime.
+    assert calls == calls_after_analysis
+    assert analysis is not None and verify is not None
+    assert analysis.head_sha == verify.head_sha
