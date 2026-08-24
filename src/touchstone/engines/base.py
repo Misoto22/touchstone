@@ -17,10 +17,17 @@ from touchstone.execution import Executor
 #: How an engine says it was present and thinking but could not act.
 #:
 #: A session that cannot write is not a session that found nothing, and telling
-#: them apart cannot be left to the exit code: `codex exec` exits 0 after every
-#: one of its file writes was refused. On a host that forbids unprivileged uid
-#: mapping, bubblewrap cannot bring up loopback inside its namespace, so the
-#: sandbox never starts and every write fails.
+#: them apart cannot be left to the exit code. On a host that forbids
+#: unprivileged uid mapping, bubblewrap cannot bring up loopback inside its
+#: namespace, so the sandbox never starts and every write fails.
+#:
+#: The sandbox helper is not the part that hides this. Run directly in a
+#: container that withholds unprivileged user namespaces, `codex sandbox` fails
+#: the write and exits 1, saying why. It is `codex exec` that exits 0: each
+#: refused write is one failed tool call, the model reasons past it, says in
+#: plain words that it was blocked, and the agent loop ends normally. So the
+#: transcript is not a convenient place to look for this — it is the only place
+#: that carries it.
 #:
 #: Matched against the transcript, which is where the engine is honest. But the
 #: transcript is also where the engine *quotes the repository*, and an audit of
