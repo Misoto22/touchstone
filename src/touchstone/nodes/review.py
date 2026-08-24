@@ -60,8 +60,16 @@ def parse_review(raw: str) -> ReviewAnswer:
     return ReviewAnswer("valid", verdict=verdict, reason=reason)
 
 
-def _reviewable_diff(context, worktree: str, base: str) -> str | None:  # type: ignore[no-untyped-def]
-    """Everything the commit will carry, including files that do not exist yet.
+@dataclass(frozen=True, slots=True)
+class _Reviewable:
+    """The diff to review, or why no reviewable one could be produced."""
+
+    diff: str = ""
+    refusal: str = ""
+
+
+def _reviewable_diff(context, worktree: str, base: str) -> _Reviewable:  # type: ignore[no-untyped-def]
+    """The change exactly as the commit will make it, whole or not at all.
 
     `git diff <base>` lists tracked changes only, and the commit is `git add -A`,
     which sweeps untracked files as well. So a change that adds a module and its
@@ -76,19 +84,35 @@ def _reviewable_diff(context, worktree: str, base: str) -> str | None:  # type: 
 
     `--intent-to-add` records paths without their content, which is what makes
     them appear in `git diff` at all. It stages nothing the publishing
-    `git add -A` would not stage, and skips ignored files on the same rules, so
-    what the reviewer reads is what the commit will contain.
+    `git add -A` would not stage, and skips ignored files on the same rules.
 
-    Returns `None` rather than the narrower diff when the staging fails.
-    Falling back would review a subset while reporting a verdict on the whole,
-    which is the failure this function exists to remove.
+    `DIFF_LIMIT` is then a refusal, not a truncation, and that is the half of
+    this function that was learned the hard way. Slicing was survivable while
+    new files were invisible: whatever was cut was tracked work the reviewer had
+    at least partly seen. Once new files are included, a single large generated
+    one sorts ahead of `z.py` and pushes a security-sensitive edit past the cut
+    — a diff that reads complete, and a verdict returned on a change nobody
+    read. Reviewing a subset and answering for the whole is the defect this
+    function exists to remove; a size limit is no excuse to reintroduce it.
+
+    Parking a change too big to review whole is the correct cost. The loop
+    fixes one finding at a time, so a diff of this size is already outside what
+    an unattended merge should carry.
     """
     staged = context.executor.run(
         ["git", "-C", worktree, "add", "--all", "--intent-to-add"], timeout=120
     )
     if not staged.ok:
-        return None
-    return context.executor.run(["git", "-C", worktree, "diff", base], timeout=180).stdout
+        return _Reviewable(refusal="the change could not be staged for review in full")
+    diff = context.executor.run(["git", "-C", worktree, "diff", base], timeout=180).stdout
+    if len(diff) > DIFF_LIMIT:
+        return _Reviewable(
+            refusal=(
+                f"the change is {len(diff)} characters, over the {DIFF_LIMIT} a single "
+                "review can carry; it needs a person, or splitting"
+            )
+        )
+    return _Reviewable(diff=diff)
 
 
 def run(state: dict[str, Any]) -> dict[str, Any]:
@@ -101,17 +125,14 @@ def run(state: dict[str, Any]) -> dict[str, Any]:
 
     brief = Template(loop.review_prompt()).safe_substitute(dict(loop.context))
 
-    diff = _reviewable_diff(context, worktree, base)
-    if diff is None:
-        return {
-            "verdict": "skipped",
-            "verdict_reason": "the diff under review could not be made complete",
-        }
+    reviewable = _reviewable_diff(context, worktree, base)
+    if reviewable.refusal:
+        return {"verdict": "skipped", "verdict_reason": reviewable.refusal}
     finding = state.get("finding", {})
     prompt = (
         f"{brief}\n\n## The change under review\n\n### Stated intent\n\n"
         f"{finding.get('title', '')} — {finding.get('summary', '')}\n\n"
-        f"### Diff\n\n```diff\n{diff[:DIFF_LIMIT]}\n```"
+        f"### Diff\n\n```diff\n{reviewable.diff}\n```"
     )
 
     session = context.engine.review(prompt, worktree=worktree, schema=SCHEMA)

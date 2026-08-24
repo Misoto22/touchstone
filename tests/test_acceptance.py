@@ -169,24 +169,27 @@ def test_the_diff_is_truncated_without_a_pipe() -> None:
     """`| head -c` closes the pipe, git takes SIGPIPE, and under `pipefail` the
     whole run dies — silently, twenty-two minutes and one correct finding in.
     It survived every earlier test because only a low-risk finding reaches this
-    line, and every finding until then had been medium."""
-    import ast
+    line, and every finding until then had been medium.
 
-    tree = ast.parse(Path(review.__file__).read_text(encoding="utf-8"))
-    # The truncation is a slice in Python, not an argument to another process.
-    # Asserting on the source text would only prove the comment explaining this
-    # still mentions `head -c`, which is how this test failed when it was first
-    # written — testing the prose rather than the behaviour.
-    slices = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Slice)
-    ]
-    assert slices, "the diff is not sliced anywhere"
-    assert any(
-        isinstance(node.slice.upper, ast.Name) and node.slice.upper.id == "DIFF_LIMIT"
-        for node in slices
-    ), "the diff is not bounded by DIFF_LIMIT"
+    The bound is now a refusal rather than a slice, which answers the same
+    concern more completely: nothing is piped, and nothing is reviewed in
+    part."""
+
+    from touchstone.execution import Result
+    from touchstone.nodes.review import _reviewable_diff
+
+    class _Executor:
+        def run(self, argv, timeout=None):  # type: ignore[no-untyped-def]
+            if "--intent-to-add" in argv:
+                return Result(code=0, stdout="", stderr="")
+            return Result(code=0, stdout="x" * (review.DIFF_LIMIT + 1), stderr="")
+
+    class _Context:
+        executor = _Executor()
+
+    reviewable = _reviewable_diff(_Context(), "/nowhere", "base-ref")
+    assert not reviewable.diff, "an oversized diff was handed to the reviewer anyway"
+    assert str(review.DIFF_LIMIT) in reviewable.refusal
     assert review.DIFF_LIMIT == 60_000
 
 
@@ -572,9 +575,10 @@ def test_the_reviewer_sees_the_files_the_commit_will_create(tmp_path) -> None:
     class _Context:
         executor = LocalExecutor()
 
-    diff = _reviewable_diff(_Context(), str(repo), "base-ref")
+    reviewable = _reviewable_diff(_Context(), str(repo), "base-ref")
 
-    assert diff is not None
+    assert not reviewable.refusal
+    diff = reviewable.diff
     assert "existing.py" in diff, "the tracked change is missing"
     assert "brand_new.py" in diff, "a file the commit will create is missing from the review"
     assert "def helper() -> int:" in diff, "the new file's contents never reach the reviewer"
@@ -595,4 +599,47 @@ def test_an_incomplete_diff_is_refused_rather_than_narrowed(monkeypatch, tmp_pat
     class _Context:
         executor = _Executor()
 
-    assert _reviewable_diff(_Context(), str(tmp_path), "base-ref") is None
+    reviewable = _reviewable_diff(_Context(), str(tmp_path), "base-ref")
+    assert not reviewable.diff
+    assert reviewable.refusal
+
+
+def test_a_large_new_file_cannot_push_a_tracked_edit_out_of_the_review(tmp_path) -> None:
+    """The exact case the size bound had to become a refusal to answer.
+
+    Git emits patches in path order. A generated `a_generated.txt` therefore
+    sorts ahead of `z.py`, and while the bound was a slice the reviewer got the
+    generated file and returned a verdict on a change that also edited `z.py`.
+    Before new files were included at all the tracked edit was always visible,
+    so including them without this would have traded one blindness for a worse
+    one.
+    """
+    import subprocess
+
+    from touchstone.execution import LocalExecutor
+    from touchstone.nodes.review import DIFF_LIMIT, _reviewable_diff
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*argv: str) -> None:
+        subprocess.run(["git", "-C", str(repo), *argv], check=True, capture_output=True)
+
+    git("init", "-q", ".")
+    git("config", "user.email", "t@example.com")
+    git("config", "user.name", "t")
+    (repo / "z.py").write_text("SECRET = read_from_env()\n", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-qm", "base")
+    git("branch", "-q", "base-ref")
+
+    (repo / "z.py").write_text("SECRET = 'hardcoded'\n", encoding="utf-8")
+    (repo / "a_generated.txt").write_text("x\n" * DIFF_LIMIT, encoding="utf-8")
+
+    class _Context:
+        executor = LocalExecutor()
+
+    reviewable = _reviewable_diff(_Context(), str(repo), "base-ref")
+
+    assert reviewable.refusal, "an oversized change was reviewed on whatever fit"
+    assert not reviewable.diff
