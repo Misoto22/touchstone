@@ -215,6 +215,28 @@ def _actions_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def _actions_setup(args: argparse.Namespace) -> int:
+    import getpass
+
+    from touchstone.hosted.app_setup import ActionsSetup, SetupOptions
+
+    config = load(args.config)
+    manual_code = getpass.getpass("One-time GitHub App manifest code: ") if args.manual_code else ""
+    report = ActionsSetup(config).run(
+        SetupOptions(
+            check=args.check,
+            owner_type="organization" if args.organization else "user",
+            callback_port=args.callback_port,
+            callback_timeout_seconds=args.callback_timeout,
+            manual_code=manual_code,
+        )
+    )
+    print(f"GitHub Actions setup: {report.state} ({report.step})")
+    if report.repair:
+        print(f"repair: {report.repair}")
+    return 0 if report.state == "complete" else 3
+
+
 def _hosted(args: argparse.Namespace) -> int:
     from touchstone.hosted.runtime import CandidateIntegrityError, run_stage
 
@@ -479,6 +501,21 @@ def main(argv: list[str] | None = None) -> int:
         "--check", action="store_true", help="report drift without writing (exit 3 on drift)"
     )
     actions_init.set_defaults(handler=_actions_init)
+    actions_setup = actions_sub.add_parser(
+        "setup", help="create and install the owner-controlled publishing App"
+    )
+    actions_setup.add_argument("--check", action="store_true", help="inspect without mutation")
+    actions_setup.add_argument(
+        "--organization", action="store_true", help="create the App under the repository owner org"
+    )
+    actions_setup.add_argument("--callback-port", type=int, default=8917)
+    actions_setup.add_argument("--callback-timeout", type=int, default=300)
+    actions_setup.add_argument(
+        "--manual-code",
+        action="store_true",
+        help="prompt for a one-time manifest code instead of using loopback callback",
+    )
+    actions_setup.set_defaults(handler=_actions_setup)
 
     hosted = sub.add_parser("hosted", help="run an internal GitHub-hosted trust stage")
     hosted.add_argument("stage", choices=("prepare", "analysis", "publish", "snapshot"))

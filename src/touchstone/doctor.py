@@ -29,6 +29,18 @@ class DoctorForge(Protocol):
     def latest_run(self, workflow: str, *, branch: str | None = None) -> str: ...
 
 
+class DoctorActions(Protocol):
+    def actions_secret_names(self) -> set[str]: ...
+
+    def installation(self) -> dict[str, object] | None: ...
+
+    def workflow(self, name: str = "touchstone.yml") -> dict[str, object] | None: ...
+
+    def repository_info(self) -> dict[str, object] | None: ...
+
+    def environment(self, name: str) -> dict[str, object] | None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class CheckResult:
     id: str
@@ -64,6 +76,7 @@ class DoctorContext:
     scheduler_status: SchedulerStatus | None = None
     online: bool = False
     scheduler_error: str | None = None
+    actions: DoctorActions | None = None
 
 
 class _OfflineForge:
@@ -102,6 +115,11 @@ def build_context(config: Config, *, offline: bool = False) -> DoctorContext:
             scheduler_status = current_scheduler(execution.LocalExecutor()).status(config)
         except RuntimeError as exc:
             scheduler_error = str(exc)
+    actions = None
+    if not offline and config.forge.slug and "gh" in commands:
+        from touchstone.hosted.github_api import GitHubCLI
+
+        actions = GitHubCLI(config.forge.slug)
     return DoctorContext(
         commands,
         forge,
@@ -110,6 +128,7 @@ def build_context(config: Config, *, offline: bool = False) -> DoctorContext:
         scheduler_status,
         online=not offline and bool(config.forge.slug),
         scheduler_error=scheduler_error,
+        actions=actions,
     )
 
 
@@ -388,7 +407,182 @@ def run_doctor(config: Config, context: DoctorContext) -> DoctorReport:
                 None if not missing else "Run 'touchstone install-scheduler'.",
             )
         )
+    checks.extend(_actions_checks(config, context))
     return DoctorReport(tuple(checks))
+
+
+def _actions_checks(config: Config, context: DoctorContext) -> list[CheckResult]:
+    import re
+
+    path = config.repo_path / ".github" / "workflows" / "touchstone.yml"
+    if not path.is_file():
+        return [
+            CheckResult(
+                "actions.workflow",
+                "WARN",
+                "GitHub-hosted execution is not installed",
+                "Run 'touchstone actions init', review the diff, and commit it.",
+            )
+        ]
+    text = path.read_text(encoding="utf-8")
+    first_party = re.search(r"uses:\s*Misoto22/touchstone@([0-9a-f]{40})\s*$", text, re.M)
+    references = re.findall(r"^\s*uses:\s*[^@\s]+@([^\s]+)\s*$", text, re.M)
+    immutable = bool(references) and all(re.fullmatch(r"[0-9a-f]{40}", ref) for ref in references)
+    checks = [
+        CheckResult(
+            "actions.pins",
+            "PASS" if immutable else "FAIL",
+            "every Action reference uses an immutable commit SHA"
+            if immutable
+            else "one or more Action references are mutable or malformed",
+            None if immutable else "Regenerate with 'touchstone actions init'.",
+        )
+    ]
+    if first_party is None:
+        checks.append(
+            CheckResult(
+                "actions.workflow",
+                "FAIL",
+                "Touchstone Action reference is missing or mutable",
+                "Regenerate with an immutable --action-sha.",
+            )
+        )
+    else:
+        from touchstone.hosted.workflow import ActionPins, actions_diff, render_workflow
+
+        rendered = render_workflow(config, ActionPins(), action_sha=first_party.group(1))
+        drift = actions_diff(config.repo_path, rendered)
+        checks.append(
+            CheckResult(
+                "actions.workflow",
+                "FAIL" if drift.changed else "PASS",
+                "repository-owned workflow is current"
+                if not drift.changed
+                else "repository-owned workflow has drifted from configuration",
+                "Review 'touchstone actions init --check', then regenerate."
+                if drift.changed
+                else None,
+            )
+        )
+    checks.extend(
+        [
+            CheckResult(
+                "actions.pr_only",
+                "PASS"
+                if not config.actions.auto_merge and "auto-merge" not in text.lower()
+                else "FAIL",
+                "hosted publication is PR-only and auto-merge is disabled"
+                if not config.actions.auto_merge and "auto-merge" not in text.lower()
+                else "hosted publication is not demonstrably PR-only",
+                None
+                if not config.actions.auto_merge and "auto-merge" not in text.lower()
+                else "Set actions.auto_merge=false and regenerate the workflow.",
+            ),
+            CheckResult(
+                "actions.retention",
+                "PASS" if 1 <= config.actions.artifact_retention_days <= 90 else "FAIL",
+                f"encrypted artifact retention: {config.actions.artifact_retention_days} days",
+                None
+                if 1 <= config.actions.artifact_retention_days <= 90
+                else "Set actions.artifact_retention_days between 1 and 90.",
+            ),
+        ]
+    )
+    if context.actions is None:
+        checks.append(
+            CheckResult(
+                "actions.remote",
+                "WARN",
+                "remote hosted configuration was not checked",
+                "Authenticate gh and rerun doctor without --offline.",
+            )
+        )
+        return checks
+
+    workflow = context.actions.workflow()
+    workflow_active = isinstance(workflow, dict) and workflow.get("state") == "active"
+    checks.append(
+        CheckResult(
+            "actions.remote",
+            "PASS" if workflow_active else "FAIL",
+            "GitHub workflow is enabled"
+            if workflow_active
+            else "GitHub workflow is absent or disabled",
+            None if workflow_active else "Push the workflow and enable Actions for the repository.",
+        )
+    )
+    repository = context.actions.repository_info()
+    expected_private = config.actions.visibility == "private"
+    visibility_matches = (
+        isinstance(repository, dict) and repository.get("private") is expected_private
+    )
+    checks.append(
+        CheckResult(
+            "actions.visibility",
+            "PASS" if visibility_matches else "FAIL",
+            f"repository visibility matches configured {config.actions.visibility} cadence"
+            if visibility_matches
+            else "repository visibility and configured hosted cadence disagree",
+            None
+            if visibility_matches
+            else "Correct actions.visibility and regenerate the workflow.",
+        )
+    )
+    required_secrets = {
+        "OPENAI_API_KEY" if config.engine.name == "codex" else "ANTHROPIC_API_KEY",
+        "TOUCHSTONE_APP_ID",
+        "TOUCHSTONE_APP_PRIVATE_KEY",
+        "TOUCHSTONE_STATE_KEY",
+    }
+    missing_secrets = sorted(required_secrets - context.actions.actions_secret_names())
+    checks.append(
+        CheckResult(
+            "actions.secrets",
+            "PASS" if not missing_secrets else "FAIL",
+            "required Actions secret metadata exists"
+            if not missing_secrets
+            else f"missing Actions secret metadata: {', '.join(missing_secrets)}",
+            None
+            if not missing_secrets
+            else "Run 'touchstone actions setup' and add the model key.",
+        )
+    )
+    installation = context.actions.installation()
+    permissions = installation.get("permissions") if isinstance(installation, dict) else None
+    required_permissions = {
+        "actions": "read",
+        "contents": "write",
+        "issues": "write",
+        "pull_requests": "write",
+    }
+    app_ok = isinstance(permissions, dict) and all(
+        permissions.get(name) == access for name, access in required_permissions.items()
+    )
+    checks.append(
+        CheckResult(
+            "actions.app",
+            "PASS" if app_ok else "FAIL",
+            "publishing App is installed with the expected permissions"
+            if app_ok
+            else "publishing App installation or permissions are incomplete",
+            None if app_ok else "Rerun 'touchstone actions setup --check' and repair the App.",
+        )
+    )
+    if config.actions.approval_environment:
+        environment = context.actions.environment(config.actions.approval_environment)
+        checks.append(
+            CheckResult(
+                "actions.environment",
+                "PASS" if environment else "FAIL",
+                f"publish Environment {config.actions.approval_environment!r} exists"
+                if environment
+                else f"publish Environment {config.actions.approval_environment!r} is missing",
+                None
+                if environment
+                else "Create the configured Environment in repository settings.",
+            )
+        )
+    return checks
 
 
 def _labels(config: Config) -> tuple[str, ...]:
@@ -569,6 +763,7 @@ __all__ = [
     "CheckResult",
     "DoctorContext",
     "DoctorReport",
+    "_actions_checks",
     "build_context",
     "run_doctor",
 ]
