@@ -18,6 +18,28 @@ from touchstone.scheduling.base import (
 from touchstone.scheduling.model import parse_schedule
 
 
+def _start_timeout(config: Any) -> int:
+    """Longer than the engine's own ceiling, deliberately.
+
+    `DefaultTimeoutStartUSec` is 90 seconds on a stock systemd, and a `oneshot`
+    service is held to it. An audit session runs for minutes — seven, measured,
+    on the loop this was written for — so without this every scheduled run is
+    killed before it finishes, on every host, at every interval.
+
+    It fails the worst way available: systemd kills the process, so no node
+    writes a ledger row and no verdict is recorded. The evidence is a service
+    that ran and a queue that never moves, which reads as a loop finding
+    nothing rather than a loop being stopped.
+
+    So the engine has to give up first, and its ceiling is what the run reports
+    when it does. A run makes up to two engine calls — the audit and the
+    independent review — hence twice `timeout_seconds`, plus room for the git
+    and forge work between them. systemd stays a last resort against a wedged
+    process, not a competitor to the timeout that produces a diagnosis.
+    """
+    return 2 * int(config.engine.timeout_seconds) + 600
+
+
 class SystemdScheduler:
     name = "systemd"
 
@@ -100,11 +122,17 @@ class SystemdScheduler:
             )
             service = (
                 "[Unit]\n"
-                f"Description=Touchstone loop: {name}\n\n"
+                f"Description=Touchstone loop: {name}\n"
+                # A run needs the forge and the engine. Not a promise the
+                # network works, only that the job does not start before it
+                # could.
+                "After=network-online.target\n"
+                "Wants=network-online.target\n\n"
                 "[Service]\n"
                 "Type=oneshot\n"
                 f"WorkingDirectory={Path(config.repo_path).resolve()}\n"
                 f'Environment="PATH={command_path(self._executable)}"\n'
+                f"TimeoutStartSec={_start_timeout(config)}\n"
                 f"ExecStart={command}\n"
             )
             calendar = parse_schedule(loop.schedule).systemd_calendar()

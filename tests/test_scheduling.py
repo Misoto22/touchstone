@@ -17,6 +17,9 @@ def _config(tmp_path: Path):  # type: ignore[no-untyped-def]
         source=SimpleNamespace(path=(tmp_path / "touchstone.toml").resolve()),
         repo_path=(tmp_path / "project").resolve(),
         state_dir=(tmp_path / "state").resolve(),
+        # The unit's start timeout is derived from this: systemd must not win a
+        # race against the timeout that produces a diagnosis.
+        engine=SimpleNamespace(timeout_seconds=2700),
         loops={
             "code": SimpleNamespace(name="code", schedule="hourly"),
             "weekly": SimpleNamespace(name="weekly", schedule="weekly@MON,09:30"),
@@ -137,3 +140,26 @@ def test_systemd_uninstall_refuses_to_hide_a_disable_failure(tmp_path: Path) -> 
 
     with pytest.raises(RuntimeError, match="disable"):
         scheduler.uninstall(_config(tmp_path))
+
+
+def test_the_generated_unit_lets_the_engine_give_up_first(tmp_path) -> None:
+    """A `oneshot` service inherits `DefaultTimeoutStartUSec`, 90 seconds on a
+    stock systemd, while an audit session runs for minutes. Left at the default
+    every scheduled run is killed before it finishes — and killed by systemd,
+    so no node writes a ledger row and the loop looks like it found nothing.
+    """
+    from touchstone.scheduling.systemd import SystemdScheduler, _start_timeout
+
+    config = _config(tmp_path)
+    rendered = SystemdScheduler(LocalExecutor(), executable=Path("/bin/touchstone"))._render(
+        config, tmp_path
+    )
+    service = next(text for path, text in rendered.items() if path.suffix == ".service")
+
+    timeout = _start_timeout(config)
+    assert f"TimeoutStartSec={timeout}\n" in service
+    assert timeout > config.engine.timeout_seconds, (
+        "systemd would kill the run before the engine reaches its own ceiling, "
+        "and a systemd kill records nothing"
+    )
+    assert "After=network-online.target" in service
