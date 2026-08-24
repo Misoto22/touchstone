@@ -251,14 +251,22 @@ def _state_dir(raw: dict[str, Any], base_dir: Path) -> Path:
 
 
 def _loops(raw: dict[str, Any], base_dir: Path) -> dict[str, LoopConfig]:
+    from touchstone.scheduling import ScheduleError, parse_schedule
+
     result: dict[str, LoopConfig] = {}
     for name, table in raw.items():
+        schedule = table.get("schedule")
+        if schedule is not None:
+            try:
+                parse_schedule(str(schedule))
+            except ScheduleError as exc:
+                raise ConfigError(f"loop.{name}.schedule: {exc}") from None
         result[name] = LoopConfig(
             name=name,
             brief=str(_required(table, "brief", f"loop.{name}")),
             label=str(_required(table, "label", f"loop.{name}")),
             config_dir=base_dir,
-            schedule=table.get("schedule"),
+            schedule=str(schedule) if schedule is not None else None,
             protected_paths=tuple(table.get("protected_paths", ())),
             require_change_under=tuple(table.get("require_change_under", ())),
             confine_to=tuple(table.get("confine_to", ())),
