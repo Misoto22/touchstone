@@ -19,6 +19,7 @@ classifiers = [
     "Topic :: Software Development :: Quality Assurance",
 ]
 dependencies = [
+    "cryptography>=44.0",
     "langgraph>=1.0",
     # SQLite, not Postgres. The loop's value depends on it not sharing fate
     # with the system it audits, and a checkpoint file next to the ledger is
