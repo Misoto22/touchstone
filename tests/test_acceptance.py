@@ -281,7 +281,10 @@ def test_the_shipped_example_still_has_its_protected_paths() -> None:
     import tomllib
 
     root = Path(__file__).resolve().parents[1]
-    raw = tomllib.loads((root / "touchstone.example.toml").read_text(encoding="utf-8"))
+    example = root / "touchstone.example.toml"
+    raw = tomllib.loads(example.read_text(encoding="utf-8"))
+    assert raw["version"] == 2
+    assert (root / raw["generated"]).is_file()
     for name, table in raw["loop"].items():
         assert table.get("protected_paths"), f"[loop.{name}] has no protected paths"
         assert "protected_paths" not in table.get("context", {}), (
@@ -298,7 +301,9 @@ def test_every_placeholder_a_brief_uses_is_supplied() -> None:
     import tomllib
 
     root = Path(__file__).resolve().parents[1]
-    raw = tomllib.loads((root / "touchstone.example.toml").read_text(encoding="utf-8"))
+    example = root / "touchstone.example.toml"
+    raw = tomllib.loads(example.read_text(encoding="utf-8"))
+    loaded = load(example)
     brief_root = root / "src" / "touchstone" / "resources" / "briefs"
     shared = re.findall(r"\$(\w+)", (brief_root / "review.md").read_text(encoding="utf-8"))
 
@@ -311,7 +316,7 @@ def test_every_placeholder_a_brief_uses_is_supplied() -> None:
         )
         assert brief.exists(), f"[loop.{name}] points at a brief that is not there: {brief}"
         used = set(re.findall(r"\$(\w+)", brief.read_text(encoding="utf-8"))) | set(shared)
-        missing = used - set(table.get("context", {}))
+        missing = used - set(dict(loaded.loop(name).context))
         assert not missing, f"[loop.{name}.context] is missing {sorted(missing)}"
 
 

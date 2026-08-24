@@ -17,7 +17,17 @@ def test_documented_first_run_commands_exist() -> None:
         text=True,
     )
 
-    for command in ("init", "doctor", "setup", "run", "status", "install-scheduler"):
+    for command in (
+        "init",
+        "profile",
+        "doctor",
+        "setup",
+        "actions",
+        "run",
+        "run-due",
+        "status",
+        "install-scheduler",
+    ):
         assert command in result.stdout
 
 
@@ -36,6 +46,55 @@ def test_readme_starts_with_the_installable_first_run() -> None:
     assert positions == sorted(positions)
     assert getting_started.count("touchstone doctor") == 2
     assert "touchstone install-scheduler" not in getting_started
+
+
+def test_readme_documents_profiles_and_both_execution_backends() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    for command in (
+        "touchstone profile detect",
+        "touchstone profile refresh --check",
+        "touchstone actions init",
+        "touchstone actions setup",
+        "touchstone actions setup --check",
+        "touchstone run-due",
+    ):
+        assert command in readme
+    for profile in (
+        "generic",
+        "javascript",
+        "node",
+        "typescript",
+        "react",
+        "nextjs",
+        "python",
+        "fastapi",
+        "django",
+    ):
+        assert f"`{profile}`" in readme
+
+
+def test_readme_uses_the_current_pr_only_resume_contract() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "approve|close|reanalyze" in readme
+    assert "resume <thread-id> merge" not in readme
+    assert "enable auto-merge" not in readme.lower()
+    assert "auto-merge remains disabled" in readme.lower()
+
+
+def test_readme_links_architecture_and_operator_context() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    for target in (
+        "CONTEXT.md",
+        "docs/adr/",
+        "docs/superpowers/specs/2026-08-24-stack-profiles-actions-design.md",
+    ):
+        url = f"https://github.com/Misoto22/touchstone/blob/main/{target}"
+        if target.endswith("/"):
+            url = f"https://github.com/Misoto22/touchstone/tree/main/{target}"
+        assert url in readme
 
 
 def test_readme_links_the_published_release() -> None:
@@ -59,7 +118,9 @@ def test_readme_resources_work_outside_github() -> None:
         if not target.startswith(("https://", "http://", "#", "mailto:"))
     )
 
-    assert relative_targets == []
+    assert relative_targets
+    for target in relative_targets:
+        assert (ROOT / target).is_file(), f"README resource does not exist: {target}"
 
 
 def test_public_policy_files_are_linked_from_the_readme() -> None:

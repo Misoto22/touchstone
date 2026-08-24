@@ -2,6 +2,32 @@
 
 All notable user-facing changes are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Declarative built-in Profiles for generic, JavaScript, Node.js, TypeScript, React, Next.js, Python, FastAPI, and Django repositories.
+- Bounded monorepo Target discovery for npm, Yarn, pnpm, uv, and PDM workspaces, including dependency-aware affected scope.
+- Schema-v2 project/generated configuration ownership, deterministic Profile refresh, and an explicit backup-first v1-to-v2 migration command.
+- Structured preparation and Validation Gates with disabled-by-default detected candidates.
+- Durable Due Slots shared by native schedulers and GitHub-hosted wake signals.
+- Repository-owned GitHub Actions workflow generation, immutable Action pins, encrypted state/candidate artifacts, and split Prepare, Analysis, Publish, and Snapshot trust stages.
+- Resumable owner-controlled GitHub App Manifest setup and hosted setup diagnostics.
+
+### Changed
+
+- Run outcomes and pull-request lifecycle states are separate machine contracts.
+- Publication is PR-only by default; Touchstone no longer enables or requires GitHub auto-merge.
+- `status` is read-only, while `reconcile` performs explicit lifecycle reconciliation.
+- Operator resume decisions are `approve`, `close`, or `reanalyze` and remain bound to the reviewed candidate.
+
+### Security
+
+- Model credentials and GitHub publishing credentials cannot coexist in one hosted stage.
+- Hosted bundles use AES-256-GCM with manifest AAD, fresh nonces, path-safe archives, configuration/Profile lineage checks, and ciphertext digests.
+- GitHub App private keys are sent to repository secrets through stdin and are never persisted by Touchstone.
+- Generated workflows run only from default-branch schedule or manual dispatch and pin every Action to a 40-character commit SHA.
+
 ## [0.1.2] - 2026-08-24
 
 ### Fixed
