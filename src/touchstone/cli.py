@@ -104,6 +104,83 @@ def _status(args: argparse.Namespace) -> int:
     return 0
 
 
+def _scheduler(config):  # type: ignore[no-untyped-def]
+    from touchstone import execution
+    from touchstone.scheduling import current_scheduler
+
+    try:
+        return current_scheduler(execution.build(config))
+    except RuntimeError as exc:
+        raise ConfigError(str(exc)) from None
+
+
+def _install_scheduler(args: argparse.Namespace) -> int:
+    import json
+
+    config = load(args.config)
+    try:
+        report = _scheduler(config).install(config, target=args.output, dry_run=args.dry_run)
+    except RuntimeError as exc:
+        raise ConfigError(str(exc)) from None
+    payload = {
+        "files": [str(path) for path in report.files],
+        "changed": [str(path) for path in report.changed],
+        "commands": list(report.commands),
+        "dry_run": args.dry_run,
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        verb = "would write" if args.dry_run else "installed"
+        for path in report.files:
+            print(f"{verb}: {path}")
+        for command in report.commands:
+            print(f"inspect: {command}")
+    return 0
+
+
+def _uninstall_scheduler(args: argparse.Namespace) -> int:
+    import json
+
+    config = load(args.config)
+    try:
+        report = _scheduler(config).uninstall(config, target=args.output, dry_run=args.dry_run)
+    except RuntimeError as exc:
+        raise ConfigError(str(exc)) from None
+    payload = {
+        "files": [str(path) for path in report.files],
+        "removed": [str(path) for path in report.changed],
+        "dry_run": args.dry_run,
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        verb = "would remove" if args.dry_run else "removed"
+        for path in report.changed:
+            print(f"{verb}: {path}")
+    return 0
+
+
+def _scheduler_status(args: argparse.Namespace) -> int:
+    import json
+    from dataclasses import asdict
+
+    config = load(args.config)
+    status = _scheduler(config).status(config)
+    payload = asdict(status)
+    payload["installed"] = [str(path) for path in status.installed]
+    payload["missing"] = [str(path) for path in status.missing]
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        print(f"scheduler: {status.adapter}")
+        for path in status.installed:
+            print(f"installed: {path}")
+        for path in status.missing:
+            print(f"missing: {path}")
+    return 0
+
+
 def _migrate_config(args: argparse.Namespace) -> int:
     from touchstone.migrate import migrate_config
 
@@ -173,6 +250,28 @@ def main(argv: list[str] | None = None) -> int:
     status = sub.add_parser("status", help="reconcile and report repository lifecycle state")
     status.add_argument("--json", action="store_true")
     status.set_defaults(handler=_status)
+
+    install_scheduler = sub.add_parser(
+        "install-scheduler", help="install native per-user loop timers"
+    )
+    install_scheduler.add_argument("--dry-run", action="store_true")
+    install_scheduler.add_argument("--output", type=Path, help="render without enabling")
+    install_scheduler.add_argument("--json", action="store_true")
+    install_scheduler.set_defaults(handler=_install_scheduler)
+
+    uninstall_scheduler = sub.add_parser(
+        "uninstall-scheduler", help="remove native per-user loop timers"
+    )
+    uninstall_scheduler.add_argument("--dry-run", action="store_true")
+    uninstall_scheduler.add_argument("--output", type=Path, help="remove rendered files here")
+    uninstall_scheduler.add_argument("--json", action="store_true")
+    uninstall_scheduler.set_defaults(handler=_uninstall_scheduler)
+
+    scheduler_status = sub.add_parser(
+        "scheduler-status", help="report native timer installation state"
+    )
+    scheduler_status.add_argument("--json", action="store_true")
+    scheduler_status.set_defaults(handler=_scheduler_status)
 
     config = sub.add_parser("config", help="inspect or migrate configuration")
     config_sub = config.add_subparsers(dest="config_command", required=True)
