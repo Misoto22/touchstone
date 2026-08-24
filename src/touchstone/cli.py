@@ -17,11 +17,20 @@ from touchstone.config import ConfigError, load
 def _init(args: argparse.Namespace) -> int:
     from touchstone.execution.local import LocalExecutor
     from touchstone.initialize import InitOptions, initialize
+    from touchstone.profiles.materialize import (
+        ambiguous_package_managers,
+        detect_package_managers,
+    )
 
+    executor = LocalExecutor()
+    from touchstone.discovery import discover_project
+
+    discovered = discover_project(args.path, executor)
     engine = args.engine
     model = args.model
     workflows = tuple(args.workflow or ())
     schedule = args.schedule
+    package_manager = args.package_manager
     if args.non_interactive:
         if not engine or not model or not workflows or not schedule:
             raise ConfigError(
@@ -34,23 +43,91 @@ def _init(args: argparse.Namespace) -> int:
         if not workflows:
             workflow = input("Required workflow [ci.yml]: ").strip() or "ci.yml"
             workflows = (workflow,)
-        schedule = schedule or input("Schedule [hourly]: ").strip() or "hourly"
+        schedule = schedule or input("Schedule [hourly@00]: ").strip() or "hourly@00"
+        managers = detect_package_managers(discovered.root)
+        ambiguous = ambiguous_package_managers(managers)
+        if package_manager is None and ambiguous:
+            choices = "/".join(ambiguous[0])
+            package_manager = input(f"Package manager ({choices}): ").strip() or None
     if engine not in ("codex", "claude"):
         raise ConfigError("engine must be 'codex' or 'claude'")
-    path = initialize(
+    report = initialize(
         InitOptions(
             start=args.path,
             engine=engine,
             model=model or "",
             workflows=workflows,
-            schedule=schedule or "hourly",
+            schedule=schedule or "hourly@00",
+            timezone=args.timezone,
+            profiles=tuple(args.profile or ()),
+            package_manager=package_manager,
             output=args.output,
             force=args.force,
+            discovered=discovered,
         ),
-        LocalExecutor(),
+        executor,
     )
-    print(f"wrote {path}")
+    print(f"wrote {report.root}")
+    print(f"generated {report.generated}")
     return 0
+
+
+def _profile_detect(args: argparse.Namespace) -> int:
+    import json
+    from dataclasses import asdict
+
+    from touchstone.profiles.materialize import detect_repository
+
+    discovery, matches, _catalog = detect_repository(args.path)
+    payload = {
+        "targets": [
+            {
+                "id": target.id,
+                "path": target.path.as_posix(),
+                "profiles": [
+                    match.profile for match in matches[target.id] if match.verdict == "confirmed"
+                ],
+                "matches": [asdict(match) for match in matches[target.id]],
+                "dependencies": list(target.dependencies),
+            }
+            for target in discovery.targets
+        ],
+        "candidates": [candidate.path.as_posix() for candidate in discovery.candidates],
+        "excluded": [path.as_posix() for path in discovery.excluded],
+        "warnings": list(discovery.warnings),
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        for target in payload["targets"]:
+            print(f"{target['id']}: {', '.join(target['profiles'])}")
+        for candidate in payload["candidates"]:
+            print(f"candidate: {candidate}")
+        for warning in payload["warnings"]:
+            print(f"warning: {warning}")
+    return 0
+
+
+def _profile_diff(args: argparse.Namespace) -> int:
+    from touchstone.profiles.materialize import profile_diff
+
+    report = profile_diff(load(args.config))
+    print(report.diff if report.changed else "generated Profile configuration is current")
+    return 3 if report.changed else 0
+
+
+def _profile_refresh(args: argparse.Namespace) -> int:
+    from touchstone.profiles.materialize import refresh_profiles
+
+    config = load(args.config)
+    report = refresh_profiles(config.source.path, write=args.write)
+    if report.diff:
+        print(report.diff)
+    if report.written:
+        print(f"wrote {report.path}")
+    elif not report.changed:
+        print("generated Profile configuration is current")
+    return 3 if report.changed and not args.write else 0
 
 
 def _doctor(args: argparse.Namespace) -> int:
@@ -245,9 +322,26 @@ def main(argv: list[str] | None = None) -> int:
     init.add_argument("--engine", choices=("codex", "claude"))
     init.add_argument("--model")
     init.add_argument("--workflow", action="append", help="required default-branch workflow")
-    init.add_argument("--schedule", help="hourly, daily@HH:MM, or weekly@DAY,HH:MM")
+    init.add_argument("--schedule", help="hourly@MM, daily@HH:MM, or weekly@DAY,HH:MM")
+    init.add_argument("--timezone", default="UTC", help="repository IANA timezone")
+    init.add_argument("--profile", action="append", help="explicit Profile selection")
+    init.add_argument("--package-manager", help="resolve ambiguous lockfile evidence")
     init.add_argument("--force", action="store_true", help="replace an existing config")
     init.set_defaults(handler=_init)
+
+    profile = sub.add_parser("profile", help="inspect or refresh detected stack Profiles")
+    profile_sub = profile.add_subparsers(dest="profile_command", required=True)
+    profile_detect = profile_sub.add_parser("detect", help="detect Targets and Profiles")
+    profile_detect.add_argument("--path", type=Path, default=Path.cwd())
+    profile_detect.add_argument("--json", action="store_true")
+    profile_detect.set_defaults(handler=_profile_detect)
+    profile_diff = profile_sub.add_parser("diff", help="show generated Profile drift")
+    profile_diff.set_defaults(handler=_profile_diff)
+    profile_refresh = profile_sub.add_parser("refresh", help="regenerate Profile configuration")
+    refresh_mode = profile_refresh.add_mutually_exclusive_group()
+    refresh_mode.add_argument("--check", action="store_true", help="report drift without writing")
+    refresh_mode.add_argument("--write", action="store_true", help="replace generated config")
+    profile_refresh.set_defaults(handler=_profile_refresh)
 
     doctor = sub.add_parser("doctor", help="check prerequisites without changing them")
     doctor.add_argument("--json", action="store_true")

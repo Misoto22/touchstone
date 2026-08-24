@@ -28,6 +28,17 @@ _ALLOWED = {
 _DETECT_KEYS = {"kind", "path", "name", "ecosystem"}
 _SAFE_DETECTORS = {"file", "dependency", "python-project", "node-engine"}
 _VALIDATION_KEYS = {"argv", "timeout_seconds", "capability", "enabled"}
+_BUILTIN_ORDER = (
+    "generic",
+    "javascript",
+    "node",
+    "typescript",
+    "react",
+    "nextjs",
+    "python",
+    "fastapi",
+    "django",
+)
 
 
 def load_catalog(local_dir: Path | None = None) -> ProfileCatalog:
@@ -37,6 +48,9 @@ def load_catalog(local_dir: Path | None = None) -> ProfileCatalog:
         if item.name.endswith(".toml") and item.is_file():
             definition = _parse(item.read_text(encoding="utf-8"), local=False)
             definitions[definition.name] = definition
+    definitions = {name: definitions[name] for name in _BUILTIN_ORDER if name in definitions} | {
+        name: value for name, value in definitions.items() if name not in _BUILTIN_ORDER
+    }
     if local_dir is not None and local_dir.exists():
         for path in sorted(local_dir.glob("*.toml")):
             definition = _parse(path.read_text(encoding="utf-8"), local=True)

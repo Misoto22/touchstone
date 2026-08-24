@@ -30,6 +30,7 @@ def _root_config(*, generated: str = ".touchstone/generated.toml") -> dict[str, 
                 "brief": "builtin:code-audit",
                 "label": "touchstone:audit",
                 "schedule": "hourly@00",
+                "targets": ["web"],
             }
         },
     }
@@ -89,6 +90,7 @@ def test_v2_loads_generated_then_project_override(tmp_path: Path) -> None:
     assert config.forge.required_workflows == ("ci.yml", "security.yml")
     assert config.targets["web"].path == Path("apps/web")
     assert config.targets["web"].profiles == ("javascript", "nextjs")
+    assert config.loop("code").targets == ("web",)
     assert config.generated_metadata is not None
     assert config.generated_metadata.source_digest == "sha256:test"
 

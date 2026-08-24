@@ -74,7 +74,7 @@ def test_detector_never_imports_or_executes_repository_configuration(tmp_path: P
 
 def test_builtin_catalog_loads_and_rejects_executable_local_profile(tmp_path: Path) -> None:
     catalog = load_catalog()
-    assert set(catalog.profiles) == {
+    assert tuple(catalog.profiles) == (
         "generic",
         "javascript",
         "node",
@@ -84,7 +84,7 @@ def test_builtin_catalog_loads_and_rejects_executable_local_profile(tmp_path: Pa
         "python",
         "fastapi",
         "django",
-    }
+    )
     local = tmp_path / "profiles"
     local.mkdir()
     (local / "unsafe.toml").write_text(

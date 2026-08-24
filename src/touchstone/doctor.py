@@ -126,8 +126,13 @@ def _available_commands(executor: Executor) -> frozenset[str]:
 
 def run_doctor(config: Config, context: DoctorContext) -> DoctorReport:
     checks: list[CheckResult] = [
-        CheckResult("config.schema", "PASS", "configuration schema version 1 is valid")
+        CheckResult(
+            "config.schema",
+            "PASS",
+            f"configuration schema version {config.source.schema_version} is valid",
+        )
     ]
+    checks.extend(_profile_checks(config))
     deprecated = tuple(
         name
         for name in (
@@ -392,6 +397,108 @@ def run_doctor(config: Config, context: DoctorContext) -> DoctorReport:
 def _labels(config: Config) -> tuple[str, ...]:
     labels = [*(loop.label for loop in config.loops.values()), config.forge.escalation_label]
     return tuple(dict.fromkeys(labels))
+
+
+def _profile_checks(config: Config) -> list[CheckResult]:
+    if config.source.schema_version != 2:
+        return []
+    from touchstone.profiles.materialize import (
+        ambiguous_package_managers,
+        detect_package_managers,
+        profile_diff,
+    )
+
+    checks: list[CheckResult] = []
+    generated = config.source.generated_path
+    generated_exists = generated is not None and generated.is_file()
+    checks.append(
+        CheckResult(
+            "profile.generated_file",
+            "PASS" if generated_exists else "FAIL",
+            f"generated Profile configuration: {generated}"
+            if generated_exists
+            else "generated Profile configuration is missing",
+            None if generated_exists else "Run 'touchstone profile refresh --write'.",
+        )
+    )
+    for target_id, target in config.targets.items():
+        path = config.repo_path / target.path
+        checks.append(
+            CheckResult(
+                f"target.{target_id}.path",
+                "PASS" if path.is_dir() else "FAIL",
+                f"Target {target_id!r} path: {target.path.as_posix()}"
+                if path.is_dir()
+                else f"Target {target_id!r} path is missing: {target.path.as_posix()}",
+                None if path.is_dir() else "Refresh Profiles or correct the Target override.",
+            )
+        )
+
+    live_managers = detect_package_managers(config.repo_path)
+    ambiguous = ambiguous_package_managers(live_managers)
+    selected = set(
+        config.generated_metadata.package_managers if config.generated_metadata is not None else ()
+    )
+    unresolved = tuple(group for group in ambiguous if not selected.intersection(group))
+    checks.append(
+        CheckResult(
+            "profile.package_manager",
+            "WARN" if unresolved else "PASS",
+            "ambiguous package-manager evidence: "
+            + ", ".join("/".join(group) for group in unresolved)
+            if unresolved
+            else "package-manager evidence is unambiguous or explicitly resolved",
+            "Rerun 'touchstone init --package-manager NAME' or record an explicit choice."
+            if unresolved
+            else None,
+        )
+    )
+
+    if not generated_exists:
+        return checks
+    drift = profile_diff(config)
+    expected_digest = drift.materialized.source_digest
+    actual_digest = (
+        config.generated_metadata.source_digest if config.generated_metadata is not None else ""
+    )
+    provenance_current = bool(actual_digest and actual_digest == expected_digest)
+    checks.append(
+        CheckResult(
+            "profile.provenance",
+            "PASS" if provenance_current else "FAIL",
+            "generated Profile provenance matches repository evidence"
+            if provenance_current
+            else "generated Profile provenance does not match repository evidence",
+            None if provenance_current else "Review 'touchstone profile diff', then refresh.",
+        )
+    )
+    checks.append(
+        CheckResult(
+            "profile.generated",
+            "PASS" if not drift.changed else "FAIL",
+            "generated Profile configuration is current"
+            if not drift.changed
+            else "generated Profile configuration was edited or is stale",
+            None if not drift.changed else "Run 'touchstone profile refresh --write'.",
+        )
+    )
+    unsupported = [
+        match.warning or f"unsupported {match.profile}"
+        for matches in drift.materialized.matches.values()
+        for match in matches
+        if match.verdict == "unsupported"
+    ]
+    checks.append(
+        CheckResult(
+            "profile.unsupported",
+            "WARN" if unsupported else "PASS",
+            "; ".join(unsupported) if unsupported else "detected Profile versions are supported",
+            "Use the base Profile or add a reviewed local declarative Profile."
+            if unsupported
+            else None,
+        )
+    )
+    return checks
 
 
 def _nearest_existing(path: Path) -> Path:

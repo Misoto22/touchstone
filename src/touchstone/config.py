@@ -113,6 +113,7 @@ class LoopConfig:
     protected_paths: tuple[str, ...] = ()
     require_change_under: tuple[str, ...] = ()
     confine_to: tuple[str, ...] = ()
+    targets: tuple[str, ...] = ()
     context: tuple[tuple[str, str], ...] = ()
 
     def prompt(self) -> str:
@@ -214,6 +215,7 @@ _LOOP = {
     "protected_paths",
     "require_change_under",
     "confine_to",
+    "targets",
     "context",
 }
 
@@ -327,7 +329,7 @@ def _validate(raw: dict[str, Any]) -> None:
             raise ConfigError(f"[loop.{name}.context] must be a table")
         for key in ("brief", "label", "schedule"):
             _string(value, key, f"loop.{name}", required=key in {"brief", "label"})
-        for key in ("protected_paths", "require_change_under", "confine_to"):
+        for key in ("protected_paths", "require_change_under", "confine_to", "targets"):
             _string_array(value, key, f"loop.{name}")
         if any(
             not isinstance(key, str) or not isinstance(item, str) for key, item in context.items()
@@ -369,6 +371,7 @@ def _loops(raw: dict[str, Any], base_dir: Path) -> dict[str, LoopConfig]:
             protected_paths=tuple(table.get("protected_paths", ())),
             require_change_under=tuple(table.get("require_change_under", ())),
             confine_to=tuple(table.get("confine_to", ())),
+            targets=tuple(table.get("targets", ())),
             context=tuple(sorted(dict(table.get("context", {})).items())),
         )
     if not result:

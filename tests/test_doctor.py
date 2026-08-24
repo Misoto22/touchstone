@@ -7,9 +7,11 @@ from pathlib import Path
 from tests.test_config import _valid_config, _write
 from touchstone.cli import main
 from touchstone.config import load_config
+from touchstone.discovery import ProjectDiscovery
 from touchstone.doctor import DoctorContext, run_doctor
 from touchstone.execution.base import Result
 from touchstone.execution.local import LocalExecutor
+from touchstone.initialize import InitOptions, initialize
 from touchstone.scheduling.base import SchedulerStatus
 
 
@@ -280,3 +282,71 @@ def test_doctor_reports_scheduler_inspection_failure(tmp_path: Path) -> None:
 
     assert check.level == "WARN"
     assert "could not inspect" in check.summary
+
+
+def _v2_config(tmp_path: Path):  # type: ignore[no-untyped-def]
+    repo = tmp_path / "v2-repo"
+    repo.mkdir()
+    (repo / "package.json").write_text(
+        '{"name":"v2-repo","dependencies":{"next":"15.0.0","react":"19.0.0"}}',
+        encoding="utf-8",
+    )
+    report = initialize(
+        InitOptions(
+            start=repo,
+            engine="codex",
+            model="gpt-test",
+            workflows=("ci.yml",),
+            discovered=ProjectDiscovery(repo, "acme/v2-repo", "main", ("codex",), "launchd"),
+        ),
+        LocalExecutor(),
+    )
+    return report, load_config(report.root)
+
+
+def _v2_context() -> DoctorContext:
+    return DoctorContext(
+        commands=frozenset({"git", "gh", "codex"}),
+        forge=MemoryForge(labels={"touchstone:audit", "touchstone:needs-review"}),
+        scheduler="launchd",
+    )
+
+
+def test_doctor_checks_generated_profile_provenance(tmp_path: Path) -> None:
+    report, config = _v2_config(tmp_path)
+
+    assert run_doctor(config, _v2_context()).by_id("profile.provenance").level == "PASS"
+
+    report.generated.write_text(
+        report.generated.read_text(encoding="utf-8") + "\n# edited\n", encoding="utf-8"
+    )
+    edited = load_config(report.root)
+    check = run_doctor(edited, _v2_context()).by_id("profile.generated")
+    assert check.level == "FAIL"
+    assert "refresh" in check.repair
+
+
+def test_doctor_reports_missing_targets_and_unsupported_versions(tmp_path: Path) -> None:
+    report, config = _v2_config(tmp_path)
+    object.__setattr__(config.targets["v2-repo"], "path", Path("missing"))
+    assert run_doctor(config, _v2_context()).by_id("target.v2-repo.path").level == "FAIL"
+
+    (report.root.parent / "package.json").write_text(
+        '{"name":"v2-repo","dependencies":{"next":"99.0.0","react":"19.0.0"}}',
+        encoding="utf-8",
+    )
+    fresh = load_config(report.root)
+    unsupported = run_doctor(fresh, _v2_context()).by_id("profile.unsupported")
+    assert unsupported.level == "WARN"
+    assert "nextjs" in unsupported.summary
+
+
+def test_doctor_reports_unresolved_package_manager_evidence(tmp_path: Path) -> None:
+    report, config = _v2_config(tmp_path)
+    (report.root.parent / "package-lock.json").write_text("{}\n", encoding="utf-8")
+    (report.root.parent / "yarn.lock").write_text("# yarn\n", encoding="utf-8")
+
+    check = run_doctor(config, _v2_context()).by_id("profile.package_manager")
+
+    assert check.level == "WARN"
+    assert "npm/yarn" in check.summary

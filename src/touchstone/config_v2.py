@@ -23,11 +23,14 @@ class GeneratedMetadata:
     package_version: str
     profile_versions: tuple[tuple[str, str], ...]
     source_digest: str
+    package_managers: tuple[str, ...] = ()
+
+    @property
+    def package_manager(self) -> str:
+        return self.package_managers[0] if self.package_managers else ""
 
 
-def merge_generated(
-    generated: dict[str, Any], overrides: dict[str, Any]
-) -> dict[str, Any]:
+def merge_generated(generated: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
     """Deep-merge generated values with project-owned overrides."""
 
     merged: dict[str, Any] = {}
@@ -97,19 +100,22 @@ def _metadata(raw: object) -> GeneratedMetadata | None:
     package_version = raw.get("package_version")
     source_digest = raw.get("source_digest")
     versions = raw.get("profile_versions", {})
+    managers = raw.get("package_managers", [])
     if not isinstance(package_version, str) or not package_version:
         raise ConfigError("metadata.package_version must be a non-empty string")
     if not isinstance(source_digest, str) or not source_digest:
         raise ConfigError("metadata.source_digest must be a non-empty string")
     if not isinstance(versions, dict) or any(
-        not isinstance(key, str) or not isinstance(value, str)
-        for key, value in versions.items()
+        not isinstance(key, str) or not isinstance(value, str) for key, value in versions.items()
     ):
         raise ConfigError("metadata.profile_versions must be a table of strings")
+    if not _string_list(managers):
+        raise ConfigError("metadata.package_managers must be an array of strings")
     return GeneratedMetadata(
         package_version=package_version,
         profile_versions=tuple(sorted(versions.items())),
         source_digest=source_digest,
+        package_managers=tuple(managers),
     )
 
 
