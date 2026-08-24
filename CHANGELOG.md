@@ -35,6 +35,10 @@ All notable user-facing changes are documented here. The format follows [Keep a 
 - `touchstone actions setup --organization` stores App secrets as organization secrets restricted to the selected repository, and later checks read organization and repository secrets together.
 - `touchstone doctor` reports a `gh` release older than 2.64, which cannot complete `pr edit` since GitHub sunset Projects (classic) and therefore cannot label a published pull request.
 
+### Known gaps
+
+- The GitHub-hosted stages have never run on a GitHub Actions runner. Their contracts, credential boundaries, and recovery paths are covered by tests and local simulation only; the five-stage sequence, artifact round-trip, App token minting, and partial-publication recovery are unproven end to end.
+
 ### Security
 
 - Model credentials and GitHub publishing credentials cannot coexist in one hosted stage or model subprocess environment, and locked dependency installation happens only where neither exists yet.
