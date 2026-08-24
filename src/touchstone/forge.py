@@ -10,9 +10,32 @@ registered.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import Any
 
 from touchstone.execution import Executor
+
+
+@dataclass(frozen=True, slots=True)
+class OperationResult:
+    ok: bool
+    detail: str = ""
+
+    def __bool__(self) -> bool:
+        return self.ok
+
+
+@dataclass(frozen=True, slots=True)
+class PullState:
+    number: int
+    head_sha: str
+    branch: str
+    draft: bool
+    check_state: str
+    merged_at: str | None
+    closed: bool
+    created_at: str
+    url: str
 
 
 class Forge:
@@ -129,18 +152,104 @@ class Forge:
         digits = "".join(char for char in out.rsplit("/", 1)[-1] if char.isdigit())
         return int(digits) if digits else None
 
-    def arm_auto_merge(self, number: int) -> bool:
-        ok, _ = self._gh(["pr", "merge", str(number), "--auto", "--squash", "--delete-branch"])
-        return ok
+    def pull(self, number: int) -> PullState | None:
+        payload = self._json(
+            [
+                "pr",
+                "view",
+                str(number),
+                "--json",
+                "number,headRefOid,headRefName,isDraft,state,mergedAt,createdAt,url,statusCheckRollup",
+            ]
+        )
+        return _pull_state(payload) if isinstance(payload, dict) else None
 
-    def to_draft(self, number: int) -> bool:
-        ok, _ = self._gh(["pr", "ready", str(number), "--undo"])
-        return ok
+    def pull_for_branch(self, branch: str) -> PullState | None:
+        payload = self._json(
+            [
+                "pr",
+                "list",
+                "--head",
+                branch,
+                "--state",
+                "all",
+                "--limit",
+                "1",
+                "--json",
+                "number,headRefOid,headRefName,isDraft,state,mergedAt,createdAt,url,statusCheckRollup",
+            ]
+        )
+        if not isinstance(payload, list) or not payload or not isinstance(payload[0], dict):
+            return None
+        return _pull_state(payload[0])
 
-    def add_label(self, number: int, label: str) -> bool:
-        ok, _ = self._gh(["pr", "edit", str(number), "--add-label", label])
-        return ok
+    def arm_auto_merge(self, number: int) -> OperationResult:
+        ok, detail = self._gh(
+            ["pr", "merge", str(number), "--auto", "--squash", "--delete-branch"]
+        )
+        return OperationResult(ok, "" if ok else detail)
 
-    def close(self, number: int, comment: str) -> bool:
-        ok, _ = self._gh(["pr", "close", str(number), "--delete-branch", "--comment", comment])
-        return ok
+    def to_draft(self, number: int) -> OperationResult:
+        ok, detail = self._gh(["pr", "ready", str(number), "--undo"])
+        return OperationResult(ok, "" if ok else detail)
+
+    def mark_ready(self, number: int) -> OperationResult:
+        ok, detail = self._gh(["pr", "ready", str(number)])
+        return OperationResult(ok, "" if ok else detail)
+
+    def add_label(self, number: int, label: str) -> OperationResult:
+        ok, detail = self._gh(["pr", "edit", str(number), "--add-label", label])
+        return OperationResult(ok, "" if ok else detail)
+
+    def close(self, number: int, comment: str) -> OperationResult:
+        ok, detail = self._gh(
+            ["pr", "close", str(number), "--delete-branch", "--comment", comment]
+        )
+        return OperationResult(ok, "" if ok else detail)
+
+
+def _pull_state(payload: dict[str, Any]) -> PullState:
+    merged_at = payload.get("mergedAt")
+    state = str(payload.get("state") or "").upper()
+    return PullState(
+        number=int(payload["number"]),
+        head_sha=str(payload.get("headRefOid") or ""),
+        branch=str(payload.get("headRefName") or ""),
+        draft=bool(payload.get("isDraft")),
+        check_state=_check_state(payload.get("statusCheckRollup")),
+        merged_at=str(merged_at) if merged_at else None,
+        closed=state == "CLOSED" and not merged_at,
+        created_at=str(payload.get("createdAt") or ""),
+        url=str(payload.get("url") or ""),
+    )
+
+
+def _check_state(raw: Any) -> str:
+    if not isinstance(raw, list) or not raw:
+        return "unknown"
+    conclusions: list[str] = []
+    pending = False
+    for item in raw:
+        if not isinstance(item, dict):
+            pending = True
+            continue
+        conclusion = str(item.get("conclusion") or "").upper()
+        status = str(item.get("status") or "").upper()
+        if conclusion:
+            conclusions.append(conclusion)
+        if not conclusion or status not in {"", "COMPLETED"}:
+            pending = True
+    if any(
+        conclusion
+        in {"FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE"}
+        for conclusion in conclusions
+    ):
+        return "failure"
+    if pending:
+        return "pending"
+    if conclusions and all(item in {"SUCCESS", "NEUTRAL", "SKIPPED"} for item in conclusions):
+        return "success"
+    return "unknown"
+
+
+__all__ = ["Forge", "OperationResult", "PullState"]
