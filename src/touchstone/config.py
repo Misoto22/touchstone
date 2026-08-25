@@ -116,12 +116,63 @@ class ExecutionConfig:
 
 @dataclass(frozen=True, slots=True)
 class GitConfig:
+    """Who authors a published commit, and who is credited beside them.
+
+    Two identities take part in a published change: the bot that ran the Loop
+    and the operator who owns the repository. A git commit has room for exactly
+    one author, so `author` names which of them git records and the other
+    becomes a `Co-Authored-By` trailer. Crediting the second any other way
+    loses it: a trailer is what the forge reads back into contributor history.
+
+    `author_name` and `author_email` remain the bot identity, which is what
+    they already meant for a local run. A hosted run supplies the publishing
+    App's own identity instead, so the configured pair is the fallback rather
+    than the answer.
+    """
+
     author_name: str | None = None
     author_email: str | None = None
+    #: Which identity git records as the author. The other one is credited.
+    author: Literal["bot", "operator"] = "bot"
+    operator_name: str | None = None
+    operator_email: str | None = None
 
     def __post_init__(self) -> None:
         if bool(self.author_name) != bool(self.author_email):
             raise ConfigError("git.author_name and git.author_email must be set together")
+        if bool(self.operator_name) != bool(self.operator_email):
+            raise ConfigError("git.operator_name and git.operator_email must be set together")
+        if self.author not in {"bot", "operator"}:
+            raise ConfigError('git.author must be "bot" or "operator"')
+        if self.author == "operator" and not self.operator_name:
+            raise ConfigError(
+                'git.author = "operator" requires git.operator_name and git.operator_email'
+            )
+
+    def identities(
+        self, *, bot: tuple[str, str] | None = None
+    ) -> tuple[tuple[str, str] | None, tuple[str, str] | None]:
+        """Resolve the authoring identity and the credited one, in that order.
+
+        Takes the bot identity because a hosted run knows it and the
+        configuration does not: the publishing App's login is minted by GitHub,
+        not written down here.
+        """
+
+        configured_bot = (
+            (self.author_name, self.author_email)
+            if self.author_name and self.author_email
+            else None
+        )
+        resolved_bot = bot or configured_bot
+        operator = (
+            (self.operator_name, self.operator_email)
+            if self.operator_name and self.operator_email
+            else None
+        )
+        if self.author == "operator":
+            return operator, resolved_bot
+        return resolved_bot, operator
 
 
 @dataclass(frozen=True, slots=True)
@@ -297,7 +348,7 @@ _ENGINE = {
 _BUDGET = {"audit", "review"}
 _EXECUTION = {"target", "ssh"}
 _SSH = {"host", "workdir", "state_dir", "env", "identity_file", "connect_timeout"}
-_GIT = {"author_name", "author_email"}
+_GIT = {"author_name", "author_email", "author", "operator_name", "operator_email"}
 _LOOP = {
     "brief",
     "attachment",
@@ -513,7 +564,7 @@ def _validate(raw: dict[str, Any]) -> None:
         not isinstance(key, str) or not isinstance(value, str) for key, value in ssh_env.items()
     ):
         raise ConfigError("execution.ssh.env must be a table of string values")
-    for key in ("author_name", "author_email"):
+    for key in ("author_name", "author_email", "author", "operator_name", "operator_email"):
         _string(git, key, "git")
     for key in (
         "visibility",
@@ -695,7 +746,11 @@ def _build_config(
         engine=engine,
         execution=ExecutionConfig(target=target, ssh=ssh),
         git=GitConfig(
-            author_name=git_raw.get("author_name"), author_email=git_raw.get("author_email")
+            author_name=git_raw.get("author_name"),
+            author_email=git_raw.get("author_email"),
+            author=git_raw.get("author", "bot"),
+            operator_name=git_raw.get("operator_name"),
+            operator_email=git_raw.get("operator_email"),
         ),
         loops=_loops(_table(raw, "loop"), base_dir),
         timezone=timezone,

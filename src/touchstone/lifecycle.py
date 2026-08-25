@@ -75,6 +75,8 @@ class PublicationRequest:
     escalation: str = ""
     author_name: str | None = None
     author_email: str | None = None
+    coauthor_name: str | None = None
+    coauthor_email: str | None = None
     pre_staged: bool = False
     repository: str = ""
     isolated_push: bool = False
@@ -105,6 +107,18 @@ class ResumeResult:
     outcome: str
     pr: int
     detail: str = ""
+
+
+def _coauthor_trailer(request: PublicationRequest) -> str:
+    """Credit the identity that git could not record as the author.
+
+    Passed as its own `-m`, so git separates it from the body with the blank
+    line a trailer needs to be parsed as one.
+    """
+
+    if not request.coauthor_name or not request.coauthor_email:
+        return ""
+    return f"Co-Authored-By: {request.coauthor_name} <{request.coauthor_email}>"
 
 
 class RepositoryLifecycle:
@@ -553,6 +567,9 @@ class RepositoryLifecycle:
             argv += ["commit", "--quiet", "--no-verify", "-m", request.commit_subject]
             if request.summary:
                 argv += ["-m", request.summary]
+            trailer = _coauthor_trailer(request)
+            if trailer:
+                argv += ["-m", trailer]
             committed = self._executor.run(argv, timeout=180, env=environment)
             if not committed.ok:
                 return f"could not commit changes: {committed.tail()}"

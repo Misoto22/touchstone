@@ -32,6 +32,25 @@ timeout_seconds = 2700
 audit = 20.0
 review = 4.0
 
+[git]
+# Two identities take part in a published change: the bot that ran the Loop and
+# the operator who owns the repository. A commit has room for one author, so
+# this names which of them git records; the other is credited in a
+# `Co-Authored-By` trailer, which is what the forge reads back into contributor
+# history. Omit the operator pair entirely and nobody is credited, which is the
+# behavior a configuration without this section already had.
+author = "bot" # bot | operator
+# The bot identity a local run uses. A hosted run supplies the publishing App's
+# own identity instead, because only GitHub knows the login it minted.
+author_name = "touchstone[bot]"
+author_email = "touchstone[bot]@users.noreply.github.com"
+# Use the forge's noreply address, not a personal one: GitHub links a commit to
+# an account through `<id>+<login>@users.noreply.github.com` and shows it in
+# contributor history. A personal address reads as a human in `git log` and as
+# nobody in the contributor graph.
+operator_name = "your-github-login"
+operator_email = "0000000+your-github-login@users.noreply.github.com"
+
 [execution]
 target = "local" # local | ssh
 

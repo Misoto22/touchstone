@@ -5,6 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
+from touchstone.config import GitConfig
 from touchstone.execution.base import Result
 from touchstone.execution.local import LocalExecutor
 from touchstone.forge import ForgeUnavailable, OperationResult, PullState
@@ -287,7 +288,7 @@ def test_node_builds_publication_from_project_configuration() -> None:
                 default_branch="trunk",
                 escalation_label="ops:review",
             ),
-            git=SimpleNamespace(author_name="Touchstone Bot", author_email="bot@example.com"),
+            git=GitConfig(author_name="Touchstone Bot", author_email="bot@example.com"),
         ),
         loop=lambda name: SimpleNamespace(name=name, label="automation:audit"),
     )
