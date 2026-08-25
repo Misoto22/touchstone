@@ -32,6 +32,7 @@ _PERMISSIONS = {
 # GitHub grants metadata:read to every App and does not let an owner remove it,
 # so it is the one permission an exact match still tolerates.
 _IMPLICIT_PERMISSIONS = {"metadata": "read"}
+_PROJECT_URL = "https://github.com/Misoto22/touchstone"
 _REQUIRED_SECRETS = {
     "TOUCHSTONE_APP_ID",
     "TOUCHSTONE_APP_PRIVATE_KEY",
@@ -141,10 +142,14 @@ def build_manifest(*, owner: str, repository: str, redirect_url: str) -> AppMani
     name = f"{owner}-{repository}-touchstone"[:100]
     return AppManifest(
         name=name,
-        url="https://github.com/Misoto22/touchstone",
+        url=_PROJECT_URL,
         redirect_url=redirect_url,
         default_permissions=dict(_PERMISSIONS),
-        hook_attributes={"active": False},
+        # GitHub requires hook_attributes.url even when the webhook is off, and
+        # rejects the whole manifest with `"url" wasn't supplied` without it.
+        # Touchstone wants no webhook at all, so the address is inert: `active`
+        # is false, and nothing is ever delivered to it.
+        hook_attributes={"active": False, "url": _PROJECT_URL},
     )
 
 
@@ -507,6 +512,10 @@ class ActionsSetup:
             )
         else:
             action = "https://github.com/settings/apps/new"
+        # GitHub reads the CSRF state from the query string and echoes it to the
+        # redirect. Posting it as a form field instead left the callback with no
+        # state at all, so the exchange failed its own equality check.
+        action = f"{action}?{urllib.parse.urlencode({'state': state})}"
         callback = _ManifestCallback(
             manifest,
             state,

@@ -83,7 +83,12 @@ def test_manifest_uses_least_privilege_repository_permissions() -> None:
         "issues": "write",
     }
     assert manifest.public is False
-    assert manifest.hook_attributes == {"active": False}
+    # GitHub requires hook_attributes.url even for a webhook that is switched
+    # off, and rejects the whole manifest without it.
+    assert manifest.hook_attributes == {
+        "active": False,
+        "url": "https://github.com/Misoto22/touchstone",
+    }
 
 
 def test_callback_requires_the_exact_csrf_state() -> None:
@@ -377,3 +382,78 @@ def test_an_organization_secret_stays_scoped_to_the_selected_repository() -> Non
     assert "--repos" in argv and argv[argv.index("--repos") + 1] == "widgets"
     assert "--repo" not in argv
     assert b"42" not in b" ".join(a.encode() for a in argv)
+
+
+def test_the_manifest_supplies_every_url_github_requires() -> None:
+    """`url` and `hook_attributes.url` are the two mandatory manifest fields.
+
+    Omitting the second made GitHub reject registration outright with
+    `"url" wasn't supplied`, so no Owner App could ever be created.
+    """
+    import json
+
+    manifest = json.loads(
+        build_manifest(
+            owner="acme",
+            repository="widgets",
+            redirect_url="http://127.0.0.1:8917/callback",
+        ).to_json()
+    )
+
+    assert manifest["url"]
+    assert manifest["hook_attributes"]["url"]
+    assert manifest["hook_attributes"]["active"] is False
+
+
+def test_the_csrf_state_travels_in_the_action_query_string(tmp_path: Path) -> None:
+    """GitHub reads `state` from the URL and echoes it back to the redirect.
+
+    Sent as a form field it never reached GitHub, so the callback carried no
+    state and the exchange failed its own equality check.
+    """
+    import urllib.parse
+
+    captured: list[str] = []
+
+    class _Callback:
+        def __init__(self, manifest, state, *, action, port):  # type: ignore[no-untyped-def]
+            captured.append(action)
+            self.start_url = "http://127.0.0.1:8917/"
+
+        def __enter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        def __exit__(self, *_args):  # type: ignore[no-untyped-def]
+            return False
+
+        def wait(self, _timeout):  # type: ignore[no-untyped-def]
+            return "manifest-code"
+
+    from touchstone.hosted import app_setup
+
+    setup = ActionsSetup(
+        _config(tmp_path),
+        github=FakeGitHub(),
+        exchange=lambda _code: _conversion(),
+        open_browser=lambda _url: None,
+        confirm_installation=lambda _url: True,
+    )
+    setup._options = SetupOptions()
+    original = app_setup._ManifestCallback
+    app_setup._ManifestCallback = _Callback  # type: ignore[assignment]
+    try:
+        setup._browser_manifest_code(
+            build_manifest(
+                owner="acme",
+                repository="widgets",
+                redirect_url="http://127.0.0.1:8917/callback",
+            ),
+            "state-abc123",
+        )
+    finally:
+        app_setup._ManifestCallback = original  # type: ignore[assignment]
+
+    action = captured[0]
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(action).query)
+    assert query["state"] == ["state-abc123"]
+    assert action.startswith("https://github.com/settings/apps/new?")
