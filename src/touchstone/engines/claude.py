@@ -16,8 +16,12 @@ class ClaudeEngine:
     #: permission layer rather than only checked afterwards.
     enforces_paths = True
 
-    def __init__(self, config, executor: Executor) -> None:  # type: ignore[no-untyped-def]
+    def __init__(self, config, executor: Executor, engine=None) -> None:  # type: ignore[no-untyped-def]
         self._config = config
+        # Which member of the engine pool this instance speaks for. A Loop that
+        # names one gets its own model, endpoint, and credential variable; the
+        # unnamed engine is what every other Loop keeps running on.
+        self._engine = engine if engine is not None else config.engine
         self._exec = executor
 
     def _settings(self, denied: tuple[str, ...]) -> str:
@@ -50,7 +54,11 @@ class ClaudeEngine:
         """
         if not self._exec.replaces_environment:
             return None
-        return engine_environment(self.name, base_url=self._config.engine.base_url)
+        return engine_environment(
+            self.name,
+            base_url=self._engine.base_url,
+            api_key_env=self._engine.api_key_env,
+        )
 
     def author(
         self, brief: str, *, worktree: str, denied: tuple[str, ...], model: str = ""
@@ -62,11 +70,11 @@ class ClaudeEngine:
             "claude",
             "-p",
             "--model",
-            model or self._config.engine.model,
+            model or self._engine.model,
             "--effort",
-            self._config.engine.audit_effort,
+            self._engine.audit_effort,
             "--max-budget-usd",
-            str(self._config.engine.budget.audit),
+            str(self._engine.budget.audit),
             # On the audit and deliberately not on the review: an audit that
             # degrades still produces a finding a person can read, while a
             # review that degrades has quietly changed who approves an
@@ -79,13 +87,13 @@ class ClaudeEngine:
             settings_path,
             "--output-format",
             "json",
-            *self._config.engine.extra_args,
+            *self._engine.extra_args,
             brief,
         ]
         result = self._exec.run(
             argv,
             cwd=worktree,
-            timeout=self._config.engine.timeout_seconds,
+            timeout=self._engine.timeout_seconds,
             env=self._model_environment(),
         )
         self._exec.run(["rm", "-f", settings_path], timeout=30)
@@ -107,11 +115,11 @@ class ClaudeEngine:
             "claude",
             "-p",
             "--model",
-            model or self._config.engine.model,
+            model or self._engine.model,
             "--effort",
-            self._config.engine.review_effort,
+            self._engine.review_effort,
             "--max-budget-usd",
-            str(self._config.engine.budget.review),
+            str(self._engine.budget.review),
             "--json-schema",
             json.dumps(schema),
             # `--allowedTools` is variadic and must never be the last flag
@@ -120,13 +128,13 @@ class ClaudeEngine:
             "Read,Grep,Glob",
             "--output-format",
             "json",
-            *self._config.engine.extra_args,
+            *self._engine.extra_args,
             brief,
         ]
         result = self._exec.run(
             argv,
             cwd=worktree,
-            timeout=self._config.engine.timeout_seconds,
+            timeout=self._engine.timeout_seconds,
             env=self._model_environment(),
         )
         cost, text = _payload(result.stdout)
@@ -139,7 +147,7 @@ class ClaudeEngine:
         )
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
-        return f"ClaudeEngine(model={self._config.engine.model!r}, at={self._exec.where!r})"
+        return f"ClaudeEngine(model={self._engine.model!r}, at={self._exec.where!r})"
 
 
 def _payload(raw: str) -> tuple[float | None, str]:

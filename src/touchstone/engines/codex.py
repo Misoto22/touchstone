@@ -17,13 +17,17 @@ class CodexEngine:
     #: worktree, so the diff check afterwards is the only path enforcement.
     enforces_paths = False
 
-    def __init__(self, config, executor: Executor) -> None:  # type: ignore[no-untyped-def]
+    def __init__(self, config, executor: Executor, engine=None) -> None:  # type: ignore[no-untyped-def]
         self._config = config
+        # Which member of the engine pool this instance speaks for. A Loop that
+        # names one gets its own model, endpoint, and credential variable; the
+        # unnamed engine is what every other Loop keeps running on.
+        self._engine = engine if engine is not None else config.engine
         self._exec = executor
 
     def _argv(self, *, worktree: str, effort: str, sandbox: str, model: str = "") -> list[str]:
         argv = ["codex", "exec", "-C", worktree]
-        chosen = model or self._config.engine.model
+        chosen = model or self._engine.model
         if chosen:
             argv += ["-m", chosen]
         argv += [
@@ -35,7 +39,7 @@ class CodexEngine:
             "--skip-git-repo-check",
         ]
         argv += self._provider_argv()
-        argv += list(self._config.engine.extra_args)
+        argv += list(self._engine.extra_args)
         return argv
 
     def _provider_argv(self) -> list[str]:
@@ -46,7 +50,7 @@ class CodexEngine:
         from a single override. `env_key` names the variable; the key itself
         stays in the environment and never reaches the command line.
         """
-        base_url = self._config.engine.base_url
+        base_url = self._engine.base_url
         if not base_url:
             return []
         provider = "touchstone"
@@ -56,7 +60,7 @@ class CodexEngine:
             "-c",
             f"model_providers.{provider}.base_url={base_url}",
             "-c",
-            f"model_providers.{provider}.wire_api={self._config.engine.wire_api}",
+            f"model_providers.{provider}.wire_api={self._engine.wire_api}",
             "-c",
             f"model_providers.{provider}.env_key=OPENAI_API_KEY",
             "-c",
@@ -87,7 +91,11 @@ class CodexEngine:
         """
         if not self._exec.replaces_environment:
             return None
-        return engine_environment(self.name, base_url=self._config.engine.base_url)
+        return engine_environment(
+            self.name,
+            base_url=self._engine.base_url,
+            api_key_env=self._engine.api_key_env,
+        )
 
     def author(
         self, brief: str, *, worktree: str, denied: tuple[str, ...], model: str = ""
@@ -98,14 +106,14 @@ class CodexEngine:
         # false; the caller checks the diff.
         argv = self._argv(
             worktree=worktree,
-            effort=self._config.engine.audit_effort,
+            effort=self._engine.audit_effort,
             model=model,
-            sandbox=self._config.engine.sandbox,
+            sandbox=self._engine.sandbox,
         )
         argv.append(brief)
         result = self._exec.run(
             argv,
-            timeout=self._config.engine.timeout_seconds,
+            timeout=self._engine.timeout_seconds,
             env=self._model_environment(),
         )
         transcript = result.stdout + result.stderr
@@ -119,14 +127,14 @@ class CodexEngine:
 
         argv = self._argv(
             worktree=worktree,
-            effort=self._config.engine.review_effort,
+            effort=self._engine.review_effort,
             model=model,
             sandbox="read-only",
         )
         argv += ["--output-schema", schema_path, "--output-last-message", answer_path, brief]
         result = self._exec.run(
             argv,
-            timeout=self._config.engine.timeout_seconds,
+            timeout=self._engine.timeout_seconds,
             env=self._model_environment(),
         )
         answer = self._exec.read_text(answer_path) or ""
@@ -146,4 +154,4 @@ class CodexEngine:
         )
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
-        return f"CodexEngine(model={self._config.engine.model!r}, at={self._exec.where!r})"
+        return f"CodexEngine(model={self._engine.model!r}, at={self._exec.where!r})"

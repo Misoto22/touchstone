@@ -173,9 +173,11 @@ def run(state: dict[str, Any]) -> dict[str, Any]:
         brief += "\n".join(f"- {title}" for title in handled)
     brief += _attachment(context, loop, worktree)
 
-    session = context.engine.author(
-        brief, worktree=worktree, denied=loop.protected_paths, model=loop.model
-    )
+    # The Loop names which member of the engine pool authors its changes, so a
+    # Loop hunting hardcoded values can run on a cheap model while one judging
+    # naming runs on a strong one, or on another provider entirely.
+    engine = context.engine_for(loop.name)
+    session = engine.author(brief, worktree=worktree, denied=loop.protected_paths, model=loop.model)
     if session.blocked:
         # Not clean. The engine was present and thinking and could not act, and
         # recording that as "found nothing" is how six hours of real work and
@@ -185,7 +187,7 @@ def run(state: dict[str, Any]) -> dict[str, Any]:
             risk=None,
             pr=None,
             title="",
-            detail=f"the {context.engine.name} session could not act: {session.blocked}",
+            detail=f"the {engine.name} session could not act: {session.blocked}",
         )
         return {
             "outcome": "held",
@@ -198,7 +200,7 @@ def run(state: dict[str, Any]) -> dict[str, Any]:
             "outcome": "held",
             # Engine output may contain model transcript or repository data;
             # graph notes are persisted to the structured event log.
-            "notes": [_session_failure(context.engine.name)],
+            "notes": [_session_failure(engine.name)],
             "cost": [session.cost],
         }
 

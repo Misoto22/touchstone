@@ -21,7 +21,8 @@ def _config(tmp_path: Path, *, visibility: str = "public", wake_minutes: int | N
         repo_path=tmp_path,
         source=SimpleNamespace(schema_version=2),
         forge=SimpleNamespace(default_branch="main", slug="acme/widgets"),
-        engine=SimpleNamespace(name="codex"),
+        engine=SimpleNamespace(name="codex", key_env="OPENAI_API_KEY"),
+        engines={"default": SimpleNamespace(name="codex", key_env="OPENAI_API_KEY")},
         execution=SimpleNamespace(target="local", ssh=None),
         git=SimpleNamespace(),
         timezone="UTC",
@@ -225,6 +226,8 @@ def test_workflow_rejects_mutable_action_reference(tmp_path: Path) -> None:
 def test_claude_workflow_uses_only_the_claude_model_secret(tmp_path: Path) -> None:
     config = _config(tmp_path)
     config.engine.name = "claude"
+    config.engine.key_env = "ANTHROPIC_API_KEY"
+    config.engines = {"default": config.engine}
 
     workflow = render_workflow(config, ActionPins(), action_sha="a" * 40)
     analysis = workflow.split("  analysis:", 1)[1].split("  publish:", 1)[0]

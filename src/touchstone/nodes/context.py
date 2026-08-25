@@ -8,7 +8,7 @@ they live here and are looked up by name instead of travelling in the state.
 from __future__ import annotations
 
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 
@@ -22,12 +22,36 @@ from touchstone.ledger import Ledger
 class Context:
     config: Config
     executor: execution.Executor
+    #: The unnamed engine. A Loop that names a pool member gets its own through
+    #: `engine_for`; this stays the answer when no Loop is in hand.
     engine: engines.Engine
     forge: Forge
     ledger: Ledger
+    _engines: dict[object, engines.Engine] = field(default_factory=dict)
 
     def loop(self, name: str) -> LoopConfig:
         return self.config.loop(name)
+
+    def engine_for(self, loop: str | None = None) -> engines.Engine:
+        """The engine instance that Loop's sessions run on.
+
+        Built on demand and remembered, because a Loop naming another provider
+        needs another CLI wrapper entirely, and building one per session would
+        re-read the same configuration for every node in the graph.
+        """
+
+        resolved = self.config.engine_for(loop)
+        cached = self._engines.get(resolved)
+        if cached is None:
+            cached = engines.build(self.config, self.executor, resolved)
+            self._engines[resolved] = cached
+        return cached
+
+    @staticmethod
+    def build(config: Config) -> Context:
+        """Assemble the context for a configuration without binding it."""
+
+        return _build(config)
 
 
 _ACTIVE: ContextVar[Context | None] = ContextVar("touchstone_context", default=None)
