@@ -50,7 +50,7 @@ class ClaudeEngine:
         """
         if not self._exec.replaces_environment:
             return None
-        return engine_environment(self.name)
+        return engine_environment(self.name, base_url=self._config.engine.base_url)
 
     def author(
         self, brief: str, *, worktree: str, denied: tuple[str, ...], model: str = ""

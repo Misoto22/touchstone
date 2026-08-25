@@ -34,8 +34,34 @@ class CodexEngine:
             # The worktree is a linked checkout, not a clone.
             "--skip-git-repo-check",
         ]
+        argv += self._provider_argv()
         argv += list(self._config.engine.extra_args)
         return argv
+
+    def _provider_argv(self) -> list[str]:
+        """Point the session at a configured endpoint instead of the default.
+
+        Codex selects a provider by name, so the address, the HTTP shape and
+        the variable holding the key are declared together rather than guessed
+        from a single override. `env_key` names the variable; the key itself
+        stays in the environment and never reaches the command line.
+        """
+        base_url = self._config.engine.base_url
+        if not base_url:
+            return []
+        provider = "touchstone"
+        return [
+            "-c",
+            f"model_providers.{provider}.name=Touchstone configured endpoint",
+            "-c",
+            f"model_providers.{provider}.base_url={base_url}",
+            "-c",
+            f"model_providers.{provider}.wire_api={self._config.engine.wire_api}",
+            "-c",
+            f"model_providers.{provider}.env_key=OPENAI_API_KEY",
+            "-c",
+            f"model_provider={provider}",
+        ]
 
     def _session(self, result, transcript: str, *, cost: float | None = None) -> Session:  # type: ignore[no-untyped-def]
         blocked = blocked_reason(transcript)
@@ -61,7 +87,7 @@ class CodexEngine:
         """
         if not self._exec.replaces_environment:
             return None
-        return engine_environment(self.name)
+        return engine_environment(self.name, base_url=self._config.engine.base_url)
 
     def author(
         self, brief: str, *, worktree: str, denied: tuple[str, ...], model: str = ""

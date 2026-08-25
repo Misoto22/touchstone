@@ -54,8 +54,16 @@ _ENGINE_ENVIRONMENT = {
 def engine_environment(
     engine: str,
     source: Mapping[str, str] | None = None,
+    *,
+    base_url: str = "",
 ) -> dict[str, str]:
-    """Return the minimal environment allowed to cross into a model process."""
+    """Return the minimal environment allowed to cross into a model process.
+
+    `base_url` is configuration rather than a credential, so it travels with
+    the rest of the environment. Claude reads its endpoint from
+    `ANTHROPIC_BASE_URL`; Codex is told through its own provider settings and
+    needs nothing here.
+    """
 
     environment = os.environ if source is None else source
     allowed = _RUNTIME_ENVIRONMENT | _ENGINE_ENVIRONMENT.get(engine, set())
@@ -70,6 +78,8 @@ def engine_environment(
         config_key = "CODEX_HOME" if engine == "codex" else "CLAUDE_CONFIG_DIR"
         if environment.get(config_key):
             result[config_key] = environment[config_key]
+    if base_url and engine == "claude":
+        result["ANTHROPIC_BASE_URL"] = base_url
     return result
 
 

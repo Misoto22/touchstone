@@ -21,6 +21,11 @@ model = "your-model-id"
 audit_effort = "high"
 review_effort = "high"
 timeout_seconds = 2700
+# An OpenAI-compatible or Anthropic-compatible endpoint instead of the vendor's
+# own. Omit for the vendor default. The key still arrives through the usual
+# environment variable; this is an address, never a credential.
+# base_url = "https://api.minimax.io/anthropic"   # with engine.name = "claude"
+# wire_api = "responses"                          # Codex only; "chat" is gone
 
 [engine.budget]
 # Enforced by Claude. Codex reports no cost, so its ceiling is time.

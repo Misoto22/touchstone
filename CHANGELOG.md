@@ -6,6 +6,8 @@ All notable user-facing changes are documented here. The format follows [Keep a 
 
 ### Added
 
+- `engine.base_url` routes model calls to a self-hosted or third-party endpoint instead of the vendor's own, with `engine.wire_api` selecting the HTTP shape for Codex. Claude reads the address from `ANTHROPIC_BASE_URL`; Codex is given a named provider so the address, the wire shape, and the variable holding the key are declared together and the key itself never reaches a command line. The address must be https unless it is loopback, and may carry no query string or userinfo.
+
 - Declarative built-in Profiles for generic, JavaScript, Node.js, TypeScript, React, Next.js, Python, FastAPI, and Django repositories.
 - Bounded monorepo Target discovery for npm, pnpm, Yarn, Bun, uv, Poetry, and PDM evidence, including dependency-aware affected scope applied to local, hosted, and rehearsal validation.
 - Schema-v2 project/generated configuration ownership, deterministic Profile refresh, and an explicit backup-first v1-to-v2 migration command.

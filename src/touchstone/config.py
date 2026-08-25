@@ -11,6 +11,7 @@ from importlib.resources import files
 from pathlib import Path, PurePosixPath
 from string import Template
 from typing import TYPE_CHECKING, Any, Literal
+from urllib.parse import urlsplit
 
 if TYPE_CHECKING:
     from touchstone.config_v2 import GeneratedMetadata, TargetConfig
@@ -63,6 +64,18 @@ class EngineConfig:
     #: reduction in defence and it is why this is a named setting rather than a
     #: fallback the code chooses on its own.
     sandbox: str = "workspace-write"
+    #: An OpenAI-compatible endpoint to use instead of the vendor's own.
+    #:
+    #: Empty means the engine's default. A value routes the model call to
+    #: another provider, which is how a repository reaches a self-hosted or
+    #: third-party endpoint. It is an address, not a credential: the key still
+    #: arrives through the same environment variable and never appears here.
+    base_url: str = ""
+    #: Which HTTP shape a Codex endpoint speaks. Only `responses` remains:
+    #: Codex removed chat-completions support and refuses to load a
+    #: configuration naming it. Consulted only when `base_url` is set, and
+    #: ignored by Claude, whose API has one shape.
+    wire_api: str = "responses"
 
 
 @dataclass(frozen=True, slots=True)
@@ -278,6 +291,8 @@ _ENGINE = {
     "timeout_seconds",
     "budget",
     "extra_args",
+    "base_url",
+    "wire_api",
 }
 _BUDGET = {"audit", "review"}
 _EXECUTION = {"target", "ssh"}
@@ -324,6 +339,34 @@ def _retired_actions_keys(actions: dict[str, Any]) -> None:
             f"actions.{present[0]} was removed; the hosted Agent CLI version now comes from "
             "the Action's committed npm lockfile. Delete this key from [actions]."
         )
+
+
+def _model_endpoint(engine: dict[str, Any]) -> None:
+    """Accept only an endpoint address a model call can safely be sent to."""
+
+    base_url = str(engine.get("base_url", ""))
+    wire_api = str(engine.get("wire_api", "responses"))
+    if wire_api not in {"chat", "responses"}:
+        raise ConfigError("engine.wire_api must be 'chat' or 'responses'")
+    if wire_api == "chat" and str(engine.get("name", "codex")) == "codex":
+        # Codex refuses to load a configuration naming it, so accepting the
+        # value here would only move the failure to the first model call.
+        raise ConfigError(
+            "engine.wire_api = 'chat' is not supported by Codex; use 'responses', "
+            "or an endpoint that speaks the Anthropic API with engine.name = 'claude'"
+        )
+    if not base_url:
+        return
+    parsed = urlsplit(base_url)
+    loopback = parsed.hostname in {"127.0.0.1", "::1", "localhost"}
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ConfigError("engine.base_url must be an absolute http or https URL")
+    if parsed.scheme == "http" and not loopback:
+        # A prompt carries repository contents and the request carries the API
+        # key, so plaintext is only ever acceptable to the same machine.
+        raise ConfigError("engine.base_url must use https unless it is a loopback address")
+    if parsed.query or parsed.fragment or parsed.username or parsed.password:
+        raise ConfigError("engine.base_url must be a plain endpoint URL with no query or userinfo")
 
 
 def _unknown(table: dict[str, Any], known: set[str], where: str) -> None:
@@ -452,8 +495,9 @@ def _validate(raw: dict[str, Any]) -> None:
         _string(forge, key, "forge")
     _string_array(forge, "required_workflows", "forge")
     _positive_int(forge, "reap_after_hours", "forge")
-    for key in ("name", "model", "audit_effort", "review_effort"):
+    for key in ("name", "model", "audit_effort", "review_effort", "base_url", "wire_api"):
         _string(engine, key, "engine")
+    _model_endpoint(engine)
     _positive_int(engine, "timeout_seconds", "engine")
     _string_array(engine, "extra_args", "engine")
     for key, value in _table(engine, "budget").items():
@@ -601,6 +645,8 @@ def _build_config(
             review=float(budget_raw.get("review", 4.0)),
         ),
         extra_args=tuple(engine_raw.get("extra_args", ())),
+        base_url=str(engine_raw.get("base_url", "")),
+        wire_api=str(engine_raw.get("wire_api", "responses")),
     )
 
     ssh = None

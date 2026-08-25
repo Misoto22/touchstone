@@ -241,6 +241,8 @@ Only `git diff --check` — a read-only check that runs no project code — is e
 
 Berry is detected from `.yarnrc.yml` or a `packageManager` major version of 2 or above. Poetry has no switch that guarantees a hook-free install, so a hook-free Poetry gate reports `policy-unsupported` and blocks instead of installing; set `allow_build_hooks = true` on that gate to accept `poetry install` and its project build hooks.
 
+Set `engine.base_url` to send model calls to a self-hosted or third-party endpoint. Claude-shaped endpoints receive it as `ANTHROPIC_BASE_URL`; Codex receives a named provider, and `engine.wire_api` must stay `responses` because Codex no longer loads a configuration naming chat-completions. The address must be https unless it is loopback, and carries no query string or credentials — the key still travels in the environment.
+
 Unknown configuration keys fail closed. Relative paths resolve from the configuration file. Secrets do not belong in TOML; secret-shaped SSH environment keys are rejected. When `state_dir` is omitted, Touchstone uses an isolated per-repository directory under `$XDG_STATE_HOME/touchstone` or `~/.local/state/touchstone`.
 
 Upgrade an unversioned configuration to v1, then explicitly preview and apply v2:
