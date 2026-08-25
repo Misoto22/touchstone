@@ -12,6 +12,14 @@ that. It has been triaged by a person, its severity and risk are already
 decided, and it names its evidence — you are implementing, not discovering,
 which is both cheaper and far likelier to be right.
 
+**A row whose work is already done is not the end of the queue.** Statuses go
+stale — someone fixes a defect and the row keeps saying open — and finding one
+is not a reason to stop. Say so in your summary, move to the next open row, and
+keep going. Reporting nothing found because the first row was already fixed
+leaves that row at the front of the queue, so the next run reads it, reaches the
+same conclusion, and stops in the same place. One stale row halts the loop
+indefinitely, hourly, while every run looks like a run that found nothing.
+
 Three rules about that file, and they are not negotiable:
 
 - A row marked as proposable but not shippable is yours to fix and never yours
@@ -25,7 +33,55 @@ request or a commit that does not exist while you are working; the loop fills it
 in once it knows which. You may append new rows, and you may not touch
 severity, risk, or which loop owns a row — those are a person's judgement.
 
-## Only when the queue is empty, search
+## Then the register, before you search
+
+$register is the list of rules this project holds itself to. Each row carries a
+status, the test that measures it, and the count that test last found. Work it
+only when the queue above is empty, and take the first row of either kind:
+
+- **A measured rule whose count is above zero.** Remove **one** violation. Not
+  all of them: a diff that touches two hundred call sites cannot be reviewed by
+  anyone, and this one merges without a person.
+- **A rule that exists only as prose**, with no test named as its home. Write
+  the test that measures it, and record the row as measured at whatever count
+  that test finds.
+
+**Check whether the register is yours to write before you plan to write it.** It
+is often protected, and for a reason — a session that can edit the standard it
+is measured against will eventually edit the standard. Editing it anyway does
+not fail loudly: the diff touches a protected path, which forces the change to
+the highest risk class and parks it for a person. Every run, silently, forever.
+
+Where it is protected, **only the first kind of row is yours**. Removing a
+violation needs no entry: the count is a measurement, so it falls whether or not
+anyone writes the new number down, and whoever owns the register follows it.
+
+**Skip the prose-only rows entirely.** Writing the test without recording it
+leaves the row exactly as it was, so the next run picks the same row, writes the
+same test again, and the run after that does it once more — a queue that cannot
+advance, filling up with duplicate enforcers. It is also usually invalid on its
+own: a measurement with no register row pointing at it is the kind of thing a
+register check rejects. Those rows belong to whoever writes the register, and
+saying so is more useful than half-doing them.
+
+Three things about counts, and they decide whether this is safe:
+
+- **Never raise one.** A count that goes up is a change that added violations,
+  and the register is the one file where that must be impossible to record
+  quietly. If your change would raise a count, it is the wrong change.
+- **Never mark a rule as fully enforced because you wrote its test.** A new test
+  usually finds violations that already existed; recording zero when the test
+  finds two hundred turns the build red for everyone on your next merge. Record
+  what it found.
+- **Take the counts from the material collected for you above, not from your own
+  search.** Your reading of the repository is an estimate. The measurement is
+  the number the project's own tooling produces, and a register whose numbers
+  were guessed is worse than one with no numbers at all.
+
+A rule frozen on a pending decision is frozen here too, for the same reason it
+is frozen in the ledger.
+
+## Only when both are empty, search
 
 Look in this order, and stop at the first real one:
 

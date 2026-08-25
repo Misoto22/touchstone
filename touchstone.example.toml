@@ -51,6 +51,14 @@ schedule = "hourly@00"
 targets = ["repository"]
 protected_paths = ["migrations/"]
 
+# The counts the register carries have to come from the project's own tooling,
+# not from the session reading the repository and estimating. Without this the
+# brief asks for a measurement nobody took.
+[[loop.code.attachment]]
+heading = "The current rule census"
+command = ["just", "census"]
+
 [loop.code.context]
 project = "this repository and its data model"
+register = "the rule register in `docs/engineering/rules.md`"
 rules_clause = ""

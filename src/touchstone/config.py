@@ -145,6 +145,14 @@ class LoopConfig:
     confine_to: tuple[str, ...] = ()
     targets: tuple[str, ...] = ()
     context: tuple[tuple[str, str], ...] = ()
+    #: Overrides `engine.model` for this loop only. The loops do different work
+    #: — implementing a fix against judging a harness — and the model that
+    #: suits one need not suit the other. Empty means the engine's own choice.
+    model: str = ""
+    #: Commands whose output the brief is told it will be given, as
+    #: `(heading, argv)`. Ordered as written, because a brief refers to them by
+    #: name and a reader compares them run to run.
+    attachment: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
     def prompt(self) -> str:
         return Template(self._brief_text(self.brief)).safe_substitute(dict(self.context))
@@ -205,13 +213,28 @@ class Config:
             return str(PurePosixPath(self.execution.ssh.state_dir) / "worktree")
         return str(self.state_dir / "worktree")
 
-    def describe(self) -> str:
+    def describe(self, loop: str | None = None) -> str:
+        """One line naming what is about to run.
+
+        Takes the loop because a loop may override the model, and this line is
+        the only place an operator reading the journal sees which one ran. A
+        banner that always reported the global setting said `gpt-5.6-sol` on the
+        first run after a loop was moved to another model — evidence, in the
+        one place anyone looks, that the change had not taken effect.
+
+        Without a loop — `run-due` wakes several — the global is the honest
+        answer, because no single model is the one that will run.
+        """
         where = self.execution.target
         if self.execution.target == "ssh" and self.execution.ssh is not None:
             where = f"ssh {self.execution.ssh.host}"
         slug = self.forge.slug or "discovered repository"
+        chosen = self.loops.get(loop) if loop else None
+        model = (
+            f"{chosen.model} (loop)" if chosen is not None and chosen.model else self.engine.model
+        )
         return (
-            f"{slug} · engine={self.engine.name} model={self.engine.model} "
+            f"{slug} · engine={self.engine.name} model={model} "
             f"effort={self.engine.audit_effort}/{self.engine.review_effort} · {where}"
         )
 
@@ -252,6 +275,8 @@ _SSH = {"host", "workdir", "state_dir", "env", "identity_file", "connect_timeout
 _GIT = {"author_name", "author_email"}
 _LOOP = {
     "brief",
+    "attachment",
+    "model",
     "label",
     "schedule",
     "priority",
@@ -334,6 +359,41 @@ def _string_array(table: dict[str, Any], key: str, where: str) -> None:
         not isinstance(item, str) or not item.strip() for item in value
     ):
         raise ConfigError(f"{where}.{key} must be an array of non-empty strings")
+
+
+def _attachment(table: dict[str, Any], where: str) -> None:
+    """Reject a malformed attachment entry at load, not at the prompt.
+
+    The brief tells the session these sections were "collected before you", so
+    a misspelled key would reach it as a heading that is simply absent — and an
+    absent section reads as an attachment that was never asked for, rather than
+    one that was asked for wrongly. That is the difference between a run
+    that knows it is missing something and a run that does not.
+    """
+    entries = table.get("attachment")
+    if entries is None:
+        return
+    if not isinstance(entries, list):
+        raise ConfigError(f"{where}.attachment must be an array of tables")
+    for index, entry in enumerate(entries):
+        at = f"{where}.attachment[{index}]"
+        if not isinstance(entry, dict):
+            raise ConfigError(f"{at} must be a table with 'heading' and 'command'")
+        _unknown(entry, {"heading", "command"}, at)
+        heading = entry.get("heading")
+        if not isinstance(heading, str) or not heading.strip():
+            raise ConfigError(f"{at}.heading must be a non-empty string")
+        command = entry.get("command")
+        if (
+            not isinstance(command, list)
+            or not command
+            or not all(isinstance(part, str) and part for part in command)
+        ):
+            raise ConfigError(
+                f"{at}.command must be a non-empty array of non-empty strings. "
+                "It is run directly, without a shell, so pipes and redirects "
+                "belong in a script the command names."
+            )
 
 
 def _positive_int(table: dict[str, Any], key: str, where: str) -> None:
@@ -420,9 +480,10 @@ def _validate(raw: dict[str, Any]) -> None:
         context = value.get("context", {})
         if not isinstance(context, dict):
             raise ConfigError(f"[loop.{name}.context] must be a table")
-        for key in ("brief", "label", "schedule"):
+        for key in ("brief", "label", "schedule", "model"):
             _string(value, key, f"loop.{name}", required=key in {"brief", "label"})
         _positive_int(value, "priority", f"loop.{name}")
+        _attachment(value, f"loop.{name}")
         for key in ("protected_paths", "require_change_under", "confine_to", "targets"):
             _string_array(value, key, f"loop.{name}")
         if any(
@@ -468,6 +529,11 @@ def _loops(raw: dict[str, Any], base_dir: Path) -> dict[str, LoopConfig]:
             confine_to=tuple(table.get("confine_to", ())),
             targets=tuple(table.get("targets", ())),
             context=tuple(sorted(dict(table.get("context", {})).items())),
+            model=str(table.get("model", "")),
+            attachment=tuple(
+                (str(entry["heading"]), tuple(str(part) for part in entry["command"]))
+                for entry in table.get("attachment", ())
+            ),
         )
     if not result:
         raise ConfigError("no [loop.*] sections; there is nothing to run")

@@ -6,6 +6,7 @@ import json
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
+from touchstone.engines.base import engine_environment
 from touchstone.nodes.context import current
 
 #: The session writes here rather than to stdout, so a chatty model cannot
@@ -103,6 +104,63 @@ def _clean(context: Any, state: dict[str, Any], detail: str, **extra: Any) -> di
     return {"finding": {"status": "none"}, "outcome": "clean", **extra}
 
 
+#: Above this an attachment is refused rather than cut. A census is read
+#: to decide whether a ratchet regressed, and half a census cannot answer that
+#: while looking like it did — the same reason the review refuses an oversized
+#: diff instead of truncating it.
+ATTACHMENT_LIMIT = 40_000
+
+
+def _attachment(context: Any, loop: Any, worktree: str) -> str:
+    """The sections the brief says were "collected before you".
+
+    Without this the promise is unkept and the session says so: kioku's nightly
+    harness review reported the census and the latest CI run unavailable, and
+    recorded itself inconclusive under R-HAR-6 — correctly, and every night,
+    because nothing ever appended them. A review that cannot verify a ratchet
+    is the one thing that review exists to do.
+
+    Run without credentials. A hosted Analysis step holds the model key and
+    `TOUCHSTONE_STATE_KEY`, and the environment is already scrubbed before the
+    model, preparation and validation subprocesses for exactly that reason.
+    An attachment command is repository-authored — `just census` is whatever the
+    justfile and its dependencies say it is today — so inheriting that
+    environment would route both secrets around a boundary the rest of the
+    system keeps. `engine_environment` is the same allowlist those subprocesses
+    get, with no engine named, so no model key is in it either.
+
+    A command that fails produces a section saying it is unavailable, never a
+    missing section. The brief distinguishes the two: an absent heading reads
+    as an attachment nobody asked for, and an unavailable one as one that was
+    asked for and could not be had. Only the second is true here — which is why
+    a command that cannot even start is caught rather than allowed to end the
+    run, and why the entries after it are still collected.
+    """
+    if not loop.attachment:
+        return ""
+    environment = engine_environment("")
+    parts = ["\n\n## Collected before this session started\n"]
+    for heading, argv in loop.attachment:
+        shown = " ".join(argv)
+        try:
+            result = context.executor.run(list(argv), cwd=worktree, timeout=600, env=environment)
+        except OSError as error:
+            body = f"unavailable: `{shown}` could not start ({error.strerror or error})"
+        else:
+            if not result.ok:
+                body = f"unavailable: `{shown}` exited {result.code}"
+            elif len(result.stdout) > ATTACHMENT_LIMIT:
+                body = (
+                    f"unavailable: `{shown}` produced {len(result.stdout)} characters, "
+                    f"over the {ATTACHMENT_LIMIT} this prompt carries. A partial answer "
+                    "here would look like a whole one."
+                )
+            else:
+                body = f"```\n{result.stdout.strip()}\n```"
+        parts.append(f"\n### {heading}\n\n{body}\n")
+    return "".join(parts)
+
+
 def run(state: dict[str, Any]) -> dict[str, Any]:
     context = current()
     loop = context.loop(state["loop"])
@@ -113,8 +171,11 @@ def run(state: dict[str, Any]) -> dict[str, Any]:
     if handled:
         brief += "\n\n## Already handled — do not raise any of these again\n\n"
         brief += "\n".join(f"- {title}" for title in handled)
+    brief += _attachment(context, loop, worktree)
 
-    session = context.engine.author(brief, worktree=worktree, denied=loop.protected_paths)
+    session = context.engine.author(
+        brief, worktree=worktree, denied=loop.protected_paths, model=loop.model
+    )
     if session.blocked:
         # Not clean. The engine was present and thinking and could not act, and
         # recording that as "found nothing" is how six hours of real work and

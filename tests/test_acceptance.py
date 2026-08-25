@@ -409,6 +409,29 @@ def test_the_briefs_keep_the_constraints_that_were_paid_for() -> None:
     assert "latent" in audit and "past tense" in audit
     # A translated document left on its seed version, drifting daily.
     assert "twin" in audit and "twin" in harness
+    # The register became a work queue, and these three sentences are the whole
+    # reason that is safe: one violation at a time so the diff can be read, a
+    # count that can only fall, and a new enforcer recorded at what it actually
+    # finds rather than at zero.
+    # Collapsed, because these are sentences and a sentence wraps wherever the
+    # line ends. An assertion that breaks on a reflow tests the margin, not the
+    # constraint.
+    flowed = " ".join(audit.split())
+    assert "Remove **one** violation" in flowed
+    assert "Never raise one" in flowed
+    assert "Record what it found" in flowed
+    # kioku protects its register from the loop that would edit it. Without
+    # this the register queue makes every run touch a protected path, which
+    # forces the highest risk class and parks the change — quietly, each time.
+    assert "yours to write" in flowed
+    # Writing an enforcer it cannot register leaves the row unchanged, so the
+    # next run picks the same row and writes the same test again. A queue that
+    # cannot advance looks identical to a queue being worked.
+    assert "Skip the prose-only rows entirely" in flowed
+    # A stale ledger row halted the loop for a full day: the first open row was
+    # already fixed, the session reported nothing found, and every hourly run
+    # after it read the same row and stopped in the same place.
+    assert "is not the end of the queue" in flowed
     # A ceiling raised instead of a regression reported.
     assert "never raised" in harness
     # A date stamped in UTC by a schedule that runs on local time.
