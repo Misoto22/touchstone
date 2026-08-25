@@ -188,15 +188,24 @@ def test_readme_states_that_schema_v1_keeps_working() -> None:
     assert "upgrading is an explicit command" in readme
 
 
-def test_readme_does_not_imply_the_hosted_backend_has_run() -> None:
-    """The original brief: never claim a workflow ran in GitHub from local tests alone."""
+def test_readme_claims_no_more_hosted_evidence_than_exists() -> None:
+    """The original brief: never claim a workflow ran in GitHub from local tests alone.
+
+    Every stage has since run on a real runner, so the README may now say so. The
+    guard moves with the evidence rather than retiring: what remains covered by
+    tests alone must still be named as such.
+    """
     # Compare against unwrapped prose: the statement is a wrapped blockquote, so
     # strip the quote markers before collapsing whitespace.
     raw = (ROOT / "README.md").read_text(encoding="utf-8")
     readme = " ".join(line.lstrip("> ") for line in raw.splitlines())
     readme = " ".join(readme.split())
 
-    assert "Part of the hosted backend has now run on a GitHub Actions runner" in readme
-    assert "Treat publication as unproven until a run exists to point at" in readme
-    # Publication is the part that still needs an Owner App, so it must stay named.
-    assert "minting the App token, the Publish stage itself" in readme
+    assert "The whole hosted backend has now run on GitHub Actions runners" in readme
+    # Partial-Publish recovery is the part no real run has exercised, so the
+    # README must keep saying that instead of folding it into the claim above.
+    assert (
+        "Recovery from a Publish that fails partway is covered by tests but has not been"
+        " exercised against a real interrupted run" in readme
+    )
+    assert "publication as unproven" not in readme
