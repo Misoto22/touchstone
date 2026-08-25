@@ -849,3 +849,63 @@ def test_resume_download_queries_the_exact_candidate_artifact_name(
     assert reason == ""
     assert destination.is_file()
     assert "name=touchstone-candidate-candidate-exact" in requested[0]
+
+
+def test_verify_does_not_require_push_scoped_repository_visibility(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify runs with repository read, so it must not consult the Publication Gate.
+
+    A read-scoped token makes GitHub omit ``allow_auto_merge`` from the repository
+    payload, so ``repository_info()`` reports nothing and the gate raises Held. A
+    hosted Verify job that asked the gate could therefore never pass, whatever the
+    candidate contained.
+    """
+    from touchstone.hosted import runtime
+    from touchstone.runner import Held
+
+    worktree = tmp_path / "resume-worktree"
+    worktree.mkdir()
+    projection = SimpleNamespace(
+        finding_id="candidate-read-scoped",
+        pr=31,
+        head_sha="b" * 40,
+        branch="touchstone/candidate-read-scoped",
+        loop="code",
+    )
+    read_scoped_forge = SimpleNamespace(
+        # Exactly what a contents:read token yields for both gate inputs.
+        repository_info=lambda: None,
+        labels=lambda: set(),
+        pull=lambda _number: SimpleNamespace(
+            head_sha="b" * 40,
+            branch="touchstone/candidate-read-scoped",
+            closed=False,
+            merged_at=None,
+        ),
+    )
+    context = SimpleNamespace(
+        forge=read_scoped_forge,
+        executor=SimpleNamespace(run=lambda *_args, **_kwargs: Result(0, "", "")),
+    )
+    config = _config(tmp_path)
+    config.loop = lambda _name: SimpleNamespace(targets=("root",), label="touchstone")
+    monkeypatch.setattr(runtime, "_checkout_resume_worktree", lambda *_args: worktree)
+    monkeypatch.setattr(runtime, "_remove_worktree", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("touchstone.runner._health_gate", lambda *_args: None)
+    # Deliberately NOT stubbing _publication_gate: reintroducing it must fail here.
+    monkeypatch.setattr("touchstone.runner.current", lambda: context)
+    monkeypatch.setattr(
+        "touchstone.validation.validate",
+        lambda *_args, **_kwargs: SimpleNamespace(blocked=False),
+    )
+
+    try:
+        runtime._validate_resume_candidate(
+            config,
+            projection,
+            context,
+            {"GH_TOKEN": "read-token", "TOUCHSTONE_STATE_KEY": "state-secret"},
+        )
+    except Held as exc:  # pragma: no cover - the regression this test guards
+        pytest.fail(f"verify consulted a push-scoped gate: {exc}")

@@ -1349,7 +1349,10 @@ def _prepare_verified_worktree(
     worktree = _materialize_publication_worktree(config, metadata, patch)
     try:
         runner._health_gate(config)
-        runner._publication_gate(config, config.loop(metadata.loop))
+        # The Publication Gate asks whether GitHub can accept a result, which
+        # needs push-scoped repository visibility. Verify holds repository read
+        # only, so the gate can never pass in this stage. Analysis already gated
+        # before buying an author session, and Publish gates again before writing.
         preparation = _reuse_prepared_dependencies(
             config,
             worktree,
@@ -1402,7 +1405,10 @@ def _validate_resume_candidate(
     worktree = _checkout_resume_worktree(config, projection, context, env)
     try:
         runner._health_gate(config)
-        runner._publication_gate(config, config.loop(projection.loop))
+        # The Publication Gate asks whether GitHub can accept a result, which
+        # needs push-scoped repository visibility. Verify holds repository read
+        # only, so the gate can never pass in this stage. Analysis already gated
+        # before buying an author session, and Publish gates again before writing.
         # A checked-out parked head carries no worktree modification to
         # attribute, so approval revalidates every configured Loop Target.
         report = validate(
