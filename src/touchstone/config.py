@@ -262,6 +262,15 @@ class LoopConfig:
     #: being set, which was true of the harness review and of no other loop
     #: until generated stack evidence began setting it for the code audit.
     drafts_hold_slot: bool = False
+    #: Whether this Loop's approved low-risk pull requests merge unattended.
+    #:
+    #: Per Loop rather than per project, because a Loop removing an unused
+    #: import and a Loop reworking error handling carry risks that differ by
+    #: orders of magnitude, and one switch would let the first one's
+    #: convenience vouch for the second. Arming still requires every condition
+    #: in `auto_merge_verdict`, and a backend without an independent Verify
+    #: stage refuses rather than downgrading to an ordinary pull request.
+    auto_merge: bool = False
     context: tuple[tuple[str, str], ...] = ()
     #: Which member of the engine pool this Loop runs on. Empty is the unnamed
     #: engine. Naming one is how a Loop that hunts hardcoded values runs on a
@@ -445,6 +454,7 @@ _LOOP = {
     "targets",
     "context",
     "drafts_hold_slot",
+    "auto_merge",
 }
 _ACTIONS = {
     "visibility",
@@ -789,6 +799,7 @@ def _validate(raw: dict[str, Any]) -> None:
             _string(value, key, f"loop.{name}", required=key in {"brief", "label"})
         _positive_int(value, "priority", f"loop.{name}")
         _boolean(value, "drafts_hold_slot", f"loop.{name}")
+        _boolean(value, "auto_merge", f"loop.{name}")
         _attachment(value, f"loop.{name}")
         for key in ("protected_paths", "require_change_under", "confine_to", "targets"):
             _string_array(value, key, f"loop.{name}")
@@ -826,6 +837,7 @@ def _loops(raw: dict[str, Any], base_dir: Path) -> dict[str, LoopConfig]:
         result[name] = LoopConfig(
             name=name,
             engine=str(table.get("engine", "")),
+            auto_merge=bool(table.get("auto_merge", False)),
             brief=str(_required(table, "brief", f"loop.{name}")),
             label=str(_required(table, "label", f"loop.{name}")),
             config_dir=base_dir,

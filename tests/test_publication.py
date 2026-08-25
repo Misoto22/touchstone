@@ -287,10 +287,11 @@ def test_node_builds_publication_from_project_configuration() -> None:
                 slug="acme/widgets",
                 default_branch="trunk",
                 escalation_label="ops:review",
+                required_workflows=("ci.yml",),
             ),
             git=GitConfig(author_name="Touchstone Bot", author_email="bot@example.com"),
         ),
-        loop=lambda name: SimpleNamespace(name=name, label="automation:audit"),
+        loop=lambda name: SimpleNamespace(name=name, label="automation:audit", auto_merge=False),
     )
     state = {
         "loop": "architecture",

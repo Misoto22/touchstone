@@ -109,6 +109,13 @@ protected_paths = ["migrations/"]
 # at its first medium-risk finding. Set it true for a loop that must never have
 # more than one pull request open, draft or not.
 drafts_hold_slot = false
+# Whether this Loop's approved low-risk pull requests merge without a person.
+# Per Loop, never per project. Requires every condition at publication time —
+# low risk, an approving independent review, a ready pull request, passing
+# Gates, a repository that allows auto-merge, a declared required workflow, and
+# a protected base branch — and a backend whose Verify stage holds no model
+# credential, which today means GitHub Actions. Anywhere else it is refused.
+auto_merge = false
 
 # The counts the register carries have to come from the project's own tooling,
 # not from the session reading the repository and estimating. Without this the

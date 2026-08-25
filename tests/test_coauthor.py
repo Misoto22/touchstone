@@ -112,10 +112,15 @@ def test_the_publication_request_carries_both_identities(tmp_path: Path) -> None
 
     context = SimpleNamespace(
         config=SimpleNamespace(
-            forge=SimpleNamespace(default_branch="main", escalation_label="x", slug="acme/widgets"),
+            forge=SimpleNamespace(
+                default_branch="main",
+                escalation_label="x",
+                slug="acme/widgets",
+                required_workflows=("ci.yml",),
+            ),
             git=_git(),
         ),
-        loop=lambda _name: SimpleNamespace(name="code", label="touchstone:audit"),
+        loop=lambda _name: SimpleNamespace(name="code", label="touchstone:audit", auto_merge=False),
     )
     state = {
         "loop": "code",

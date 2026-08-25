@@ -80,7 +80,11 @@ def test_readme_uses_the_current_pr_only_resume_contract() -> None:
     assert "approve|close|reanalyze" in readme
     assert "resume <thread-id> merge" not in readme
     assert "enable auto-merge" not in readme.lower()
-    assert "auto-merge remains disabled" in readme.lower()
+    # Auto-merge is a per-Loop opt-in rather than a thing Touchstone never
+    # does, so the README has to carry both halves of the contract: off unless
+    # a Loop asks, and refused outright where Verify is not independent.
+    assert "auto-merge is off unless a loop enables it" in readme.lower()
+    assert "policy-unsupported" in readme
 
 
 def test_readme_links_architecture_and_operator_context() -> None:
