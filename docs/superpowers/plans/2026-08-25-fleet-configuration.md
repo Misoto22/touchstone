@@ -42,11 +42,11 @@
 - Produces: `co_authored_by(config: GitConfig, bot: tuple[str, str]) -> str`
 - Preserves: existing `author_name` / `author_email` as the operator identity when `author = "operator"`
 
-- [ ] **Step 1: Write failing tests for the trailer and the identity swap**
-- [ ] **Step 2: Add `author` to `GitConfig` with `bot` as the default and paired-field validation**
-- [ ] **Step 3: Emit the `Co-Authored-By` trailer from one helper used by both the local and hosted publication paths**
-- [ ] **Step 4: Replace the hardcoded bot identity in the hosted path with the configured choice**
-- [ ] **Step 5: Update the example configuration and the README publication description**
+- [x] **Step 1: Write failing tests for the trailer and the identity swap**
+- [x] **Step 2: Add `author` to `GitConfig` with `bot` as the default and paired-field validation**
+- [x] **Step 3: Emit the `Co-Authored-By` trailer from one helper used by both the local and hosted publication paths**
+- [x] **Step 4: Replace the hardcoded bot identity in the hosted path with the configured choice**
+- [x] **Step 5: Update the example configuration and the README publication description**
 
 ---
 
@@ -68,11 +68,11 @@
 - Produces: `EngineConfig.api_key_env` and `EngineConfig.api_key_ref`
 - Preserves: `Config.engine` as the pool member named `default`
 
-- [ ] **Step 1: Write failing tests for `[engine.cheap]` resolution and for a Loop naming an unknown engine**
-- [ ] **Step 2: Parse scalar `[engine]` keys and `[engine.<name>]` subtables into one pool**
-- [ ] **Step 3: Resolve `loop.<name>.engine` through the pool and keep `loop.<name>.model` as the narrower override**
-- [ ] **Step 4: Map only the secrets the configured engines actually name into each Analysis job**
-- [ ] **Step 5: Report a missing secret in `doctor` with the exact `op read | gh secret set` command, without running it**
+- [x] **Step 1: Write failing tests for `[engine.cheap]` resolution and for a Loop naming an unknown engine**
+- [x] **Step 2: Parse scalar `[engine]` keys and `[engine.<name>]` subtables into one pool**
+- [x] **Step 3: Resolve `loop.<name>.engine` through the pool and keep `loop.<name>.model` as the narrower override**
+- [x] **Step 4: Map only the secrets the configured engines actually name into each Analysis job**
+- [x] **Step 5: Report a missing secret in `doctor` with the exact `op read | gh secret set` command, without running it**
 
 ---
 
@@ -95,11 +95,11 @@
 - Produces: `Profile.naming: dict[str, str]` consumed by the naming brief
 - Preserves: every Gate that runs project code stays a disabled Candidate
 
-- [ ] **Step 1: Write failing detection tests for Cargo workspaces and `.csproj` targets**
-- [ ] **Step 2: Add both Profiles with their evidence rules and disabled Gate candidates**
-- [ ] **Step 3: Declare naming rules as data on each Profile**
-- [ ] **Step 4: Write the four concern Briefs against injected context, naming no technology**
-- [ ] **Step 5: Verify a Rust repository and a .NET repository each compose a non-generic Profile Set**
+- [x] **Step 1: Write failing detection tests for Cargo workspaces and `.csproj` targets**
+- [x] **Step 2: Add both Profiles with their evidence rules and disabled Gate candidates**
+- [x] **Step 3: Declare naming rules as data on each Profile**
+- [x] **Step 4: Write the four concern Briefs against injected context, naming no technology**
+- [x] **Step 5: Verify a Rust repository and a .NET repository each compose a non-generic Profile Set**
 
 ---
 
@@ -118,11 +118,11 @@
 - Produces: `LoopConfig.auto_merge: bool`
 - Produces: `auto_merge_verdict(...) -> AutoMergeVerdict` recording every unmet condition
 
-- [ ] **Step 1: Write failing tests for each of the six conditions and for the unsupported-backend block**
-- [ ] **Step 2: Add the per-Loop field, defaulting to false**
-- [ ] **Step 3: Evaluate the conditions as one explainable verdict, never a boolean**
-- [ ] **Step 4: Block with `policy-unsupported` on a backend without an independent Verify stage**
-- [ ] **Step 5: Record the decision in an ADR and revise the README Safety Boundary**
+- [x] **Step 1: Write failing tests for each of the six conditions and for the unsupported-backend block**
+- [x] **Step 2: Add the per-Loop field, defaulting to false**
+- [x] **Step 3: Evaluate the conditions as one explainable verdict, never a boolean**
+- [x] **Step 4: Block with `policy-unsupported` on a backend without an independent Verify stage**
+- [x] **Step 5: Record the decision in an ADR and revise the README Safety Boundary**
 
 ---
 
@@ -144,12 +144,12 @@
 - Produces: `touchstone sync --check` (exit `3` on drift) and `touchstone sync --pr`
 - Produces: `extends` resolution where a repository key overrides a fleet key
 
-- [ ] **Step 1: Write failing tests for rendering, for `extends` precedence, and for drift detection**
-- [ ] **Step 2: Define the project schema: members, shared Loops, per-member overrides**
-- [ ] **Step 3: Render `.touchstone/fleet.toml` deterministically so an unchanged project produces an identical file**
-- [ ] **Step 4: Resolve `extends` in the loader, with the repository's own keys winning**
-- [ ] **Step 5: Refuse to render a Gate enablement, an `op://` value, or any key the fleet may not own**
-- [ ] **Step 6: Propose changes through the pull-request lifecycle and provide no direct-write path**
+- [x] **Step 1: Write failing tests for rendering, for `extends` precedence, and for drift detection**
+- [x] **Step 2: Define the project schema: members, shared Loops, per-member overrides**
+- [x] **Step 3: Render `.touchstone/fleet.toml` deterministically so an unchanged project produces an identical file**
+- [x] **Step 4: Resolve `extends` in the loader, with the repository's own keys winning**
+- [x] **Step 5: Refuse to render a Gate enablement, an `op://` value, or any key the fleet may not own**
+- [x] **Step 6: Propose changes through the pull-request lifecycle and provide no direct-write path**
 
 ---
 
@@ -170,8 +170,8 @@
 - Produces: a supervisor loop calling `run-due`, with no second clock
 - Produces: `touchstone sync` emitting one Compose service per member repository
 
-- [ ] **Step 1: Write failing tests for the supervisor loop and for the rendered Compose file**
-- [ ] **Step 2: Build the base image and pin the Agent CLI from the committed lock**
-- [ ] **Step 3: Drive `run-due` from an idempotent in-process loop rather than cron**
-- [ ] **Step 4: Render one service per member, each with its own state volume and credential set**
-- [ ] **Step 5: Report `policy-unsupported` when a container-backed Loop requests auto-merge**
+- [x] **Step 1: Write failing tests for the supervisor loop and for the rendered Compose file**
+- [x] **Step 2: Build the base image and pin the Agent CLI from the committed lock**
+- [x] **Step 3: Drive `run-due` from an idempotent in-process loop rather than cron**
+- [x] **Step 4: Render one service per member, each with its own state volume and credential set**
+- [x] **Step 5: Report `policy-unsupported` when a container-backed Loop requests auto-merge**
