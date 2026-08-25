@@ -33,6 +33,12 @@ _PERMISSIONS = {
 # so it is the one permission an exact match still tolerates.
 _IMPLICIT_PERMISSIONS = {"metadata": "read"}
 _PROJECT_URL = "https://github.com/Misoto22/touchstone"
+#: Verification results that condemn the App rather than call the check
+#: inconclusive. Only these take the stored private key back.
+_REJECTED_INSTALLATION = {"permissions-mismatch", "repository-scope-mismatch"}
+#: How many times to ask GitHub for the installation before giving up, while
+#: the one-time key that can sign the lookup is still in memory.
+_INSTALLATION_ATTEMPTS = 3
 _REQUIRED_SECRETS = {
     "TOUCHSTONE_APP_ID",
     "TOUCHSTONE_APP_PRIVATE_KEY",
@@ -46,6 +52,8 @@ class SetupGitHub(Protocol):
     ) -> bool: ...
 
     def actions_secret_names(self, *, organization: bool = False) -> set[str]: ...
+
+    def delete_actions_secret(self, name: str, *, organization: bool = False) -> bool: ...
 
     def installation(self, app_id: int, private_key: bytes) -> dict[str, Any] | None: ...
 
@@ -245,6 +253,18 @@ class ActionsSetup:
 
         private_key = bytearray(pem.encode("utf-8"))
         try:
+            # Store before verifying. This key exists once: GitHub hands it over
+            # with the manifest conversion and can never produce it again, so a
+            # failure after this point must not be able to consume it. The
+            # secret itself is recoverable in the other direction -- it lands in
+            # a repository the owner already controls, an App token minted from
+            # it cannot exceed the App's own permissions, and deleting it is one
+            # command. Verifying first cost the key whenever the installation
+            # was not finished yet, which is the ordinary case when a person is
+            # still reading the page.
+            stored_private_key = self._store_secret(
+                "TOUCHSTONE_APP_PRIVATE_KEY", bytes(private_key)
+            )
             installation_url = f"https://github.com/apps/{app_slug}/installations/new"
             self._open_browser(installation_url)
             if not self._confirm_installation(installation_url):
@@ -264,12 +284,9 @@ class ActionsSetup:
                     )
                 )
                 return report
-            installation = self.github.installation(app_id, bytes(private_key))
+            installation = self._await_installation(app_id, private_key, installation_url)
             verification = self._installation_report(app_id, app_slug, installation)
-            if verification.state != "complete":
-                self._write_state(self._state_from_report(verification))
-                return verification
-            if not self._store_secret("TOUCHSTONE_APP_PRIVATE_KEY", bytes(private_key)):
+            if not stored_private_key:
                 report = SetupReport(
                     state="partial",
                     step="private-key-repair-required",
@@ -286,6 +303,27 @@ class ActionsSetup:
                 )
                 self._write_state(self._state_from_report(report))
                 return report
+            if verification.state != "complete":
+                if verification.step in _REJECTED_INSTALLATION and not self._discard_secret(
+                    "TOUCHSTONE_APP_PRIVATE_KEY"
+                ):
+                    # The App itself is wrong, not merely unfinished, and the
+                    # key for it is still stored. The Publish job mints its
+                    # token without consulting this verdict, so a removal that
+                    # failed has to be said out loud rather than recorded as an
+                    # ordinary mismatch.
+                    verification = self._partial(
+                        "rejected-key-not-removed",
+                        app_id=app_id,
+                        app_slug=app_slug,
+                        repair=(
+                            f"the App was refused ({verification.step}) but its key is still "
+                            "stored; remove it with 'gh secret delete "
+                            "TOUCHSTONE_APP_PRIVATE_KEY --app actions', then rerun setup"
+                        ),
+                    )
+                self._write_state(self._state_from_report(verification))
+                return verification
         finally:
             for index in range(len(private_key)):
                 private_key[index] = 0
@@ -378,6 +416,12 @@ class ActionsSetup:
     def _store_secret(self, name: str, value: bytes) -> bool:
         return self.github.set_actions_secret(name, value, organization=self._organization)
 
+    def _discard_secret(self, name: str) -> bool:
+        remover = getattr(self.github, "delete_actions_secret", None)
+        if not callable(remover):
+            return False
+        return bool(remover(name, organization=self._organization))
+
     def _present_secrets(self) -> set[str]:
         return self.github.actions_secret_names(organization=self._organization)
 
@@ -388,6 +432,31 @@ class ActionsSetup:
         finally:
             for index in range(len(state_key)):
                 state_key[index] = 0
+
+    def _await_installation(
+        self,
+        app_id: int,
+        private_key: bytearray,
+        installation_url: str,
+    ) -> dict[str, Any] | None:
+        """Look the installation up while the key that can still read it exists.
+
+        Verification needs an App JWT, and the only key able to sign one is the
+        one-time key held in memory right here: Actions secrets cannot be read
+        back, so once this call returns nothing is ever able to check again. A
+        person who confirms before GitHub has finished installing therefore
+        pinned setup to `installation-missing` permanently. Asking again, while
+        the key is still in hand, is the difference between a pause and a
+        dead end.
+        """
+
+        for remaining in range(_INSTALLATION_ATTEMPTS - 1, -1, -1):
+            installation = self.github.installation(app_id, bytes(private_key))
+            if installation is not None or remaining == 0:
+                return installation
+            if not self._confirm_installation(installation_url):
+                return None
+        return None
 
     def _installation_report(
         self,
