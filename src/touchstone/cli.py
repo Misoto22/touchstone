@@ -207,6 +207,39 @@ def _setup(args: argparse.Namespace) -> int:
     return 0
 
 
+def _sync(args: argparse.Namespace) -> int:
+    from touchstone.execution.local import LocalExecutor
+    from touchstone.fleet import FleetError, load_project, sync_check, sync_propose
+
+    try:
+        project = load_project(Path(args.project))
+    except FleetError as exc:
+        print(f"touchstone: {exc}", file=sys.stderr)
+        return 78
+    if args.pr:
+        report = sync_propose(project, LocalExecutor(), branch_prefix="touchstone/fleet-")
+        for slug, branch in report.proposed:
+            print(f"{slug}: opened a pull request from {branch}")
+        for slug in report.unchanged:
+            print(f"{slug}: current")
+        for slug, detail in report.failed:
+            print(f"{slug}: {detail}", file=sys.stderr)
+        return report.exit_code
+    check = sync_check(project)
+    for slug in check.matched:
+        print(f"{slug}: current")
+    for slug in check.drifted:
+        state = "absent" if slug in check.missing else "drifted"
+        print(f"{slug}: {state}")
+    if check.drifted:
+        print(
+            f"{len(check.drifted)} member(s) differ from the {project.name!r} project; "
+            "run 'touchstone sync --pr' to propose the change",
+            file=sys.stderr,
+        )
+    return check.exit_code
+
+
 def _actions_init(args: argparse.Namespace) -> int:
     from touchstone.hosted.workflow import (
         ActionPins,
@@ -692,6 +725,22 @@ def main(argv: list[str] | None = None) -> int:
     resume.add_argument("thread", help="the thread id the parked run reported")
     resume.add_argument("answer", choices=("approve", "close", "reanalyze"))
     resume.set_defaults(handler=_resume)
+
+    sync = sub.add_parser(
+        "sync", help="render a project's shared configuration for its member repositories"
+    )
+    sync.add_argument("--project", required=True, help="path to the project configuration")
+    sync.add_argument(
+        "--check",
+        action="store_true",
+        help="read-only; exit 3 when a member differs from what the project renders",
+    )
+    sync.add_argument(
+        "--pr",
+        action="store_true",
+        help="propose each drifted member's fragment as a pull request",
+    )
+    sync.set_defaults(handler=_sync)
 
     graph = sub.add_parser("graph", help="draw the graph")
     graph.add_argument("--write", action="store_true", help=f"regenerate {visualise.DIAGRAM}")

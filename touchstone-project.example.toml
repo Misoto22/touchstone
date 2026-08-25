@@ -1,0 +1,54 @@
+# A project: the decisions that are the same across every repository it covers.
+#
+# This file lives in its own repository, so changing it is a reviewed pull
+# request like any other change. `touchstone sync --check` reports which member
+# repositories differ from what it renders; `touchstone sync --pr` proposes the
+# rendered fragment to each of them. There is no direct-write path, because the
+# configuration file is the root of Touchstone's permission model and something
+# able to edit it unattended could enable a Validation Gate for itself.
+version = 1
+name = "personal"
+
+# Everything under [defaults] is rendered into every member's
+# `.touchstone/fleet.toml`. A member's own `touchstone.toml` extends that file
+# and overrides any key it disagrees with, so the fleet proposes and the
+# repository disposes.
+[defaults]
+timezone = "Australia/Sydney"
+
+[defaults.engine]
+name = "claude"
+model = "your-model-id"
+
+[defaults.engine.cheap]
+name = "claude"
+model = "your-small-model-id"
+# A reference to the operator's own secret store, never a value: this file is
+# readable by everyone who can read the fleet repository, which is a wider
+# audience than any one member.
+api_key_ref = "op://vault/item/credential"
+
+[defaults.loop.hardcode]
+brief = "builtin:hardcode"
+label = "touchstone:hardcode"
+schedule = "daily@03:00"
+engine = "cheap"
+
+[defaults.loop.naming]
+brief = "builtin:naming"
+label = "touchstone:naming"
+schedule = "weekly@SUN,04:00"
+
+# Each member names its checkout, relative to this file, and which of the
+# project's Loops it takes. Omitting `loops` takes all of them.
+[member."acme/widgets"]
+path = "../widgets"
+loops = ["hardcode", "naming"]
+
+[member."acme/gadgets"]
+path = "../gadgets"
+loops = ["hardcode"]
+
+# A member may correct any key. Only the named key moves; its siblings stay.
+[member."acme/gadgets".overrides.engine]
+model = "another-model-id"

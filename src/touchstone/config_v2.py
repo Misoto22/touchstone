@@ -68,6 +68,40 @@ def merge_generated(generated: dict[str, Any], overrides: dict[str, Any]) -> dic
     return merged
 
 
+def _fleet_fragment(raw: dict[str, Any], repository: Path) -> dict[str, Any]:
+    """The fleet-owned fragment this configuration extends, if it names one.
+
+    Read from inside the repository only. A fragment outside it would be a
+    configuration the repository cannot review in its own history, which is the
+    property that makes rendering it safe to accept.
+    """
+
+    reference = raw.get("extends")
+    if reference is None:
+        return {}
+    if not isinstance(reference, str) or not reference.strip():
+        raise ConfigError("extends must be a non-empty path inside the repository")
+    relative = Path(reference)
+    if relative.is_absolute():
+        raise ConfigError("extends must stay inside the repository")
+    fragment_path = (repository / relative).resolve()
+    if not fragment_path.is_relative_to(repository):
+        raise ConfigError("extends must stay inside the repository")
+    try:
+        fragment = tomllib.loads(fragment_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise ConfigError(f"extended configuration does not exist: {fragment_path}") from None
+    except tomllib.TOMLDecodeError as exc:
+        raise ConfigError(f"{fragment_path} is not valid TOML: {exc}") from None
+    for key in ("version", "generated", "extends", "target", "metadata"):
+        if key in fragment:
+            raise ConfigError(
+                f"extended configuration may not set {key!r}; it is a fragment the "
+                "repository owns the frame for"
+            )
+    return fragment
+
+
 def load_v2(root_path: Path, raw: dict[str, Any]) -> Config:
     root = root_path.expanduser().resolve()
     repository = root.parent.resolve()
@@ -87,10 +121,18 @@ def load_v2(root_path: Path, raw: dict[str, Any]) -> Config:
     except tomllib.TOMLDecodeError as exc:
         raise ConfigError(f"{generated_path} is not valid TOML: {exc}") from None
 
-    merged = merge_generated(generated, raw)
+    # Lowest to highest: machine-owned evidence, then the fleet's shared
+    # decisions, then this repository's own word. A repository that disagrees
+    # with its project says so in its own file rather than being unable to,
+    # which is what keeps `sync` a proposal instead of an instruction.
+    merged = merge_generated(
+        merge_generated(generated, _fleet_fragment(raw, repository)),
+        raw,
+    )
     metadata = _metadata(merged.pop("metadata", {}))
     targets = _targets(merged.pop("target", {}), repository)
     merged.pop("generated", None)
+    merged.pop("extends", None)
     timezone = merged.pop("timezone", "UTC")
     if not isinstance(timezone, str) or not timezone.strip():
         raise ConfigError("timezone must be a non-empty IANA timezone string")
