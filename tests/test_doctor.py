@@ -11,6 +11,7 @@ from touchstone.discovery import ProjectDiscovery
 from touchstone.doctor import DoctorContext, run_doctor
 from touchstone.execution.base import Result
 from touchstone.execution.local import LocalExecutor
+from touchstone.forge import Forge
 from touchstone.initialize import InitOptions, initialize
 from touchstone.scheduling.base import SchedulerStatus
 
@@ -405,3 +406,32 @@ def test_an_unreadable_gh_version_warns_rather_than_passing() -> None:
 def test_the_floor_is_the_first_release_that_completes_pr_edit() -> None:
     assert _gh_check("gh version 2.64.0 (2025-01-01)\n").level == "PASS"
     assert _gh_check("gh version 2.63.99 (2024-12-31)\n").level == "FAIL"
+
+
+def test_doctor_reports_a_missing_gh_rather_than_dying_on_the_call_that_finds_it(
+    tmp_path: Path,
+    monkeypatch,  # type: ignore[no-untyped-def]
+) -> None:
+    # doctor exists to say which prerequisite is absent. Reaching the forge
+    # before reporting that 'gh' is one of them ended the process in a
+    # traceback on the single most likely first run.
+    config = _config(tmp_path)
+    subprocess.run(["git", "-C", str(config.repo_path), "init"], check=True, capture_output=True)
+    nothing_on_path = tmp_path / "empty-path"
+    nothing_on_path.mkdir()
+    monkeypatch.setenv("PATH", str(nothing_on_path))
+
+    context = DoctorContext(
+        commands=frozenset({"git", "codex"}),
+        forge=Forge("acme/widgets", LocalExecutor()),
+        scheduler="launchd",
+        executor=LocalExecutor(),
+        online=True,
+    )
+
+    report = run_doctor(config, context)
+
+    assert report.by_id("gh.command").level == "FAIL"
+    assert report.by_id("gh.command").repair is not None
+    assert report.by_id("forge.repository").level == "FAIL"
+    assert report.exit_code == 1

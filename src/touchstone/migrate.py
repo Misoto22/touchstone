@@ -174,6 +174,11 @@ def _migrate_v0(raw: dict[str, Any]) -> dict[str, Any]:
         reference = migrated.get("brief")
         if reference in builtins:
             migrated["brief"] = builtins[reference]
+        if migrated.get("brief") == "builtin:harness-review":
+            # v1 read this off `require_change_under`, which the harness review
+            # was alone in setting. Recording it keeps that loop's "never more
+            # than one open at a time" across the migration.
+            migrated.setdefault("drafts_hold_slot", True)
         loops[name] = migrated
 
     result: dict[str, Any] = {

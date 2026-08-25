@@ -432,6 +432,10 @@ def test_the_briefs_keep_the_constraints_that_were_paid_for() -> None:
     # already fixed, the session reported nothing found, and every hourly run
     # after it read the same row and stopped in the same place.
     assert "is not the end of the queue" in flowed
+    # A ceiling fell from 8 to 0 on real evidence and was rejected as a number
+    # changed for no stated reason. The reviewer reads the diff and not the
+    # material collected for the author, so the figure has to travel in the diff.
+    assert "carries its number into the summary" in " ".join(harness.split())
     # A ceiling raised instead of a regression reported.
     assert "never raised" in harness
     # A date stamped in UTC by a schedule that runs on local time.
