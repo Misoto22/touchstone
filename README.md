@@ -164,18 +164,17 @@ The standard repository secrets are:
 | `TOUCHSTONE_APP_ID` and `TOUCHSTONE_APP_PRIVATE_KEY` | Publish only |
 | `TOUCHSTONE_STATE_KEY` | Analysis, Verify, Publish, and Snapshot |
 
-> [!IMPORTANT]
-> Part of the hosted backend has now run on a GitHub Actions runner, and part has
-> not. Verified on a runner: the composite Action and its hash-locked install, the
-> Agent CLI installed from its committed lock, the per-stage credential
-> boundaries, the artifact round-trip between jobs, the state artifact named by
-> the configuration digest, restoring that snapshot on the next run, and
-> Prepare, Analysis and Snapshot reaching their recorded outcomes with Verify
-> and Publish correctly skipped. Still unverified:
-> minting the App token, the Publish stage itself, and recovery from a Publish
-> that fails partway — each needs an installed Owner App, which `touchstone
-> actions setup` creates through a browser handoff the repository owner performs.
-> Treat publication as unproven until a run exists to point at.
+> [!NOTE]
+> The whole hosted backend has now run on GitHub Actions runners, end to end:
+> the composite Action and its hash-locked install, the Agent CLI installed from
+> its committed lock, the per-stage credential boundaries, the artifact
+> round-trip between jobs, the state artifact named by the configuration digest,
+> restoring that snapshot on a later run, and all five stages — Prepare,
+> Analysis, Verify, Publish and Snapshot — reaching their recorded outcomes. One
+> run analyzed a real defect, validated the candidate under repository read
+> only, minted an installation token from an Owner App, and opened a labelled
+> pull request authored by the App. Recovery from a Publish that fails partway
+> is covered by tests but has not been exercised against a real interrupted run.
 
 The workflow has only `schedule` and `workflow_dispatch` triggers. It does not run on pull requests. Public repositories default to off-hour 15-minute wake signals; private repositories default to one off-hour wake per hour. Configure a supported interval with `actions.wake_minutes`, then rerun `touchstone actions init`. Each wake evaluates durable schedules, so frequent wake signals do not imply frequent model calls.
 
