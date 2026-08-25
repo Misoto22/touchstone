@@ -11,7 +11,12 @@ from pathlib import Path
 from typing import Any
 
 from touchstone.ledger import finding_id
-from touchstone.lifecycle import PublicationRequest, RepositoryLifecycle, ResumeRequest
+from touchstone.lifecycle import (
+    PublicationRequest,
+    RepositoryLifecycle,
+    ResumeRequest,
+    auto_merge_unsupported,
+)
 from touchstone.nodes.context import current
 
 
@@ -49,6 +54,9 @@ def _request(state: dict[str, Any], context: Any) -> PublicationRequest:
         author_email=author[1] if author else None,
         coauthor_name=coauthor[0] if coauthor else None,
         coauthor_email=coauthor[1] if coauthor else None,
+        auto_merge=loop.auto_merge,
+        independently_verified=bool(state.get("independently_verified", False)),
+        required_checks_declared=bool(context.config.forge.required_workflows),
         pre_staged=bool(state.get("pre_staged", False)),
         repository=context.config.forge.slug,
         isolated_push=bool(state.get("isolated_push", False)),
@@ -57,6 +65,17 @@ def _request(state: dict[str, Any], context: Any) -> PublicationRequest:
 
 def _publish(state: dict[str, Any], *, validation_required: bool = True) -> dict[str, Any]:
     context = current()
+    # `validation_required` is exactly the question auto-merge needs answered:
+    # a hosted publication reaches here because a stage holding no model
+    # credential already validated the candidate, and a local one because this
+    # process is about to. Only the first is an independent check of the
+    # model's own work.
+    unsupported = auto_merge_unsupported(
+        requested=context.loop(state["loop"]).auto_merge,
+        independently_verified=not validation_required,
+    )
+    if unsupported:
+        return {"outcome": "blocked", "pr": None, "notes": [unsupported]}
     if validation_required:
         from touchstone.validation import validate_affected
 
@@ -104,7 +123,7 @@ def _publication_payload(result: Any) -> dict[str, Any]:
 def _publish_verified(state: dict[str, Any]) -> dict[str, Any]:
     """Mutate the forge only after a credential-free stage validated and staged the patch."""
 
-    return _publish(state, validation_required=False)
+    return _publish(state | {"independently_verified": True}, validation_required=False)
 
 
 def merge(state: dict[str, Any]) -> dict[str, Any]:

@@ -78,10 +78,15 @@ def test_the_publication_request_prefers_the_supplied_identity(tmp_path: Path) -
 
     context = SimpleNamespace(
         config=SimpleNamespace(
-            forge=SimpleNamespace(default_branch="main", escalation_label="x", slug="acme/widgets"),
+            forge=SimpleNamespace(
+                default_branch="main",
+                escalation_label="x",
+                slug="acme/widgets",
+                required_workflows=("ci.yml",),
+            ),
             git=GitConfig(author_name="Project Author", author_email="project@example.test"),
         ),
-        loop=lambda _name: SimpleNamespace(name="code", label="touchstone:audit"),
+        loop=lambda _name: SimpleNamespace(name="code", label="touchstone:audit", auto_merge=False),
     )
     base = {
         "loop": "code",

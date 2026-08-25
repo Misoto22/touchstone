@@ -77,6 +77,11 @@ class PublicationRequest:
     author_email: str | None = None
     coauthor_name: str | None = None
     coauthor_email: str | None = None
+    auto_merge: bool = False
+    #: Whether a stage holding no model credential already validated this
+    #: candidate. Only such a backend may honour `auto_merge`.
+    independently_verified: bool = False
+    required_checks_declared: bool = False
     pre_staged: bool = False
     repository: str = ""
     isolated_push: bool = False
@@ -107,6 +112,102 @@ class ResumeResult:
     outcome: str
     pr: int
     detail: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class AutoMergeVerdict:
+    """Why auto-merge was or was not armed, condition by condition.
+
+    A boolean would answer the question the loop asks and none of the ones a
+    person asks afterwards. Auto-merge is the single path where a model's
+    output reaches the default branch without anyone reading it, so the record
+    of why it did — or why it did not — is part of the decision, not a log line
+    beside it.
+    """
+
+    unmet: tuple[str, ...] = ()
+    #: The configuration asked for something this backend cannot do safely.
+    blocked: bool = False
+
+    @property
+    def armed(self) -> bool:
+        return not self.unmet
+
+    @property
+    def reason(self) -> str:
+        return "; ".join(self.unmet)
+
+
+def auto_merge_unsupported(*, requested: bool, independently_verified: bool) -> str:
+    """Why this backend cannot honour a Loop's `auto_merge`, or empty when it can.
+
+    Separate from the rest of the conditions and answerable before anything is
+    published, because this one is a property of the deployment rather than of
+    the change: the others describe a candidate that could be safe elsewhere,
+    while this says the harness cannot establish safety at all. Discovering it
+    after a pull request exists would leave a branch nobody asked for.
+    """
+
+    if not requested or independently_verified:
+        return ""
+    return (
+        "policy-unsupported: this backend has no independent verify stage, "
+        "so auto_merge cannot be honoured here"
+    )
+
+
+def auto_merge_verdict(
+    *,
+    requested: bool,
+    independently_verified: bool,
+    risk: str,
+    verdict: str,
+    draft: bool,
+    gates_passed: bool,
+    merge_allowed: bool,
+    required_checks_declared: bool,
+    protected_branch: bool,
+) -> AutoMergeVerdict:
+    """Decide whether this publication may merge without a person.
+
+    `independently_verified` is checked first and alone, because it is the only
+    condition that is a property of the deployment rather than of the change:
+    the others describe a candidate that could be safe elsewhere, while this
+    one says the harness cannot establish safety at all. A backend whose Verify
+    runs in the same process that held the model credential is not an
+    independent check of that model's work, so a Loop asking to merge
+    unattended there is blocked rather than quietly downgraded — a
+    configuration that says "merge" and behaves like "propose" is a
+    configuration that lies to whoever reads it next.
+    """
+
+    if not requested:
+        return AutoMergeVerdict(("the loop does not enable auto_merge",))
+    unsupported = auto_merge_unsupported(
+        requested=requested, independently_verified=independently_verified
+    )
+    if unsupported:
+        return AutoMergeVerdict((unsupported,), blocked=True)
+    unmet: list[str] = []
+    if risk != "low":
+        unmet.append(f"risk is {risk}, not low")
+    if verdict != "approve":
+        unmet.append(f"the independent review returned {verdict}")
+    if draft:
+        unmet.append("the pull request is a draft")
+    if not gates_passed:
+        unmet.append("a validation gate did not pass")
+    if not merge_allowed:
+        # `--auto` is a request GitHub honours only where the repository allows
+        # it; without this the arming step fails after the pull request exists.
+        unmet.append("the repository does not allow auto-merge")
+    if not required_checks_declared:
+        # Branch protection with no required check merges the moment it is
+        # armed, which is unattended merging with the safety word attached.
+        unmet.append("no required workflow is declared for this repository")
+    if not protected_branch:
+        unmet.append("the base branch has no branch protection")
+    return AutoMergeVerdict(tuple(unmet))
 
 
 def _coauthor_trailer(request: PublicationRequest) -> str:
@@ -364,6 +465,25 @@ class RepositoryLifecycle:
                 branch=request.branch,
             )
 
+        armed = self._arm_auto_merge(request, number)
+        if armed:
+            self._record(
+                request,
+                "awaiting_checks",
+                pr=number,
+                head_sha=head,
+                branch=request.branch,
+                detail=armed,
+            )
+            return PublicationResult(
+                "awaiting_checks",
+                request.finding_id,
+                number,
+                head,
+                armed,
+                branch=request.branch,
+            )
+
         detail = "independent review approved; pull request awaits checks and human merge"
         self._record(
             request,
@@ -381,6 +501,41 @@ class RepositoryLifecycle:
             detail,
             branch=request.branch,
         )
+
+    def _arm_auto_merge(self, request: PublicationRequest, number: int) -> str:
+        """Hand the merge to the forge when every condition holds.
+
+        Returns what happened, or empty when the pull request stays for a
+        person. Every condition is read here rather than trusted from earlier
+        state: the repository's own settings can change between the run that
+        wrote the configuration and the run that would merge.
+
+        Gate results are the exception. Reaching this point means either local
+        validation passed or an independent Verify stage accepted the
+        candidate, so the condition is recorded as met rather than re-run —
+        stating it keeps the invariant visible instead of implicit.
+        """
+
+        if not request.auto_merge:
+            return ""
+        repository = self._forge.repository_info()
+        verdict = auto_merge_verdict(
+            requested=True,
+            independently_verified=request.independently_verified,
+            risk=request.risk,
+            verdict=request.verdict,
+            draft=False,
+            gates_passed=True,
+            merge_allowed=bool(repository and repository.get("autoMergeAllowed")),
+            required_checks_declared=request.required_checks_declared,
+            protected_branch=bool(self._forge.branch_protection(request.base)),
+        )
+        if not verdict.armed:
+            return ""
+        result = self._forge.arm_auto_merge(number)
+        if not result.ok:
+            return ""
+        return "every auto-merge condition held; the forge will merge once checks pass"
 
     def reconcile(self, loop: LoopConfig, now: dt.datetime) -> ReconcileReport:
         merged: list[int] = []
