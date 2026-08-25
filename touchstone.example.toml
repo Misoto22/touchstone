@@ -50,6 +50,12 @@ label = "touchstone:audit"
 schedule = "hourly@00"
 targets = ["repository"]
 protected_paths = ["migrations/"]
+# Whether an open draft holds this loop's pull-request slot. False for a code
+# audit: it parks a medium-risk finding as a draft, a parked draft waits for a
+# person and is never reaped, so a loop whose drafts held the slot would stop
+# at its first medium-risk finding. Set it true for a loop that must never have
+# more than one pull request open, draft or not.
+drafts_hold_slot = false
 
 # The counts the register carries have to come from the project's own tooling,
 # not from the session reading the repository and estimating. Without this the

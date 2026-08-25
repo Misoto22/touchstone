@@ -106,6 +106,21 @@ def _matches_path(path: str, pattern: str) -> bool:
     return False
 
 
+def _under(path: str, prefix: str) -> bool:
+    """Is `path` inside the directory `prefix` names?
+
+    A bare `startswith` counted `apps/web/apple.ts` as a change under
+    `apps/web/app`. Prefixes reach here from two places — generated source
+    paths and hand-written `confine_to` entries — so the separator is
+    normalised rather than assumed.
+    """
+
+    root = prefix.removeprefix("./").rstrip("/")
+    if not root or root == ".":
+        return True
+    return path == root or path.startswith(f"{root}/")
+
+
 def _protected_paths(loop: Any) -> tuple[str, ...]:
     return tuple(dict.fromkeys((*BUILTIN_PROTECTED_PATHS, *loop.protected_paths)))
 
@@ -128,7 +143,7 @@ def run(state: dict[str, Any]) -> dict[str, Any]:
     # pull request at all. Two merge-triggering loops on one `main` with
     # required checks otherwise invalidate each other's runs every day.
     if loop.require_change_under and not any(
-        path.startswith(prefix) for path in paths for prefix in loop.require_change_under
+        _under(path, prefix) for path in paths for prefix in loop.require_change_under
     ):
         return _clean(context, state, "nothing changed under the paths this loop maintains")
 
@@ -141,7 +156,7 @@ def run(state: dict[str, Any]) -> dict[str, Any]:
             }
 
     if loop.confine_to:
-        stray = [p for p in paths if not any(p.startswith(prefix) for prefix in loop.confine_to)]
+        stray = [p for p in paths if not any(_under(p, prefix) for prefix in loop.confine_to)]
         if stray:
             return {"risk": "high", "escalation": f"wrote outside its remit: {', '.join(stray)}"}
 

@@ -87,7 +87,13 @@ def _gates(config: Config, loop_name: str, *, dry_run: bool) -> None:
     # One harness review open at a time means open, not open-and-not-a-draft.
     # For the code audit the opposite is right: if drafts held the slot, the
     # first medium-risk finding would be the last thing the loop ever did.
-    include_drafts = bool(loop.require_change_under)
+    #
+    # Read, not inferred. This was `bool(loop.require_change_under)`, which
+    # named the harness review exactly as long as it was the only loop with
+    # source paths to maintain. Generated stack evidence began setting them for
+    # the code audit, and the proxy quietly started reporting the opposite of
+    # what it meant.
+    include_drafts = loop.drafts_hold_slot
     held = context.forge.open_pulls(loop.label, include_drafts=include_drafts)
     if held is None:
         raise Held("could not verify the open pull request slot")

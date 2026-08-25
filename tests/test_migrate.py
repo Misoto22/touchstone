@@ -118,3 +118,33 @@ schedule = "hourly"
     assert "version = 1" in source.read_text(encoding="utf-8")
     assert main(["config", "migrate-v2", str(source), "--write"]) == 0
     assert load_config(source).source.schema_version == 2
+
+
+def test_migration_keeps_a_v1_harness_review_holding_its_slot_against_drafts(
+    tmp_path: Path,
+) -> None:
+    # v1 read this off `require_change_under`, which the harness review was
+    # alone in setting. The code audit keeps the default: it parks medium-risk
+    # findings as drafts and has to stay runnable.
+    source = tmp_path / "touchstone.toml"
+    source.write_text(
+        LEGACY
+        + """
+[loop.harness]
+brief = "briefs/harness-review.md"
+label = "old:harness"
+require_change_under = ["docs/engineering/"]
+confine_to = ["docs/engineering/"]
+
+[loop.harness.context]
+project = "the harness"
+""",
+        encoding="utf-8",
+    )
+
+    migrate_config(source)
+    loaded = load_config(source)
+
+    assert loaded.loop("harness").brief == "builtin:harness-review"
+    assert loaded.loop("harness").drafts_hold_slot is True
+    assert loaded.loop("code").drafts_hold_slot is False
