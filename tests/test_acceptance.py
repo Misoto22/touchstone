@@ -178,6 +178,7 @@ def test_model_process_receives_only_its_runtime_and_model_environment(
             extra_args=(),
             budget=SimpleNamespace(audit=1.0, review=1.0),
             sandbox="workspace-write",
+            api_key_env="",
         ),
         state_dir=str(tmp_path / "state"),
     )

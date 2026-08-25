@@ -6,7 +6,7 @@ import hashlib
 import os
 import re
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from importlib.resources import files
 from pathlib import Path, PurePosixPath
 from string import Template
@@ -76,6 +76,27 @@ class EngineConfig:
     #: configuration naming it. Consulted only when `base_url` is set, and
     #: ignored by Claude, whose API has one shape.
     wire_api: str = "responses"
+    #: The environment variable carrying this engine's key.
+    #:
+    #: Empty follows the engine's own vendor variable, which is what a
+    #: single-engine configuration always did. A pool member reaching a gateway
+    #: needs its own name, because two members can speak the same API and still
+    #: hold different credentials. This is a variable name, never a value.
+    api_key_env: str = ""
+    #: Where the operator's own secret store holds that key, as a reference.
+    #:
+    #: Touchstone never reads it. `doctor` prints the command that would, so
+    #: the operator runs the resolution themselves and the value never passes
+    #: through a Touchstone process, a log line, or a rendered file.
+    api_key_ref: str = ""
+
+    @property
+    def key_env(self) -> str:
+        """The environment variable this engine's credential arrives in."""
+
+        if self.api_key_env:
+            return self.api_key_env
+        return "OPENAI_API_KEY" if self.name == "codex" else "ANTHROPIC_API_KEY"
 
 
 @dataclass(frozen=True, slots=True)
@@ -219,9 +240,15 @@ class LoopConfig:
     #: until generated stack evidence began setting it for the code audit.
     drafts_hold_slot: bool = False
     context: tuple[tuple[str, str], ...] = ()
-    #: Overrides `engine.model` for this loop only. The loops do different work
-    #: — implementing a fix against judging a harness — and the model that
-    #: suits one need not suit the other. Empty means the engine's own choice.
+    #: Which member of the engine pool this Loop runs on. Empty is the unnamed
+    #: engine. Naming one is how a Loop that hunts hardcoded values runs on a
+    #: cheap model while a Loop that judges naming runs on a strong one — or on
+    #: another provider entirely.
+    engine: str = ""
+    #: Overrides the model of whichever engine this Loop runs on. The loops do
+    #: different work — implementing a fix against judging a harness — and the
+    #: model that suits one need not suit the other. Empty keeps the engine's
+    #: own choice.
     model: str = ""
     #: Commands whose output the brief is told it will be given, as
     #: `(heading, argv)`. Ordered as written, because a brief refers to them by
@@ -267,6 +294,28 @@ class Config:
     targets: dict[str, TargetConfig] = field(default_factory=dict)
     generated_metadata: GeneratedMetadata | None = None
     actions: ActionsConfig = field(default_factory=ActionsConfig)
+    #: Every engine a Loop may name, including the unnamed one as `default`.
+    engines: dict[str, EngineConfig] = field(default_factory=dict)
+
+    def engine_for(self, loop: str | None = None) -> EngineConfig:
+        """The engine a Loop actually runs on.
+
+        A Loop names a pool member; its own `model` narrows that member without
+        replacing it, because moving one Loop to a cheaper model of the same
+        provider is a smaller decision than moving it to another provider, and
+        the two should not need the same amount of configuration.
+
+        Without a Loop — `run-due` wakes several — the unnamed engine is the
+        honest answer, because no single member is the one that will run.
+        """
+
+        chosen = self.loops.get(loop) if loop else None
+        if chosen is None:
+            return self.engine
+        base = self.engines.get(chosen.engine, self.engine) if chosen.engine else self.engine
+        if chosen.model and chosen.model != base.model:
+            return replace(base, model=chosen.model)
+        return base
 
     def loop(self, name: str) -> LoopConfig:
         try:
@@ -304,12 +353,18 @@ class Config:
             where = f"ssh {self.execution.ssh.host}"
         slug = self.forge.slug or "discovered repository"
         chosen = self.loops.get(loop) if loop else None
+        resolved = self.engine_for(loop)
         model = (
-            f"{chosen.model} (loop)" if chosen is not None and chosen.model else self.engine.model
+            f"{resolved.model} (loop)" if chosen is not None and chosen.model else resolved.model
+        )
+        engine = (
+            f"{resolved.name}:{chosen.engine}"
+            if chosen is not None and chosen.engine
+            else resolved.name
         )
         return (
-            f"{slug} · engine={self.engine.name} model={model} "
-            f"effort={self.engine.audit_effort}/{self.engine.review_effort} · {where}"
+            f"{slug} · engine={engine} model={model} "
+            f"effort={resolved.audit_effort}/{resolved.review_effort} · {where}"
         )
 
 
@@ -344,6 +399,8 @@ _ENGINE = {
     "extra_args",
     "base_url",
     "wire_api",
+    "api_key_env",
+    "api_key_ref",
 }
 _BUDGET = {"audit", "review"}
 _EXECUTION = {"target", "ssh"}
@@ -352,6 +409,7 @@ _GIT = {"author_name", "author_email", "author", "operator_name", "operator_emai
 _LOOP = {
     "brief",
     "attachment",
+    "engine",
     "model",
     "label",
     "schedule",
@@ -392,18 +450,23 @@ def _retired_actions_keys(actions: dict[str, Any]) -> None:
         )
 
 
-def _model_endpoint(engine: dict[str, Any]) -> None:
-    """Accept only an endpoint address a model call can safely be sent to."""
+def _model_endpoint(engine: dict[str, Any], where: str = "engine") -> None:
+    """Accept only an endpoint address a model call can safely be sent to.
+
+    Takes its location because the same rules now guard every member of the
+    engine pool, and an error naming `engine.base_url` when the offending key
+    is `engine.cheap.base_url` sends the reader to the wrong table.
+    """
 
     base_url = str(engine.get("base_url", ""))
     wire_api = str(engine.get("wire_api", "responses"))
     if wire_api not in {"chat", "responses"}:
-        raise ConfigError("engine.wire_api must be 'chat' or 'responses'")
+        raise ConfigError(f"{where}.wire_api must be 'chat' or 'responses'")
     if wire_api == "chat" and str(engine.get("name", "codex")) == "codex":
         # Codex refuses to load a configuration naming it, so accepting the
         # value here would only move the failure to the first model call.
         raise ConfigError(
-            "engine.wire_api = 'chat' is not supported by Codex; use 'responses', "
+            f"{where}.wire_api = 'chat' is not supported by Codex; use 'responses', "
             "or an endpoint that speaks the Anthropic API with engine.name = 'claude'"
         )
     if not base_url:
@@ -411,13 +474,116 @@ def _model_endpoint(engine: dict[str, Any]) -> None:
     parsed = urlsplit(base_url)
     loopback = parsed.hostname in {"127.0.0.1", "::1", "localhost"}
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-        raise ConfigError("engine.base_url must be an absolute http or https URL")
+        raise ConfigError(f"{where}.base_url must be an absolute http or https URL")
     if parsed.scheme == "http" and not loopback:
         # A prompt carries repository contents and the request carries the API
         # key, so plaintext is only ever acceptable to the same machine.
-        raise ConfigError("engine.base_url must use https unless it is a loopback address")
+        raise ConfigError(f"{where}.base_url must use https unless it is a loopback address")
     if parsed.query or parsed.fragment or parsed.username or parsed.password:
-        raise ConfigError("engine.base_url must be a plain endpoint URL with no query or userinfo")
+        raise ConfigError(
+            f"{where}.base_url must be a plain endpoint URL with no query or userinfo"
+        )
+
+
+_ENV_NAME = re.compile(r"[A-Z][A-Z0-9_]*")
+
+
+def _engine_members(engine: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Separate named pool members from the unnamed engine's own keys.
+
+    A member is a subtable, and `budget` is the one subtable that belongs to
+    the engine holding it rather than sitting beside it. Telling them apart
+    structurally rather than by a naming convention is what lets `[engine]` and
+    `[engine.cheap]` share one TOML table without either needing to know the
+    other exists, which is why this stays schema v2 instead of forcing a
+    migration onto configurations that never name a second engine.
+    """
+
+    members: dict[str, dict[str, Any]] = {}
+    for key, value in engine.items():
+        if key in _ENGINE or not isinstance(value, dict):
+            continue
+        if not re.fullmatch(r"[a-z][a-z0-9_-]*", key):
+            raise ConfigError(
+                f"engine.{key} is not a usable engine name; use lowercase letters, "
+                "digits, hyphens, and underscores"
+            )
+        members[key] = value
+    return members
+
+
+def _validate_engine_table(engine: dict[str, Any], where: str) -> None:
+    """Apply the unnamed engine's rules to any member of the pool."""
+
+    _unknown(_table(engine, "budget"), _BUDGET, f"{where}.budget")
+    for key in (
+        "name",
+        "model",
+        "audit_effort",
+        "review_effort",
+        "base_url",
+        "wire_api",
+        "api_key_env",
+        "api_key_ref",
+    ):
+        _string(engine, key, where)
+    _model_endpoint(engine, where)
+    _positive_int(engine, "timeout_seconds", where)
+    _string_array(engine, "extra_args", where)
+    for key, value in _table(engine, "budget").items():
+        if isinstance(value, bool) or not isinstance(value, int | float) or value < 0:
+            raise ConfigError(f"{where}.budget.{key} must be a non-negative number")
+    api_key_env = str(engine.get("api_key_env", ""))
+    if api_key_env and not _ENV_NAME.fullmatch(api_key_env):
+        # A value pasted here would be read as a variable name, so the model
+        # call would look up an absent variable and the key would sit in the
+        # configuration file forever. Rejecting the shape catches that paste.
+        raise ConfigError(
+            f"{where}.api_key_env names an environment variable, so it must be "
+            "SCREAMING_SNAKE_CASE; it is never a credential value"
+        )
+    api_key_ref = str(engine.get("api_key_ref", ""))
+    if api_key_ref and not api_key_ref.startswith("op://"):
+        raise ConfigError(
+            f"{where}.api_key_ref must be an op:// reference. Touchstone never reads it; "
+            "doctor prints the command that would, so the value never enters this process"
+        )
+
+
+def _build_engine(engine_raw: dict[str, Any], *, where: str, environment: bool) -> EngineConfig:
+    """Construct one engine, with or without the process environment's say.
+
+    Only the unnamed engine honours the `TOUCHSTONE_*` overrides. A named
+    member was chosen deliberately by the Loop that references it, and a stray
+    `TOUCHSTONE_MODEL` silently retargeting every member of the pool would make
+    the cheap engine and the strong one the same engine without saying so.
+    """
+
+    budget_raw = _table(engine_raw, "budget")
+
+    def value(variable: str, fallback: Any) -> Any:
+        return os.environ.get(variable, fallback) if environment else fallback
+
+    name = value("TOUCHSTONE_ENGINE", engine_raw.get("name", "codex"))
+    if name not in ("codex", "claude"):
+        raise ConfigError(f"{where}.name must be 'codex' or 'claude', not {name!r}")
+    return EngineConfig(
+        name=name,
+        model=value("TOUCHSTONE_MODEL", engine_raw.get("model", "")),
+        sandbox=value("TOUCHSTONE_SANDBOX", engine_raw.get("sandbox", "workspace-write")),
+        audit_effort=value("TOUCHSTONE_EFFORT", engine_raw.get("audit_effort", "high")),
+        review_effort=value("TOUCHSTONE_REVIEW_EFFORT", engine_raw.get("review_effort", "high")),
+        timeout_seconds=int(value("TOUCHSTONE_TIMEOUT", engine_raw.get("timeout_seconds", 2700))),
+        budget=Budget(
+            audit=float(budget_raw.get("audit", 20.0)),
+            review=float(budget_raw.get("review", 4.0)),
+        ),
+        extra_args=tuple(engine_raw.get("extra_args", ())),
+        base_url=str(engine_raw.get("base_url", "")),
+        wire_api=str(engine_raw.get("wire_api", "responses")),
+        api_key_env=str(engine_raw.get("api_key_env", "")),
+        api_key_ref=str(engine_raw.get("api_key_ref", "")),
+    )
 
 
 def _unknown(table: dict[str, Any], known: set[str], where: str) -> None:
@@ -532,8 +698,13 @@ def _validate(raw: dict[str, Any]) -> None:
     actions = _table(raw, "actions")
     _unknown(project, _PROJECT, "project")
     _unknown(forge, _FORGE, "forge")
-    _unknown(engine, _ENGINE, "engine")
-    _unknown(_table(engine, "budget"), _BUDGET, "engine.budget")
+    members = _engine_members(engine)
+    if "default" in members:
+        raise ConfigError(
+            "engine.default is reserved for the unnamed [engine] table; name the member "
+            "something else"
+        )
+    _unknown({key: value for key, value in engine.items() if key not in members}, _ENGINE, "engine")
     _unknown(execution, _EXECUTION, "execution")
     _unknown(_table(execution, "ssh"), _SSH, "execution.ssh")
     _unknown(git, _GIT, "git")
@@ -546,14 +717,10 @@ def _validate(raw: dict[str, Any]) -> None:
         _string(forge, key, "forge")
     _string_array(forge, "required_workflows", "forge")
     _positive_int(forge, "reap_after_hours", "forge")
-    for key in ("name", "model", "audit_effort", "review_effort", "base_url", "wire_api"):
-        _string(engine, key, "engine")
-    _model_endpoint(engine)
-    _positive_int(engine, "timeout_seconds", "engine")
-    _string_array(engine, "extra_args", "engine")
-    for key, value in _table(engine, "budget").items():
-        if isinstance(value, bool) or not isinstance(value, int | float) or value < 0:
-            raise ConfigError(f"engine.budget.{key} must be a non-negative number")
+    _validate_engine_table(engine, "engine")
+    for member, table in members.items():
+        _unknown(table, _ENGINE, f"engine.{member}")
+        _validate_engine_table(table, f"engine.{member}")
     _string(execution, "target", "execution")
     ssh = _table(execution, "ssh")
     for key in ("host", "workdir", "state_dir", "identity_file"):
@@ -633,6 +800,7 @@ def _loops(raw: dict[str, Any], base_dir: Path) -> dict[str, LoopConfig]:
                 raise ConfigError(f"loop.{name}.schedule: {exc}") from None
         result[name] = LoopConfig(
             name=name,
+            engine=str(table.get("engine", "")),
             brief=str(_required(table, "brief", f"loop.{name}")),
             label=str(_required(table, "label", f"loop.{name}")),
             config_dir=base_dir,
@@ -671,34 +839,15 @@ def _build_config(
     project = _table(raw, "project", required=True)
     forge_raw = _table(raw, "forge", required=True)
     engine_raw = _table(raw, "engine")
-    budget_raw = _table(engine_raw, "budget")
     execution_raw = _table(raw, "execution")
     ssh_raw = _table(execution_raw, "ssh")
     git_raw = _table(raw, "git")
     actions_raw = _table(raw, "actions")
 
-    engine_name = os.environ.get("TOUCHSTONE_ENGINE", engine_raw.get("name", "codex"))
-    if engine_name not in ("codex", "claude"):
-        raise ConfigError(f"engine.name must be 'codex' or 'claude', not {engine_name!r}")
-    engine = EngineConfig(
-        name=engine_name,
-        model=os.environ.get("TOUCHSTONE_MODEL", engine_raw.get("model", "")),
-        sandbox=os.environ.get("TOUCHSTONE_SANDBOX", engine_raw.get("sandbox", "workspace-write")),
-        audit_effort=os.environ.get("TOUCHSTONE_EFFORT", engine_raw.get("audit_effort", "high")),
-        review_effort=os.environ.get(
-            "TOUCHSTONE_REVIEW_EFFORT", engine_raw.get("review_effort", "high")
-        ),
-        timeout_seconds=int(
-            os.environ.get("TOUCHSTONE_TIMEOUT", engine_raw.get("timeout_seconds", 2700))
-        ),
-        budget=Budget(
-            audit=float(budget_raw.get("audit", 20.0)),
-            review=float(budget_raw.get("review", 4.0)),
-        ),
-        extra_args=tuple(engine_raw.get("extra_args", ())),
-        base_url=str(engine_raw.get("base_url", "")),
-        wire_api=str(engine_raw.get("wire_api", "responses")),
-    )
+    engine = _build_engine(engine_raw, where="engine", environment=True)
+    engines = {"default": engine}
+    for member, table in _engine_members(engine_raw).items():
+        engines[member] = _build_engine(table, where=f"engine.{member}", environment=False)
 
     ssh = None
     if ssh_raw:
@@ -723,6 +872,14 @@ def _build_config(
         repo_override or str(_required(project, "path", "project")),
         Path.cwd() if repo_override else base_dir,
     )
+    loops = _loops(_table(raw, "loop"), base_dir)
+    for name, loop in loops.items():
+        if loop.engine and loop.engine not in engines:
+            known = ", ".join(sorted(engines))
+            raise ConfigError(
+                f"loop.{name}.engine names {loop.engine!r}, which is not a configured "
+                f"engine; configured engines are {known}"
+            )
     return Config(
         source=ConfigSource(
             path=chosen,
@@ -752,10 +909,11 @@ def _build_config(
             operator_name=git_raw.get("operator_name"),
             operator_email=git_raw.get("operator_email"),
         ),
-        loops=_loops(_table(raw, "loop"), base_dir),
+        loops=loops,
         timezone=timezone,
         targets=dict(targets or {}),
         generated_metadata=generated_metadata,
+        engines=engines,
         actions=ActionsConfig(
             visibility=actions_raw.get("visibility", "public"),
             wake_minutes=int(

@@ -32,6 +32,29 @@ timeout_seconds = 2700
 audit = 20.0
 review = 4.0
 
+# Any other subtable of [engine] is a named pool member a Loop can run on. The
+# unnamed engine above is the member called `default`, so a configuration that
+# never names a second one keeps working unchanged. Members exist because the
+# loops do different work: hunting hardcoded values is cheap and mechanical,
+# judging naming is neither, and paying the strong model's rate for both is a
+# decision nobody made on purpose.
+# [engine.cheap]
+# name = "claude"
+# model = "your-small-model-id"
+#
+# [engine.gateway]
+# name = "claude"
+# model = "your-model-id"
+# base_url = "https://gateway.example.test/anthropic"
+# Two members can speak the same API and hold different credentials, so a
+# member reaching a gateway names the variable its key arrives in. This is a
+# variable name, never a value.
+# api_key_env = "GATEWAY_API_KEY"
+# Where the operator's own secret store holds that key. Touchstone never reads
+# it; `doctor` prints the command that would, so the value never enters a
+# Touchstone process.
+# api_key_ref = "op://vault/item/credential"
+
 [git]
 # Two identities take part in a published change: the bot that ran the Loop and
 # the operator who owns the repository. A commit has room for one author, so
@@ -69,6 +92,8 @@ node_version = "24"
 auto_merge = false
 
 [loop.code]
+# Which pool member this Loop runs on. Omit for the unnamed engine.
+# engine = "cheap"
 brief = "builtin:code-audit"
 label = "touchstone:audit"
 schedule = "hourly@00"

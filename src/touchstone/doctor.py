@@ -9,7 +9,7 @@ import sys
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 from touchstone import execution
 from touchstone.config import Config
@@ -585,8 +585,11 @@ def _actions_checks(config: Config, context: DoctorContext) -> list[CheckResult]
         )
     )
     checks.append(_actions_schedule_inactivity_check(repository))
-    required_secrets = {
-        "OPENAI_API_KEY" if config.engine.name == "codex" else "ANTHROPIC_API_KEY",
+    # Every member of the engine pool needs its own credential present, because
+    # a Loop naming a member that has none fails at its first model call, in a
+    # hosted run, hours after the configuration said it was ready.
+    engine_secrets = {engine.key_env: engine for engine in config.engines.values()}
+    required_secrets = set(engine_secrets) | {
         "TOUCHSTONE_APP_ID",
         "TOUCHSTONE_APP_PRIVATE_KEY",
         "TOUCHSTONE_STATE_KEY",
@@ -599,9 +602,7 @@ def _actions_checks(config: Config, context: DoctorContext) -> list[CheckResult]
             "required Actions secret metadata exists"
             if not missing_secrets
             else f"missing Actions secret metadata: {', '.join(missing_secrets)}",
-            None
-            if not missing_secrets
-            else "Run 'touchstone actions setup' and add the model key.",
+            None if not missing_secrets else _secret_remediation(missing_secrets, engine_secrets),
         )
     )
     installation = _actions_setup_attestation(config)
@@ -657,6 +658,27 @@ def _actions_checks(config: Config, context: DoctorContext) -> list[CheckResult]
             )
         )
     return checks
+
+
+def _secret_remediation(missing: list[str], engines: dict[str, Any]) -> str:
+    """Name the exact command that would store each missing model credential.
+
+    Printed rather than run. Touchstone never reads the operator's secret
+    store: resolving a reference here would pull a credential value into this
+    process, and a process that has never held one cannot leak one.
+    """
+
+    lines: list[str] = []
+    for name in missing:
+        engine = engines.get(name)
+        reference = getattr(engine, "api_key_ref", "") if engine is not None else ""
+        if reference:
+            lines.append(f"op read {reference!r} | gh secret set {name} --app actions")
+        elif engine is not None:
+            lines.append(f"gh secret set {name} --app actions")
+    if not lines:
+        return "Run 'touchstone actions setup' and add the model key."
+    return "Run 'touchstone actions setup', then: " + "; ".join(lines)
 
 
 def _actions_setup_attestation(config: Config) -> dict[str, object] | None:

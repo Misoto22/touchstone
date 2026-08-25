@@ -97,8 +97,25 @@ def render_workflow(config: Config, pins: ActionPins, *, action_sha: str) -> str
     branch = config.forge.default_branch
     branch_expression = branch.replace("'", "''")
     retention = config.actions.artifact_retention_days
-    model_secret = "OPENAI_API_KEY" if config.engine.name == "codex" else "ANTHROPIC_API_KEY"
+    model_secret = config.engine.key_env
     model_input = "openai-api-key" if config.engine.name == "codex" else "anthropic-api-key"
+    # Every other member of the engine pool arrives as a plain job variable,
+    # because the Action's own inputs name the two vendor credentials and a
+    # pool member reaching a gateway holds a third. Mapped on the Analysis job
+    # alone, so the stages that hold a publishing token still hold no model
+    # credential.
+    pool_secrets = sorted(
+        {engine.key_env for engine in getattr(config, "engines", {}).values()} - {model_secret}
+    )
+    for secret in pool_secrets:
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]*", secret):
+            raise ConfigError(f"engine key variable {secret!r} is not a usable secret name")
+    analysis_env_block = (
+        "    env:\n"
+        + "".join(f"      {name}: ${{{{ secrets.{name} }}}}\n" for name in pool_secrets)
+        if pool_secrets
+        else ""
+    )
     analysis_candidate_artifact = (
         "touchstone-candidate-${{ steps.touchstone.outputs.candidate_id || github.run_id }}"
     )
@@ -191,7 +208,7 @@ jobs:
     needs: prepare
     if: needs.prepare.outputs.should_run == 'true'
     runs-on: ubuntu-latest
-    permissions:
+{analysis_env_block}    permissions:
       contents: read
       actions: read
     outputs:

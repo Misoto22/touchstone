@@ -135,11 +135,12 @@ def run(state: dict[str, Any]) -> dict[str, Any]:
         f"### Diff\n\n```diff\n{reviewable.diff}\n```"
     )
 
-    session = context.engine.review(prompt, worktree=worktree, schema=SCHEMA, model=loop.model)
+    engine = context.engine_for(loop.name)
+    session = engine.review(prompt, worktree=worktree, schema=SCHEMA, model=loop.model)
     if not session.ok:
         return {
             "verdict": "skipped",
-            "verdict_reason": f"the {context.engine.name} review session failed",
+            "verdict_reason": f"the {engine.name} review session failed",
             "outcome": "inconclusive",
             "cost": [session.cost],
         }

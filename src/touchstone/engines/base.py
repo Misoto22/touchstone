@@ -51,11 +51,16 @@ _ENGINE_ENVIRONMENT = {
 }
 
 
+#: The variable each engine's own CLI reads its credential from.
+_VENDOR_KEY = {"codex": "OPENAI_API_KEY", "claude": "ANTHROPIC_API_KEY"}
+
+
 def engine_environment(
     engine: str,
     source: Mapping[str, str] | None = None,
     *,
     base_url: str = "",
+    api_key_env: str = "",
 ) -> dict[str, str]:
     """Return the minimal environment allowed to cross into a model process.
 
@@ -63,11 +68,29 @@ def engine_environment(
     the rest of the environment. Claude reads its endpoint from
     `ANTHROPIC_BASE_URL`; Codex is told through its own provider settings and
     needs nothing here.
+
+    `api_key_env` names where the operator stored this engine's credential.
+    Two pool members can speak the same API and hold different keys, so the
+    value is read from that variable and handed to the session under the one
+    its CLI actually reads. The session never learns the original name.
     """
 
     environment = os.environ if source is None else source
     allowed = _RUNTIME_ENVIRONMENT | _ENGINE_ENVIRONMENT.get(engine, set())
+    if api_key_env:
+        allowed = allowed | {api_key_env}
     result = {key: value for key, value in environment.items() if key in allowed and value}
+    vendor = _VENDOR_KEY.get(engine, "")
+    if api_key_env and vendor and api_key_env != vendor:
+        named = result.pop(api_key_env, "")
+        if named:
+            result[vendor] = named
+        else:
+            # The member named another variable and it is empty. Letting the
+            # vendor's own key stand in would send that credential to whatever
+            # endpoint this member configured, which is a leak wearing the
+            # costume of a fallback.
+            result.pop(vendor, None)
     if environment.get("GITHUB_ACTIONS", "").lower() == "true":
         runner_temp = Path(environment.get("RUNNER_TEMP", tempfile.gettempdir())).resolve()
         home = runner_temp / "touchstone-model-home"
@@ -214,11 +237,17 @@ class Engine(Protocol):
         """
 
 
-def build(config, executor: Executor) -> Engine:  # type: ignore[no-untyped-def]
-    """The engine a configuration asks for."""
+def build(config, executor: Executor, engine=None) -> Engine:  # type: ignore[no-untyped-def]
+    """The engine a configuration asks for, or the pool member named instead.
+
+    Takes the member because a Loop may run on another provider entirely, and
+    which CLI to invoke is decided by that member's `name`, not by the
+    configuration's unnamed engine.
+    """
     from touchstone.engines.claude import ClaudeEngine
     from touchstone.engines.codex import CodexEngine
 
-    if config.engine.name == "claude":
-        return ClaudeEngine(config, executor)
-    return CodexEngine(config, executor)
+    chosen = engine if engine is not None else config.engine
+    if chosen.name == "claude":
+        return ClaudeEngine(config, executor, chosen)
+    return CodexEngine(config, executor, chosen)
