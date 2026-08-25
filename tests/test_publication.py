@@ -350,3 +350,34 @@ def test_an_approved_publication_also_records_its_branch(tmp_path: Path) -> None
     assert result.outcome == "awaiting_checks"
     assert projection is not None
     assert projection.branch == result.branch != ""
+
+
+def test_a_change_nobody_reviewed_says_why_nobody_did() -> None:
+    """A `medium` change never reaches the reviewer: nothing it could answer
+    would let the change merge unattended. That left an empty verdict rendering
+    as `**skipped** —` with no reason, which is what a review that ran and
+    failed looks like. Two pull requests were read that way, including by me.
+    """
+    from touchstone.lifecycle import _review_line
+
+    def request(**kw):  # type: ignore[no-untyped-def]
+        base = {"verdict": "", "review_reason": "", "risk": "low"}
+        return SimpleNamespace(**{**base, **kw})
+
+    judged = _review_line(request(verdict="reject", review_reason="R-NAM-4b", risk="low"))
+    assert judged.startswith("**reject**")
+    assert "R-NAM-4b" in judged
+
+    unreviewed = _review_line(request(risk="medium"))
+    assert "not reviewed" in unreviewed
+    assert "medium" in unreviewed
+    assert "skipped" not in unreviewed, "still indistinguishable from a failed review"
+
+    failed = _review_line(request(risk="low", review_reason="the codex session failed"))
+    assert "inconclusive" in failed
+    assert "the codex session failed" in failed
+
+    # A low-risk change with no verdict and no reason at all is the one case
+    # where nothing can be said honestly, so it says that.
+    silent = _review_line(request(risk="low"))
+    assert "itself a defect" in silent
