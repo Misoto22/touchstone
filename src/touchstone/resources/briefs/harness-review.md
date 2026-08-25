@@ -40,6 +40,14 @@ count when the count has fallen, and never raised.** A rule whose census exceeds
 its ceiling is a regression to report, not a ceiling to adjust. If you find
 yourself about to raise a number, you have misread the check.
 
+**Every ceiling you move carries its number into the summary**, as
+`RULE old → new, measured N across M files`. The reviewer reads the diff and
+nothing else — not the material collected for you — so a ceiling that falls from
+eight to zero arrives as a number someone changed for no stated reason, and
+gets rejected for exactly that. It is also the only durable record: a census is
+recomputed every run, and in a month the pull request is the only place the
+figure this decision rested on still exists.
+
 ## What you may write
 
 $writable — and nothing else.
