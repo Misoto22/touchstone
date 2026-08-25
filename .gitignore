@@ -15,3 +15,5 @@ dry-run.diff
 dist/
 build/
 *.egg-info/
+secrets/
+docker-compose.override.yml
