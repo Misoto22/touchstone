@@ -57,6 +57,12 @@ class ProfileDefinition:
     source_paths: tuple[str, ...]
     detectors: tuple[tuple[tuple[str, str], ...], ...]
     validation: tuple[ValidationCandidate, ...]
+    #: Naming rules this stack holds itself to, as `(what, convention)` pairs.
+    #:
+    #: Declared as data rather than written into a brief, so one concern brief
+    #: serves every stack and `doctor` can compare a rule against the project
+    #: instead of only a session reading prose about it.
+    naming: tuple[tuple[str, str], ...] = ()
     local: bool = False
 
 

@@ -217,6 +217,29 @@ class ActionsConfig:
     auto_merge: bool = False
 
 
+#: What a built-in brief's placeholders mean when the project supplies nothing.
+#:
+#: A brief is a template, and `safe_substitute` leaves an unfilled placeholder
+#: as its own literal text — so a Loop configured without `register` used to
+#: hand the session a prompt containing the characters `$register`, which reads
+#: as a mistake and tells it nothing. A default says the true thing instead:
+#: that this project declares none.
+#:
+#: The project's own context overrides every entry here.
+_BRIEF_DEFAULTS = {
+    "project": "this repository",
+    "ledger": "No project findings ledger is configured; treat the queue as empty.",
+    "register": "No rule register is configured; treat it as empty.",
+    "protected": "the configured protected paths",
+    "naming": (
+        "No naming conventions are declared for this stack, so the surrounding "
+        "code decides: the convention is whatever the majority of existing "
+        "neighbours already do."
+    ),
+    "rules_clause": "",
+}
+
+
 @dataclass(frozen=True, slots=True)
 class LoopConfig:
     name: str
@@ -256,7 +279,9 @@ class LoopConfig:
     attachment: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
     def prompt(self) -> str:
-        return Template(self._brief_text(self.brief)).safe_substitute(dict(self.context))
+        return Template(self._brief_text(self.brief)).safe_substitute(
+            _BRIEF_DEFAULTS | dict(self.context)
+        )
 
     def review_prompt(self) -> str:
         if self.brief.startswith("builtin:"):

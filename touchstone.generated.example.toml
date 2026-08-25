@@ -21,6 +21,7 @@ package_managers = []
 audit_context = [
     "Audit repository-owned behavior without framework assumptions.",
 ]
+naming = ""
 protected_paths = [
     ".github/",
     ".env",

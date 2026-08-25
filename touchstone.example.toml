@@ -94,6 +94,10 @@ auto_merge = false
 [loop.code]
 # Which pool member this Loop runs on. Omit for the unnamed engine.
 # engine = "cheap"
+# A built-in brief names one concern and no technology; the Target's Profile
+# Set supplies the stack. Available: code-audit, harness-review, hardcode,
+# naming, error-handling, test-coverage. A path instead of `builtin:` reads a
+# brief the repository owns, whose sibling `review.md` reviews it.
 brief = "builtin:code-audit"
 label = "touchstone:audit"
 schedule = "hourly@00"

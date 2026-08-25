@@ -25,6 +25,7 @@ _ALLOWED = {
     "source_paths",
     "detect",
     "validation",
+    "naming",
 }
 _DETECT_KEYS = {"kind", "path", "name", "ecosystem"}
 _SAFE_DETECTORS = {"file", "dependency", "python-project", "node-engine"}
@@ -39,6 +40,8 @@ _BUILTIN_ORDER = (
     "python",
     "fastapi",
     "django",
+    "rust",
+    "dotnet",
 )
 
 
@@ -99,6 +102,12 @@ def _parse(text: str, *, local: bool) -> ProfileDefinition:
                 "side-effect-minimal Gates are enabled without operator review"
             )
         validation.append(ValidationCandidate(argv, timeout, capability, enabled))
+    naming_raw = raw.get("naming", {})
+    if not isinstance(naming_raw, dict) or any(
+        not isinstance(key, str) or not isinstance(value, str) for key, value in naming_raw.items()
+    ):
+        raise ValueError("Profile naming must be a table of string values")
+    naming = tuple(sorted(naming_raw.items()))
     return ProfileDefinition(
         name=name,
         version=version,
@@ -109,6 +118,7 @@ def _parse(text: str, *, local: bool) -> ProfileDefinition:
         source_paths=sources,
         detectors=tuple(detectors),
         validation=tuple(validation),
+        naming=naming,
         local=local,
     )
 

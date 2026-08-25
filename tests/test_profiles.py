@@ -84,6 +84,8 @@ def test_builtin_catalog_loads_and_rejects_executable_local_profile(tmp_path: Pa
         "python",
         "fastapi",
         "django",
+        "rust",
+        "dotnet",
     )
     local = tmp_path / "profiles"
     local.mkdir()
@@ -176,3 +178,69 @@ def test_the_generic_source_read_gate_is_enabled_without_operator_review() -> No
         for candidate in catalog.get(name).validation:
             if candidate.capability not in MINIMAL_CAPABILITIES:
                 assert candidate.enabled is False
+
+
+def test_a_cargo_manifest_confirms_the_rust_profile(tmp_path: Path) -> None:
+    (tmp_path / "Cargo.toml").write_text(
+        '[package]\nname = "widget"\nversion = "0.1.0"\n', encoding="utf-8"
+    )
+
+    assert _confirmed(tmp_path) == {"rust"}
+
+
+def test_a_project_file_confirms_the_dotnet_profile(tmp_path: Path) -> None:
+    (tmp_path / "Widget.csproj").write_text(
+        '<Project Sdk="Microsoft.NET.Sdk"></Project>', encoding="utf-8"
+    )
+
+    assert _confirmed(tmp_path) == {"dotnet"}
+
+
+def test_the_new_profiles_enable_no_gate_that_runs_project_code() -> None:
+    catalog = load_catalog()
+
+    for name in ("rust", "dotnet"):
+        for candidate in catalog.get(name).validation:
+            assert candidate.enabled is False, f"{name} enables {candidate.argv}"
+
+
+def test_a_profile_declares_its_naming_rules_as_data() -> None:
+    catalog = load_catalog()
+
+    rules = dict(catalog.get("rust").naming)
+
+    assert rules["function"] == "snake_case"
+    assert rules["type"] == "PascalCase"
+    assert dict(catalog.get("dotnet").naming)["method"] == "PascalCase"
+
+
+def test_a_stack_without_declared_naming_rules_has_none() -> None:
+    assert load_catalog().get("generic").naming == ()
+
+
+def test_naming_rules_travel_from_the_profile_into_the_generated_context(tmp_path: Path) -> None:
+    from touchstone.profiles.materialize import detect_repository, materialize
+
+    (tmp_path / "Cargo.toml").write_text(
+        '[package]\nname = "widget"\nversion = "0.1.0"\n', encoding="utf-8"
+    )
+    discovery, matches, catalog = detect_repository(tmp_path)
+
+    generated = materialize(discovery, matches, catalog, repository=tmp_path)
+
+    target = next(iter(generated.data["target"].values()))
+    assert "function names are snake_case" in target["naming"]
+    assert "function names are snake_case" in generated.data["loop"]["code"]["context"]["naming"]
+
+
+def test_a_generic_target_declares_no_naming_context(tmp_path: Path) -> None:
+    from touchstone.profiles.materialize import detect_repository, materialize
+
+    (tmp_path / "README.md").write_text("nothing to detect", encoding="utf-8")
+    discovery, matches, catalog = detect_repository(tmp_path)
+
+    generated = materialize(discovery, matches, catalog, repository=tmp_path)
+
+    # Absent rather than empty: an empty string would override the brief's own
+    # default and hand the session a blank where a sentence belongs.
+    assert "naming" not in generated.data["loop"]["code"]["context"]

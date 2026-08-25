@@ -29,7 +29,7 @@ Touchstone turns agent findings into reviewable, PR-only changes.
 
 ### Features
 
-- **Stack detection before configuration** — identifies stable package-backed Targets and composes `generic`, `javascript`, `node`, `typescript`, `react`, `nextjs`, `python`, `fastapi`, and `django` Profiles from repository evidence.
+- **Stack detection before configuration** — identifies stable package-backed Targets and composes `generic`, `javascript`, `node`, `typescript`, `react`, `nextjs`, `python`, `fastapi`, `django`, `rust`, and `dotnet` Profiles from repository evidence.
 - **Monorepo-aware scope** — discovers npm, pnpm, Yarn, Bun, uv, Poetry, and PDM evidence, records a package manager per Target, tracks dependency edges, and validates a changed Target plus its dependents.
 - **Owned configuration** — keeps deliberate settings in `touchstone.toml` and reproducible stack evidence in `.touchstone/generated.toml`; Profile refresh never replaces project overrides.
 - **Structured validation** — runs argv-based gates in bounded Target directories with timeouts, scrubbed subprocess environments, hook-free locked preparation, and tracked-file mutation checks. Generated commands use the Target's own package manager. A Profile enables only side-effect-minimal Gates; every command that runs project code stays a disabled Candidate until the project override accepts it.
@@ -213,6 +213,8 @@ Schema v2 splits ownership across two files:
 - `touchstone.toml` is project-owned. It holds repository identity, engine, schedule, Actions policy, Loop choices, and explicit overrides.
 - `.touchstone/generated.toml` is machine-owned. It records package/Profile versions, source digest, per-Target package managers, Targets, evidence, dependencies, protected/source paths, and validation candidates.
 - `.touchstone/profiles/*.toml` may add repository-local declarative Profiles. Profile files cannot import or execute project code.
+
+A Loop's brief names the concern, and the Profile supplies the technology. The built-in concern briefs — `builtin:hardcode`, `builtin:naming`, `builtin:error-handling`, and `builtin:test-coverage`, beside the broader `builtin:code-audit` and `builtin:harness-review` — name no language or framework at all, so one brief serves every stack instead of one brief per stack per concern. A Profile declares its naming conventions as data in a `[naming]` table; `profile refresh` renders the conventions of a Target's whole Profile Set into the generated Loop context, and the naming brief reads them from there. A placeholder the project never fills resolves to a default stating that this project declares none, rather than reaching the session as literal `$naming`.
 
 Detection distinguishes confirmed evidence, candidates requiring explicit confirmation, and unsupported version ranges. Floating or unresolvable framework versions remain candidates instead of being treated as confirmed. Repository-local declarative Profile detectors participate in the same bounded detection pass. In non-interactive mode, unresolved candidates or ambiguous lockfile families stop initialization instead of guessing. Select deliberately with `--profile NAME` or `--package-manager NAME`.
 

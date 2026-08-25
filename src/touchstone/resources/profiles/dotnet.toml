@@ -1,0 +1,31 @@
+name = "dotnet"
+version = "1"
+category = "language"
+supported = ""
+audit_context = "Inspect .NET project boundaries, nullability, async correctness, and disposal."
+protected_paths = ["packages.lock.json"]
+source_paths = ["src/", "tests/"]
+
+[naming]
+method = "PascalCase"
+type = "PascalCase"
+constant = "PascalCase"
+parameter = "camelCase"
+private_field = "_camelCase"
+interface = "IPascalCase"
+
+[[detect]]
+kind = "file"
+path = "*.csproj"
+
+[[validation]]
+argv = ["dotnet", "build", "--nologo"]
+timeout_seconds = 900
+capability = "application-build"
+enabled = false
+
+[[validation]]
+argv = ["dotnet", "test", "--nologo"]
+timeout_seconds = 900
+capability = "application-test"
+enabled = false

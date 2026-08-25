@@ -1,0 +1,30 @@
+name = "rust"
+version = "1"
+category = "language"
+supported = ""
+audit_context = "Inspect Rust ownership, lifetimes, error propagation, and unsafe boundaries."
+protected_paths = ["Cargo.lock"]
+source_paths = ["src/", "tests/"]
+
+[naming]
+function = "snake_case"
+type = "PascalCase"
+constant = "SCREAMING_SNAKE_CASE"
+module = "snake_case"
+macro = "snake_case"
+
+[[detect]]
+kind = "file"
+path = "Cargo.toml"
+
+[[validation]]
+argv = ["cargo", "clippy", "--all-targets", "--", "-D", "warnings"]
+timeout_seconds = 900
+capability = "application-build"
+enabled = false
+
+[[validation]]
+argv = ["cargo", "test"]
+timeout_seconds = 900
+capability = "application-test"
+enabled = false
