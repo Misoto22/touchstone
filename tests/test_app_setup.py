@@ -514,3 +514,86 @@ def test_a_repository_scope_that_is_too_broad_also_takes_the_key_back(tmp_path: 
 
     assert report.step == "repository-scope-mismatch"
     assert github.deleted == ["TOUCHSTONE_APP_PRIVATE_KEY"]
+
+
+def test_setup_asks_again_when_the_install_is_not_finished_yet(tmp_path: Path) -> None:
+    """The lookup is retried while the one-time key can still sign it.
+
+    Confirming a moment early used to pin setup to `installation-missing` for
+    good, because no later command can read an Actions secret back to try again.
+    """
+    github = FakeGitHub()
+    lookups: list[int] = []
+
+    def slow_install(app_id, _key):  # type: ignore[no-untyped-def]
+        lookups.append(app_id)
+        if len(lookups) < 2:
+            return None
+        return {
+            "id": 7,
+            "app_id": 42,
+            "repository_selection": "selected",
+            "permissions": required_permissions(),
+        }
+
+    github.installation = slow_install  # type: ignore[assignment]
+    setup = ActionsSetup(
+        _config(tmp_path),
+        github=github,
+        code_provider=lambda _manifest, _state: "manifest-code",
+        exchange=lambda _code: _conversion(),
+        open_browser=lambda _url: None,
+        confirm_installation=lambda _url: True,
+    )
+
+    report = setup.run(SetupOptions())
+
+    assert len(lookups) == 2
+    assert report.state == "complete"
+    assert github.deleted == []
+
+
+def test_giving_up_on_the_prompt_stops_asking(tmp_path: Path) -> None:
+    github = FakeGitHub()
+    github.installation = lambda _app_id, _key: None  # type: ignore[assignment]
+    answers = iter([True, False])
+    setup = ActionsSetup(
+        _config(tmp_path),
+        github=github,
+        code_provider=lambda _manifest, _state: "manifest-code",
+        exchange=lambda _code: _conversion(),
+        open_browser=lambda _url: None,
+        confirm_installation=lambda _url: next(answers, False),
+    )
+
+    report = setup.run(SetupOptions())
+
+    assert report.step == "installation-missing"
+    # The key survives, so finishing the install and rerunning still works.
+    assert "TOUCHSTONE_APP_PRIVATE_KEY" in github.secrets
+
+
+def test_a_rejected_key_that_cannot_be_removed_is_said_out_loud(tmp_path: Path) -> None:
+    """The Publish job mints its token without consulting this verdict."""
+    github = FakeGitHub()
+    github.installation = lambda _app_id, _key: {  # type: ignore[assignment]
+        "id": 7,
+        "app_id": 42,
+        "repository_selection": "selected",
+        "permissions": {**required_permissions(), "administration": "write"},
+    }
+    github.delete_actions_secret = lambda _name, organization=False: False  # type: ignore[assignment]
+    setup = ActionsSetup(
+        _config(tmp_path),
+        github=github,
+        code_provider=lambda _manifest, _state: "manifest-code",
+        exchange=lambda _code: _conversion(),
+        open_browser=lambda _url: None,
+        confirm_installation=lambda _url: True,
+    )
+
+    report = setup.run(SetupOptions())
+
+    assert report.step == "rejected-key-not-removed"
+    assert "gh secret delete TOUCHSTONE_APP_PRIVATE_KEY" in report.repair
+    assert "permissions-mismatch" in report.repair
