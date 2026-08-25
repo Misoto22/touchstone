@@ -154,6 +154,7 @@ def _targets(raw: object, repository: Path) -> dict[str, TargetConfig]:
             "package_managers",
             "validation",
             "audit_context",
+            "naming",
             "protected_paths",
             "source_paths",
             "evidence",

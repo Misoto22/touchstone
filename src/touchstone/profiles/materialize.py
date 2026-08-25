@@ -116,6 +116,20 @@ def detect_repository(
     return discovery, matches, catalog
 
 
+def _naming_sentence(rules: dict[str, str]) -> str:
+    """State declared naming rules as one line a brief can drop into a prompt.
+
+    A session reads the rules; nothing else does, so they are rendered rather
+    than passed as a table. Sorted so the same Profile Set always produces the
+    same sentence and an unchanged repository produces an unchanged digest.
+    """
+
+    return "; ".join(
+        f"{what.replace('_', ' ')} names are {convention}"
+        for what, convention in sorted(rules.items())
+    )
+
+
 def materialize(
     discovery: TargetDiscovery,
     matches: dict[str, tuple[ProfileMatch, ...]],
@@ -134,6 +148,7 @@ def materialize(
     protected = list(base.protected_paths)
     source_paths: list[str] = []
     context: list[str] = []
+    naming: dict[str, str] = {}
 
     for target in discovery.targets:
         target_matches = matches.get(target.id, ())
@@ -145,6 +160,7 @@ def materialize(
         target_protected: list[str] = []
         target_sources: list[str] = []
         audit_context: list[str] = []
+        target_naming: dict[str, str] = {}
         target_managers = _target_package_managers(
             repository,
             target.path,
@@ -178,6 +194,9 @@ def materialize(
             _extend_unique(target_sources, definition.source_paths)
             if definition.audit_context and definition.audit_context not in audit_context:
                 audit_context.append(definition.audit_context)
+            # A framework Profile composes on top of its language, so the more
+            # specific one wins where both declare a rule for the same thing.
+            target_naming.update(dict(definition.naming))
             for candidate in definition.validation:
                 record = _gate_record(candidate, target_managers)
                 if record not in validations:
@@ -189,12 +208,14 @@ def materialize(
         _extend_unique(source_paths, scoped_sources)
         label = ", ".join(confirmed) or "generic"
         context.append(f"{target.id} at {target.path.as_posix()} ({label})")
+        naming.update(target_naming)
         targets[target.id] = {
             "path": target.path.as_posix(),
             "profiles": confirmed,
             "dependencies": list(target.dependencies),
             "package_managers": list(target_managers),
             "audit_context": audit_context,
+            "naming": _naming_sentence(target_naming),
             "protected_paths": target_protected,
             "source_paths": target_sources,
             "evidence": evidence,
@@ -224,7 +245,11 @@ def materialize(
                     ),
                     "protected": "the generated and project-owned protected paths",
                     "rules_clause": "",
-                },
+                }
+                # Absent rather than empty when no Profile declares a rule: an
+                # empty value would override the brief's own default and hand
+                # the session a blank where a sentence belongs.
+                | ({"naming": _naming_sentence(naming)} if naming else {}),
             }
         },
     }
