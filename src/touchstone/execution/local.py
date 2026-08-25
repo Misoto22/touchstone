@@ -39,6 +39,15 @@ class LocalExecutor:
                 stderr=_text(expired.stderr),
                 timed_out=True,
             )
+        except (FileNotFoundError, NotADirectoryError) as missing:
+            # Shell semantics, because every caller already reads these results
+            # as exit codes. A missing binary used to raise out of the executor
+            # and end the process in a traceback, which is worst exactly where
+            # it matters: `doctor` exists to report that `gh` is not installed,
+            # and it died on the call it makes to check.
+            return Result(code=127, stdout="", stderr=f"{argv[0]}: command not found ({missing})")
+        except PermissionError as denied:
+            return Result(code=126, stdout="", stderr=f"{argv[0]}: not executable ({denied})")
         return Result(code=completed.returncode, stdout=completed.stdout, stderr=completed.stderr)
 
     def read_text(self, path: str) -> str | None:

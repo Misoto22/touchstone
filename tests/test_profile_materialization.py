@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -296,7 +297,12 @@ def test_generated_validation_uses_the_selected_javascript_package_manager(
     assert target.package_managers == (manager,)
     assert script_argv in argvs
     assert executable_argv in argvs
-    assert all(not gate.enabled for gate in target.validation)
+    # Every Gate that runs project code stays a disabled Candidate. The base
+    # Profile's source-read Gate is the only one any Profile turns on, and it
+    # reaches a Target whose stack was detected too.
+    assert [list(gate.argv) for gate in target.validation if gate.enabled] == [
+        ["git", "diff", "--check"]
+    ]
 
 
 def test_generated_validation_keeps_npm_form_without_javascript_evidence(tmp_path: Path) -> None:
@@ -313,6 +319,7 @@ def test_generated_validation_keeps_npm_form_without_javascript_evidence(tmp_pat
 
     assert target.package_managers == ("uv",)
     assert [list(gate.argv) for gate in target.validation] == [
+        ["git", "diff", "--check"],
         ["python", "-m", "pytest"],
         ["python", "manage.py", "check"],
     ]
@@ -406,3 +413,119 @@ def test_generated_example_matches_a_real_generic_repository(tmp_path: Path) -> 
 
     produced["metadata"]["source_digest"] = "sha256:example"
     assert produced == example
+
+
+def test_the_base_gate_reaches_a_target_whose_stack_was_detected(tmp_path: Path) -> None:
+    # `generic` is attached as a Match only when nothing else is detected, so
+    # composing Gates from Matches alone left the one Gate any Profile enables
+    # by default reaching exactly the repositories Touchstone could not
+    # identify. `validate` was a no-op on every other repository.
+    repository = _next_repository(tmp_path)
+
+    report = initialize(_options(repository), LocalExecutor())
+    target = load(report.root).targets["next-repo"]
+
+    assert target.profiles == ("javascript", "typescript", "react", "nextjs")
+    enabled = [gate for gate in target.validation if gate.enabled]
+    assert [list(gate.argv) for gate in enabled] == [["git", "diff", "--check"]]
+    assert enabled[0].capability == "source-read"
+
+
+def _flat_layout_python_repository(tmp_path: Path) -> Path:
+    repository = tmp_path / "flat-api"
+    (repository / "flat_api").mkdir(parents=True)
+    (repository / "tests").mkdir()
+    (repository / "pyproject.toml").write_text(
+        '[project]\nname="flat-api"\nversion="0"\ndependencies=["fastapi>=0.115,<1"]\n',
+        encoding="utf-8",
+    )
+    (repository / "uv.lock").write_text("version = 1\n", encoding="utf-8")
+    (repository / "flat_api" / "__init__.py").write_text("", encoding="utf-8")
+    (repository / "flat_api" / "pricing.py").write_text("TOTAL = 0\n", encoding="utf-8")
+    (repository / "tests" / "test_pricing.py").write_text("def test_it(): ...\n", encoding="utf-8")
+    return repository
+
+
+def test_source_paths_cover_a_flat_layout_python_package(tmp_path: Path) -> None:
+    # The `python` Profile declares a `src/` layout. Materializing that guess
+    # verbatim produced a `require_change_under` naming only directories this
+    # Target does not have, so every source-only change it made was discarded.
+    repository = _flat_layout_python_repository(tmp_path)
+
+    report = initialize(_options(repository), LocalExecutor())
+    config = load(report.root)
+    generated = tomllib.loads(report.generated.read_text(encoding="utf-8"))
+
+    assert generated["target"]["flat-api"]["source_paths"] == ["tests/", "flat_api/"]
+    assert config.loops["code"].require_change_under == ("tests/", "flat_api/")
+
+
+def test_source_paths_drop_layouts_the_target_does_not_have(tmp_path: Path) -> None:
+    repository = _next_repository(tmp_path)
+    (repository / "app").mkdir()
+
+    report = initialize(_options(repository), LocalExecutor())
+    config = load(report.root)
+
+    # `src/`, `lib/` and `pages/` are declared by the Profiles and absent here.
+    assert config.loops["code"].require_change_under == ("app/",)
+
+
+def test_scoped_source_paths_keep_their_directory_separator(tmp_path: Path) -> None:
+    repository = tmp_path / "workspace"
+    (repository / "apps" / "web" / "app").mkdir(parents=True)
+    (repository / "package.json").write_text(
+        json.dumps({"name": "workspace", "private": True, "workspaces": ["apps/*"]}),
+        encoding="utf-8",
+    )
+    (repository / "package-lock.json").write_text("{}\n", encoding="utf-8")
+    (repository / "apps" / "web" / "package.json").write_text(
+        json.dumps({"name": "web", "dependencies": {"next": "15.0.0"}}),
+        encoding="utf-8",
+    )
+
+    report = initialize(
+        _options(
+            repository,
+            discovered=ProjectDiscovery(
+                repository, "acme/workspace", "main", ("codex",), "launchd"
+            ),
+        ),
+        LocalExecutor(),
+    )
+    config = load(report.root)
+
+    # Without the separator `apps/web/apple.ts` reads as a change under this.
+    assert "apps/web/app/" in config.loops["code"].require_change_under
+
+
+def test_a_target_without_a_recognised_layout_keeps_its_own_directory(tmp_path: Path) -> None:
+    repository = tmp_path / "workspace"
+    (repository / "packages" / "tool").mkdir(parents=True)
+    (repository / "package.json").write_text(
+        json.dumps({"name": "workspace", "private": True, "workspaces": ["packages/*"]}),
+        encoding="utf-8",
+    )
+    (repository / "package-lock.json").write_text("{}\n", encoding="utf-8")
+    (repository / "packages" / "tool" / "package.json").write_text(
+        json.dumps({"name": "tool", "dependencies": {"react": "19.0.0"}}),
+        encoding="utf-8",
+    )
+    (repository / "packages" / "tool" / "index.js").write_text("module.exports = {}\n", "utf-8")
+
+    report = initialize(
+        _options(
+            repository,
+            discovered=ProjectDiscovery(
+                repository, "acme/workspace", "main", ("codex",), "launchd"
+            ),
+        ),
+        LocalExecutor(),
+    )
+    config = load(report.root)
+
+    # A leaf Target that keeps its code at its own root is still maintained by
+    # the loop. The repository root is not added: it is under every path, and
+    # claiming it would neuter the gate for every other Target.
+    assert "packages/tool/" in config.loops["code"].require_change_under
+    assert "./" not in config.loops["code"].require_change_under

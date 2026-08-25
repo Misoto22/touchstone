@@ -37,6 +37,10 @@ All notable user-facing changes are documented here. The format follows [Keep a 
 
 ### Fixed
 
+- The base Profile's Validation Gates reach a Target whose stack was detected. `generic` is attached as a Match only when nothing else matches, so composing Gates from Matches alone left `git diff --check` — the one Gate any Profile enables without operator review — reaching exactly the repositories Touchstone could not identify. On every repository it could, `touchstone validate` reported every Gate as `disabled` and ran nothing.
+- Generated source paths describe the Target that is there rather than the layout its Profile guesses at. Absent directories are dropped, and a Python package that sits beside `pyproject.toml` instead of under `src/` is found, so `require_change_under` no longer names three directories a flat-layout Target does not have — which discarded every source-only change the loop made to it, after the audit that found it had already been paid for.
+- A source path is matched at a directory boundary. Scoping a Profile's `src/` to a Target dropped the separator, and the consumer compared bare string prefixes, so `apps/web/apple.ts` counted as a change under `apps/web/app`.
+- A command that is not installed is an exit code rather than a traceback. `touchstone doctor` died on the call it makes to check the repository when `gh` was missing — the one prerequisite it is most likely to be run to diagnose, and one it already has a check for.
 - Hosted artifact downloads follow GitHub's redirect to signed storage without carrying the API token, which that host rejects. Every download failed before, so a restorable State Snapshot read as absent, every hosted run began as a Clean Start, and a hosted resume could never find its candidate.
 - A blocked or failed hosted stage said why. It returned its exit code without printing anything, so a runner log showed only `Process completed with exit code 3` and the reason existed solely inside an uploaded artifact.
 

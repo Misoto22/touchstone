@@ -22,6 +22,7 @@ from touchstone.profiles.model import (
     ProfileCatalog,
     ProfileMatch,
     TargetCandidate,
+    ValidationCandidate,
 )
 from touchstone.profiles.targets import TargetDiscovery, discover_targets
 
@@ -126,7 +127,11 @@ def materialize(
 ) -> MaterializedConfig:
     used_profiles: list[str] = []
     targets: dict[str, Any] = {}
-    protected = list(catalog.get("generic").protected_paths)
+    # `generic` is the base of every composition, not an alternative to a stack.
+    # It is attached as a Match only when nothing else was detected, so anything
+    # it contributes to a detected Target has to be read from the base directly.
+    base = catalog.get("generic")
+    protected = list(base.protected_paths)
     source_paths: list[str] = []
     context: list[str] = []
 
@@ -137,7 +142,6 @@ def materialize(
             if profile not in used_profiles:
                 used_profiles.append(profile)
         evidence = []
-        validations = []
         target_protected: list[str] = []
         target_sources: list[str] = []
         audit_context: list[str] = []
@@ -148,6 +152,11 @@ def materialize(
             package_managers,
             strict=strict_package_managers,
         )
+        # The base Gates first, so a Target with a detected stack still gets the
+        # side-effect-minimal checks. Without this the only Gate any Profile
+        # enables by default reached exactly the repositories Touchstone could
+        # not identify, and `validate` was a no-op everywhere else.
+        validations = [_gate_record(candidate, target_managers) for candidate in base.validation]
         for match in target_matches:
             definition = catalog.get(match.profile)
             for item in match.evidence:
@@ -170,21 +179,12 @@ def materialize(
             if definition.audit_context and definition.audit_context not in audit_context:
                 audit_context.append(definition.audit_context)
             for candidate in definition.validation:
-                record = {
-                    "argv": list(
-                        _manager_argv(candidate.argv, candidate.capability, target_managers)
-                    ),
-                    "timeout_seconds": candidate.timeout_seconds,
-                    "capability": candidate.capability,
-                    # A Profile enables only side-effect-minimal Gates. Anything
-                    # that runs project code stays a disabled Candidate until the
-                    # project override accepts it.
-                    "enabled": candidate.capability in MINIMAL_CAPABILITIES,
-                }
+                record = _gate_record(candidate, target_managers)
                 if record not in validations:
                     validations.append(record)
+        target_sources = _resolve_source_paths(repository, target.path, target_sources, confirmed)
         scoped_protected = [_scoped(target.path, value) for value in target_protected]
-        scoped_sources = [_scoped(target.path, value) for value in target_sources]
+        scoped_sources = [_scoped_directory(target.path, value) for value in target_sources]
         _extend_unique(protected, scoped_protected)
         _extend_unique(source_paths, scoped_sources)
         label = ", ".join(confirmed) or "generic"
@@ -506,6 +506,86 @@ def _scoped(target: Path, value: str) -> str:
     if target == Path("."):
         return value
     return (target / value).as_posix()
+
+
+def _scoped_directory(target: Path, value: str) -> str:
+    """A source path scoped to its Target, always in directory form.
+
+    `Path` drops the trailing separator, which turned `src/` into `apps/web/src`
+    and left the consumer matching a bare prefix: `apps/web/apple.ts` counted as
+    a change under `apps/web/app`.
+    """
+
+    scoped = _scoped(target, value).rstrip("/")
+    return f"{scoped}/" if scoped else "./"
+
+
+def _gate_record(candidate: ValidationCandidate, managers: tuple[str, ...]) -> dict[str, Any]:
+    return {
+        "argv": list(_manager_argv(candidate.argv, candidate.capability, managers)),
+        "timeout_seconds": candidate.timeout_seconds,
+        "capability": candidate.capability,
+        # A Profile enables only side-effect-minimal Gates. Anything that runs
+        # project code stays a disabled Candidate until the project override
+        # accepts it.
+        "enabled": candidate.capability in MINIMAL_CAPABILITIES,
+    }
+
+
+#: Directories that sit next to source but are not it.
+_NOT_SOURCE = frozenset(
+    {"__pycache__", "build", "dist", "node_modules", "site-packages", "venv", "env"}
+)
+
+
+def _resolve_source_paths(
+    repository: Path,
+    target: Path,
+    declared: list[str],
+    profiles: list[str],
+) -> list[str]:
+    """The source directories a Target actually has.
+
+    A Profile declares the layouts it knows about, which is a guess until the
+    repository is read. Materializing the guess verbatim produced a
+    `require_change_under` that named three directories none of which existed
+    for a flat-layout Python package, so the loop discarded every source-only
+    change it made to that Target — after paying for the audit that found it.
+    """
+
+    root = repository / target
+    resolved = [value for value in declared if (root / value).is_dir()]
+    if "python" in profiles:
+        _extend_unique(resolved, _python_package_directories(root))
+    if resolved:
+        return resolved
+    # A Target whose declared layout is absent still owns its own directory.
+    # The repository root is the exception: `.` is under every path, and
+    # claiming it would neuter the gate for every other Target in the workspace.
+    return [] if target == Path(".") else ["."]
+
+
+def _python_package_directories(root: Path) -> list[str]:
+    """Importable packages sitting directly in a Target, for flat layouts.
+
+    A `src/` layout needs nothing from here — the Profile already names it, and
+    it is kept because it exists. This finds the other convention, where the
+    package is a sibling of `pyproject.toml` and its name is the project's own.
+    """
+
+    if not root.is_dir():
+        return []
+    found = []
+    try:
+        entries = sorted(root.iterdir(), key=lambda entry: entry.name)
+    except OSError:
+        return []
+    for entry in entries:
+        if not entry.is_dir() or entry.name.startswith(".") or entry.name in _NOT_SOURCE:
+            continue
+        if (entry / "__init__.py").is_file():
+            found.append(f"{entry.name}/")
+    return found
 
 
 def _extend_unique(values: list[str], additions: tuple[str, ...] | list[str]) -> None:
