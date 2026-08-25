@@ -33,7 +33,7 @@ Touchstone turns agent findings into reviewable, PR-only changes.
 - **Monorepo-aware scope** — discovers npm, pnpm, Yarn, Bun, uv, Poetry, and PDM evidence, records a package manager per Target, tracks dependency edges, and validates a changed Target plus its dependents.
 - **Owned configuration** — keeps deliberate settings in `touchstone.toml` and reproducible stack evidence in `.touchstone/generated.toml`; Profile refresh never replaces project overrides.
 - **Structured validation** — runs argv-based gates in bounded Target directories with timeouts, scrubbed subprocess environments, hook-free locked preparation, and tracked-file mutation checks. Generated commands use the Target's own package manager. A Profile enables only side-effect-minimal Gates; every command that runs project code stays a disabled Candidate until the project override accepts it.
-- **Two execution backends** — runs from native launchd/systemd wake signals or a generated, repository-owned GitHub Actions workflow.
+- **Three execution backends** — runs from native launchd/systemd wake signals, a generated repository-owned GitHub Actions workflow, or one container per repository.
 - **One project, many repositories** — a project file holds the Loops, engines, and schedules that are the same everywhere; `touchstone sync` renders a fleet-owned fragment each member repository extends and overrides, and proposes it as a pull request rather than writing it.
 - **Split hosted trust stages** — separate Prepare, Analysis, Verify, mutation-only Publish, and Snapshot jobs give each stage one credential domain, and mint the repository-scoped App token only after an independent stage has validated the candidate.
 - **Reproducible hosted runtime** — one credential-free Action step installs hash-locked Python dependencies, the exact Agent CLI named by the committed `npm` lockfile, and the project's own locked dependencies, then attests that environment to the repository HEAD, configuration, Targets, and lockfiles.
@@ -281,6 +281,26 @@ extends = ".touchstone/fleet.toml"
 ```
 
 Precedence runs from machine-owned evidence, through the fleet's shared decisions, to the repository's own word. Overriding one key leaves its siblings alone, so a member correcting a model keeps its engine name. A project may not set `target`, `generated`, `project`, `state_dir`, or `version` — `target` carries Validation Gate authorization, and that decision stays with the repository it endangers. A credential-shaped key that is not an `op://` reference is refused, because a value written centrally reaches every member it renders to. See [`touchstone-project.example.toml`](https://github.com/Misoto22/touchstone/blob/main/touchstone-project.example.toml).
+
+---
+
+### Self-Hosted Containers
+
+`touchstone sync --compose docker-compose.yml` renders one service per member repository. Each container sees one checkout, one state volume, and one credential set, because a single container iterating every repository would be central execution under another name.
+
+```bash
+touchstone sync --project projects/personal.toml --compose docker-compose.yml
+docker compose up -d
+```
+
+The image carries Touchstone, `git`, `gh`, and the Agent CLI installed from its committed lockfile — and nothing a project owns. No image can hold every version of every toolchain a repository's Validation Gates need, and one supported stack does not run on Linux at all, so a repository needing a toolchain derives from the image:
+
+```dockerfile
+FROM ghcr.io/misoto22/touchstone:0.1.2
+RUN apt-get update && apt-get install -y --no-install-recommends <toolchain>
+```
+
+Scheduling reuses `run-due` unchanged: the container supervisor is a fixed-interval wake signal, not a second clock, because `run-due` already claims its Due Slot and coalesces missed periods. A failed wake is a failed run, not a failed supervisor. Credentials arrive as injected environment variables listed in an uncommitted `secrets/<service>.env`; the rendered Compose file names the variables and carries no value and no reference. Auto-merge is unavailable on this backend, for the reason any backend without an independent Verify stage is refused.
 
 ---
 

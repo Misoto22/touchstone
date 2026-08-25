@@ -209,13 +209,32 @@ def _setup(args: argparse.Namespace) -> int:
 
 def _sync(args: argparse.Namespace) -> int:
     from touchstone.execution.local import LocalExecutor
-    from touchstone.fleet import FleetError, load_project, sync_check, sync_propose
+    from touchstone.fleet import (
+        FleetError,
+        load_project,
+        render_compose,
+        sync_check,
+        sync_propose,
+    )
 
     try:
         project = load_project(Path(args.project))
     except FleetError as exc:
         print(f"touchstone: {exc}", file=sys.stderr)
         return 78
+    if args.compose:
+        rendered = render_compose(project)
+        destination = Path(args.compose)
+        if destination.exists() and destination.read_text(encoding="utf-8") == rendered:
+            print(f"{destination}: current")
+            return 0
+        if args.check:
+            print(f"{destination}: drifted")
+            return 3
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(rendered, encoding="utf-8")
+        print(f"wrote {destination}")
+        return 0
     if args.pr:
         report = sync_propose(project, LocalExecutor(), branch_prefix="touchstone/fleet-")
         for slug, branch in report.proposed:
@@ -739,6 +758,11 @@ def main(argv: list[str] | None = None) -> int:
         "--pr",
         action="store_true",
         help="propose each drifted member's fragment as a pull request",
+    )
+    sync.add_argument(
+        "--compose",
+        metavar="PATH",
+        help="write a Compose file with one container per member repository",
     )
     sync.set_defaults(handler=_sync)
 

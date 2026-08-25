@@ -1,0 +1,9 @@
+# Run One Repository Per Container
+
+The container backend is a deployment shape rather than a way of running commands: Touchstone runs inside the container and the repository it audits is the only one it can see. One repository per container, one state volume per container, one credential set per container. A single container iterating every member of a project would be the central-execution shape under another name — one process holding every repository's credential, with a namespace inside it standing in for the container boundary that already exists — so `touchstone sync --compose` renders one service per member instead.
+
+The image carries Touchstone, git, the forge CLI, and the Agent CLI installed from its committed lockfile, and nothing a project owns. No single image can hold every version of every toolchain a repository's Validation Gates need, and one supported stack cannot run on Linux at all; a repository that needs a toolchain derives from this image and says so itself.
+
+Scheduling reuses `run-due` unchanged. It already claims a Due Slot transactionally, coalesces missed periods, and is idempotent, so the container supervisor is a fixed-interval wake signal and nothing more. Adding cron would introduce a second clock that can drift from the schedules Touchstone already evaluates, and a missed cron tick would be indistinguishable from a run that found nothing. A failed wake is a failed run rather than a failed supervisor: exiting would stop the container and need a person to restart it, which is the opposite of what a scheduled backend is for.
+
+Auto-merge is unavailable here, and needs no container-specific rule to be so. A container runs the local publication path, whose validation happens in the process that held the model credential, so the existing refusal of auto-merge on a backend without an independent Verify stage already covers it.
