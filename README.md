@@ -34,6 +34,7 @@ Touchstone turns agent findings into reviewable, PR-only changes.
 - **Owned configuration** — keeps deliberate settings in `touchstone.toml` and reproducible stack evidence in `.touchstone/generated.toml`; Profile refresh never replaces project overrides.
 - **Structured validation** — runs argv-based gates in bounded Target directories with timeouts, scrubbed subprocess environments, hook-free locked preparation, and tracked-file mutation checks. Generated commands use the Target's own package manager. A Profile enables only side-effect-minimal Gates; every command that runs project code stays a disabled Candidate until the project override accepts it.
 - **Two execution backends** — runs from native launchd/systemd wake signals or a generated, repository-owned GitHub Actions workflow.
+- **One project, many repositories** — a project file holds the Loops, engines, and schedules that are the same everywhere; `touchstone sync` renders a fleet-owned fragment each member repository extends and overrides, and proposes it as a pull request rather than writing it.
 - **Split hosted trust stages** — separate Prepare, Analysis, Verify, mutation-only Publish, and Snapshot jobs give each stage one credential domain, and mint the repository-scoped App token only after an independent stage has validated the candidate.
 - **Reproducible hosted runtime** — one credential-free Action step installs hash-locked Python dependencies, the exact Agent CLI named by the committed `npm` lockfile, and the project's own locked dependencies, then attests that environment to the repository HEAD, configuration, Targets, and lockfiles.
 - **PR-only lifecycle** — low-risk approved candidates open ready pull requests; higher-risk or rejected candidates open drafts. Auto-merge is off unless a Loop enables it, and then only where Verify is independent.
@@ -257,6 +258,29 @@ touchstone config migrate-v2 touchstone.toml --timezone UTC --hourly-minute 0 --
 ```
 
 Both migrations write a sibling backup before replacing project configuration. V2 migration refuses to overwrite an existing generated file. Stack Profiles, per-Target Validation Gates, and the GitHub Actions backend require v2; local scheduling, `run`, `run-due`, and `resume` do not.
+
+---
+
+### Projects Across Repositories
+
+One project can cover many repositories. The project file lives in its own repository, so changing it is a reviewed pull request:
+
+```bash
+touchstone sync --project projects/personal.toml --check
+touchstone sync --project projects/personal.toml --pr
+```
+
+`--check` is read-only and exits `3` when a member differs from what the project renders. `--pr` opens one pull request per drifted member. There is no direct-write path: the configuration file is the root of Touchstone's permission model, so something able to edit it unattended could enable a Validation Gate for itself.
+
+Each member's `touchstone.toml` names the rendered fragment and overrides anything it disagrees with:
+
+```toml
+version = 2
+generated = ".touchstone/generated.toml"
+extends = ".touchstone/fleet.toml"
+```
+
+Precedence runs from machine-owned evidence, through the fleet's shared decisions, to the repository's own word. Overriding one key leaves its siblings alone, so a member correcting a model keeps its engine name. A project may not set `target`, `generated`, `project`, `state_dir`, or `version` — `target` carries Validation Gate authorization, and that decision stays with the repository it endangers. A credential-shaped key that is not an `op://` reference is refused, because a value written centrally reaches every member it renders to. See [`touchstone-project.example.toml`](https://github.com/Misoto22/touchstone/blob/main/touchstone-project.example.toml).
 
 ---
 

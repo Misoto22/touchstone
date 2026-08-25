@@ -404,6 +404,7 @@ class Config:
 
 _TOP_LEVEL = {
     "version",
+    "extends",
     "project",
     "state_dir",
     "forge",
