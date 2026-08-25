@@ -37,6 +37,7 @@ All notable user-facing changes are documented here. The format follows [Keep a 
 
 ### Fixed
 
+- `touchstone actions setup` stores the one-time App private key before verifying the installation, so an install a person has not finished yet no longer consumes a key GitHub cannot reissue. A verdict that condemns the App — wrong permissions or a wider repository scope — still takes the stored key back, so a rejected App leaves nothing a workflow could mint a token from.
 - `touchstone actions setup` can register an Owner App. The manifest omitted `hook_attributes.url`, which GitHub requires even for an inactive webhook, so registration was rejected outright; the CSRF state was also sent as a form field rather than in the action URL, so the callback carried no state to check.
 - Hosted artifact downloads follow GitHub's redirect to signed storage without carrying the API token, which that host rejects. Every download failed before, so a restorable State Snapshot read as absent, every hosted run began as a Clean Start, and a hosted resume could never find its candidate.
 - A blocked or failed hosted stage said why. It returned its exit code without printing anything, so a runner log showed only `Process completed with exit code 3` and the reason existed solely inside an uploaded artifact.

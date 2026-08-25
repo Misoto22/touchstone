@@ -24,6 +24,7 @@ class FakeGitHub:
         self.installation_credentials: list[tuple[int, bytes]] = []
         self.scopes: list[tuple[str, bool]] = []
         self.listed: list[bool] = []
+        self.deleted: list[str] = []
 
     def set_actions_secret(self, name: str, value: bytes, *, organization: bool = False) -> bool:
         if name == self.fail_secret:
@@ -35,6 +36,11 @@ class FakeGitHub:
     def actions_secret_names(self, *, organization: bool = False) -> set[str]:
         self.listed.append(organization)
         return set(self.secrets)
+
+    def delete_actions_secret(self, name: str, *, organization: bool = False) -> bool:
+        self.deleted.append(name)
+        self.secrets.pop(name, None)
+        return True
 
     def installation(self, app_id: int, private_key: bytes):  # type: ignore[no-untyped-def]
         self.installation_credentials.append((app_id, private_key))
@@ -290,6 +296,9 @@ def test_setup_refuses_an_over_permissive_installation(tmp_path: Path) -> None:
     assert report.state == "partial"
     assert report.step == "permissions-mismatch"
     assert "exactly" in report.repair
+    # Stored first so an unfinished install cannot consume the one-time key,
+    # then taken back because this App is wrong rather than merely unfinished.
+    assert github.deleted == ["TOUCHSTONE_APP_PRIVATE_KEY"]
     assert "TOUCHSTONE_APP_PRIVATE_KEY" not in github.secrets
 
 
@@ -457,3 +466,51 @@ def test_the_csrf_state_travels_in_the_action_query_string(tmp_path: Path) -> No
     query = urllib.parse.parse_qs(urllib.parse.urlsplit(action).query)
     assert query["state"] == ["state-abc123"]
     assert action.startswith("https://github.com/settings/apps/new?")
+
+
+def test_an_unfinished_installation_does_not_consume_the_one_time_key(tmp_path: Path) -> None:
+    """The manifest key exists once; an install still in progress must not cost it.
+
+    GitHub cannot reissue it, so a lookup that simply found no installation yet
+    leaves the stored secret alone and a rerun repairs from there.
+    """
+    github = FakeGitHub()
+    github.installation = lambda _app_id, _key: None  # type: ignore[assignment]
+    setup = ActionsSetup(
+        _config(tmp_path),
+        github=github,
+        code_provider=lambda _manifest, _state: "manifest-code",
+        exchange=lambda _code: _conversion(),
+        open_browser=lambda _url: None,
+        confirm_installation=lambda _url: True,
+    )
+
+    report = setup.run(SetupOptions())
+
+    assert report.state == "partial"
+    assert report.step == "installation-missing"
+    assert github.deleted == []
+    assert "TOUCHSTONE_APP_PRIVATE_KEY" in github.secrets
+
+
+def test_a_repository_scope_that_is_too_broad_also_takes_the_key_back(tmp_path: Path) -> None:
+    github = FakeGitHub()
+    github.installation = lambda _app_id, _key: {  # type: ignore[assignment]
+        "id": 7,
+        "app_id": 42,
+        "repository_selection": "all",
+        "permissions": required_permissions(),
+    }
+    setup = ActionsSetup(
+        _config(tmp_path),
+        github=github,
+        code_provider=lambda _manifest, _state: "manifest-code",
+        exchange=lambda _code: _conversion(),
+        open_browser=lambda _url: None,
+        confirm_installation=lambda _url: True,
+    )
+
+    report = setup.run(SetupOptions())
+
+    assert report.step == "repository-scope-mismatch"
+    assert github.deleted == ["TOUCHSTONE_APP_PRIVATE_KEY"]

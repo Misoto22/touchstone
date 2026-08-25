@@ -56,6 +56,21 @@ class GitHubCLI:
         )
         return completed.returncode == 0
 
+    def delete_actions_secret(self, name: str, *, organization: bool = False) -> bool:
+        """Remove a secret this setup stored, so a rejected App leaves nothing usable."""
+
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]{1,127}", name):
+            raise ValueError("GitHub Actions secret name is invalid")
+        owner = self.repository.split("/", 1)[0]
+        scope = ["--org", owner] if organization else ["--repo", self.repository]
+        completed = self._run(
+            ["gh", "secret", "delete", name, "--app", "actions", *scope],
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+        return completed.returncode == 0
+
     def actions_secret_names(self, *, organization: bool = False) -> set[str]:
         """Name every Actions secret this workflow can read.
 
