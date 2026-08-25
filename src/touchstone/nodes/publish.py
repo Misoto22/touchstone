@@ -19,6 +19,16 @@ def _request(state: dict[str, Any], context: Any) -> PublicationRequest:
     finding = state.get("finding", {})
     loop = context.loop(state["loop"])
     title = finding.get("title") or "Touchstone finding"
+    # A hosted run supplies the publishing App's own bot identity, which the
+    # configuration cannot know; a local run falls back to the configured pair.
+    # Which of the two identities git records is the project's choice, and the
+    # other one is credited in a trailer.
+    hosted_bot = (
+        (state["author_name"], state["author_email"])
+        if state.get("author_name") and state.get("author_email")
+        else None
+    )
+    author, coauthor = context.config.git.identities(bot=hosted_bot)
     return PublicationRequest(
         finding_id=state.get("finding_id") or finding_id(loop.name, title),
         loop=loop.name,
@@ -35,10 +45,10 @@ def _request(state: dict[str, Any], context: Any) -> PublicationRequest:
         rationale=finding.get("rationale", ""),
         review_reason=state.get("verdict_reason", ""),
         escalation=state.get("escalation", ""),
-        # A hosted run supplies the publishing App's own bot identity; a local
-        # run keeps the project's configured author.
-        author_name=state.get("author_name") or context.config.git.author_name,
-        author_email=state.get("author_email") or context.config.git.author_email,
+        author_name=author[0] if author else None,
+        author_email=author[1] if author else None,
+        coauthor_name=coauthor[0] if coauthor else None,
+        coauthor_email=coauthor[1] if coauthor else None,
         pre_staged=bool(state.get("pre_staged", False)),
         repository=context.config.forge.slug,
         isolated_push=bool(state.get("isolated_push", False)),

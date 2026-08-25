@@ -73,12 +73,13 @@ def test_a_local_hosted_stage_without_a_slug_keeps_the_configured_author() -> No
 def test_the_publication_request_prefers_the_supplied_identity(tmp_path: Path) -> None:
     from types import SimpleNamespace
 
+    from touchstone.config import GitConfig
     from touchstone.nodes import publish as publish_node
 
     context = SimpleNamespace(
         config=SimpleNamespace(
             forge=SimpleNamespace(default_branch="main", escalation_label="x", slug="acme/widgets"),
-            git=SimpleNamespace(author_name="Project Author", author_email="project@example.test"),
+            git=GitConfig(author_name="Project Author", author_email="project@example.test"),
         ),
         loop=lambda _name: SimpleNamespace(name="code", label="touchstone:audit"),
     )
