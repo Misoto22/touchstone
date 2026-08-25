@@ -144,6 +144,16 @@ class LoopConfig:
     require_change_under: tuple[str, ...] = ()
     confine_to: tuple[str, ...] = ()
     targets: tuple[str, ...] = ()
+    #: Whether an open draft holds this loop's pull-request slot.
+    #:
+    #: The code audit parks a medium-risk finding as a draft and has to keep
+    #: running, or its first medium-risk finding is the last thing it ever
+    #: does — a parked draft waits for a person and is never reaped. A harness
+    #: review is the opposite: one open at a time means open, not
+    #: open-and-not-a-draft. This was inferred from `require_change_under`
+    #: being set, which was true of the harness review and of no other loop
+    #: until generated stack evidence began setting it for the code audit.
+    drafts_hold_slot: bool = False
     context: tuple[tuple[str, str], ...] = ()
     #: Overrides `engine.model` for this loop only. The loops do different work
     #: — implementing a fix against judging a harness — and the model that
@@ -285,6 +295,7 @@ _LOOP = {
     "confine_to",
     "targets",
     "context",
+    "drafts_hold_slot",
 }
 _ACTIONS = {
     "visibility",
@@ -404,6 +415,13 @@ def _positive_int(table: dict[str, Any], key: str, where: str) -> None:
         raise ConfigError(f"{where}.{key} must be a positive integer")
 
 
+def _boolean(table: dict[str, Any], key: str, where: str) -> None:
+    if key not in table:
+        return
+    if not isinstance(table[key], bool):
+        raise ConfigError(f"{where}.{key} must be true or false")
+
+
 def _local_path(value: str, base_dir: Path) -> Path:
     path = Path(value).expanduser()
     return path.resolve() if path.is_absolute() else (base_dir / path).resolve()
@@ -483,6 +501,7 @@ def _validate(raw: dict[str, Any]) -> None:
         for key in ("brief", "label", "schedule", "model"):
             _string(value, key, f"loop.{name}", required=key in {"brief", "label"})
         _positive_int(value, "priority", f"loop.{name}")
+        _boolean(value, "drafts_hold_slot", f"loop.{name}")
         _attachment(value, f"loop.{name}")
         for key in ("protected_paths", "require_change_under", "confine_to", "targets"):
             _string_array(value, key, f"loop.{name}")
@@ -528,6 +547,7 @@ def _loops(raw: dict[str, Any], base_dir: Path) -> dict[str, LoopConfig]:
             require_change_under=tuple(table.get("require_change_under", ())),
             confine_to=tuple(table.get("confine_to", ())),
             targets=tuple(table.get("targets", ())),
+            drafts_hold_slot=bool(table.get("drafts_hold_slot", False)),
             context=tuple(sorted(dict(table.get("context", {})).items())),
             model=str(table.get("model", "")),
             attachment=tuple(
