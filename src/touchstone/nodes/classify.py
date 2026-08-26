@@ -147,24 +147,32 @@ def run(state: dict[str, Any]) -> dict[str, Any]:
     ):
         return _clean(context, state, "nothing changed under the paths this loop maintains")
 
+    changed = {"changed_paths": list(paths)}
+
     for protected in _protected_paths(loop):
         hit = [path for path in paths if _matches_path(path, protected)]
         if hit:
             return {
                 "risk": "high",
                 "escalation": f"touches a protected path ({protected}): {', '.join(hit)}",
+                **changed,
             }
 
     if loop.confine_to:
         stray = [p for p in paths if not any(_under(p, prefix) for prefix in loop.confine_to)]
         if stray:
-            return {"risk": "high", "escalation": f"wrote outside its remit: {', '.join(stray)}"}
+            return {
+                "risk": "high",
+                "escalation": f"wrote outside its remit: {', '.join(stray)}",
+                **changed,
+            }
 
     stranded = _twinless(paths, context, worktree, base)
     if stranded:
         return {
             "risk": "high",
             "escalation": f"a translation was left behind: {', '.join(stranded)}",
+            **changed,
         }
 
-    return {"risk": risk}
+    return {"risk": risk, **changed}

@@ -69,3 +69,25 @@ def test_candidate_identity_binds_finding_base_patch_and_run() -> None:
     assert first == candidate_id(stable, "a" * 40, "sha256:" + "b" * 64, "run-1")
     assert first != candidate_id(stable, "a" * 40, "sha256:" + "c" * 64, "run-1")
     assert first != candidate_id(stable, "a" * 40, "sha256:" + "b" * 64, "run-2")
+
+
+def test_an_open_row_round_trips_the_files_it_edits(tmp_path: Path) -> None:
+    """Written by `append` via `asdict`, read back by `projections`. A tuple that
+    survives as a JSON array and returns as a tuple is the whole contract; a
+    silent shape change here is a session steered around nothing."""
+    ledger = Ledger(tmp_path / "events.jsonl")
+    ledger.append(
+        LifecycleEvent(
+            finding_id=finding_id("code", "Forked default"),
+            state="armed",
+            title="Forked default",
+            loop="code",
+            paths=("src/retry.py", "tests/test_retry.py"),
+        )
+    )
+
+    row = json.loads((tmp_path / "events.jsonl").read_text(encoding="utf-8").strip())
+    assert row["paths"] == ["src/retry.py", "tests/test_retry.py"]
+
+    projection = ledger.projections()[finding_id("code", "Forked default")]
+    assert projection.paths == ("src/retry.py", "tests/test_retry.py")

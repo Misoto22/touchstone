@@ -161,6 +161,37 @@ def _attachment(context: Any, loop: Any, worktree: str) -> str:
     return "".join(parts)
 
 
+def _open_changes(context: Any) -> str:
+    """The files an unmerged candidate already occupies.
+
+    The suppressed titles stop one session raising a defect a previous one
+    already raised. They do not stop two sessions an hour apart picking two
+    different defects that live in the same file — the second has no idea
+    where the first wrote, because an unmerged branch is not in its worktree
+    and git has nothing to warn it with. Both pull requests read as clean
+    until one merges and the other arrives conflicted.
+
+    Merged candidates are deliberately absent: their edits are in the base
+    branch the session started from, so they cannot collide with anything.
+    """
+    changes = context.ledger.open_changes()
+    if not changes:
+        return ""
+    parts = [
+        "\n\n## Files an open candidate already edits\n\n"
+        "These pull requests are unmerged, so their edits are not in your "
+        "worktree. A diff of yours touching one of these files conflicts with "
+        "theirs on whichever merges second. Prefer a defect elsewhere. If the "
+        "one worth fixing genuinely lives here, say so in `rationale` and keep "
+        "your edit as far from theirs as the fix allows.\n"
+    ]
+    for projection in changes:
+        pr = f"#{projection.pr} " if projection.pr else ""
+        parts.append(f"\n- {pr}{projection.title}\n")
+        parts.extend(f"  - `{path}`\n" for path in projection.paths)
+    return "".join(parts)
+
+
 def run(state: dict[str, Any]) -> dict[str, Any]:
     context = current()
     loop = context.loop(state["loop"])
@@ -171,6 +202,7 @@ def run(state: dict[str, Any]) -> dict[str, Any]:
     if handled:
         brief += "\n\n## Already handled — do not raise any of these again\n\n"
         brief += "\n".join(f"- {title}" for title in handled)
+    brief += _open_changes(context)
     brief += _attachment(context, loop, worktree)
 
     # The Loop names which member of the engine pool authors its changes, so a

@@ -60,6 +60,8 @@ def _request(state: dict[str, Any], context: Any) -> PublicationRequest:
         pre_staged=bool(state.get("pre_staged", False)),
         repository=context.config.forge.slug,
         isolated_push=bool(state.get("isolated_push", False)),
+        # Measured by classify against the same worktree this publishes.
+        paths=tuple(state.get("changed_paths") or ()),
     )
 
 
