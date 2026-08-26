@@ -126,7 +126,17 @@ class DueEvaluator:
                     getattr(loop, "priority", 100),
                 )
             )
-        return tuple(sorted(due, key=lambda item: (item.priority, item.slot.loop_id)))
+        # Priority is the operator's word and still wins outright. Within one
+        # priority, the Loop that has waited longest goes first: a hosted run
+        # claims a single slot, so ordering equals alone by loop id handed
+        # every wake to whichever name sorted first and starved the rest of
+        # a shared schedule indefinitely, however long they had been due.
+        return tuple(
+            sorted(
+                due,
+                key=lambda item: (item.priority, -item.lateness, item.slot.loop_id),
+            )
+        )
 
 
 __all__ = ["DueEvaluator", "DueLoop", "DueSlot", "schedule_generation"]

@@ -347,6 +347,7 @@ def _hosted_summary(stage: str, result) -> str:  # type: ignore[no-untyped-def]
         ("change", result.change_state),
         ("candidate", result.candidate_id),
         ("clean start", result.clean_start_reason),
+        ("state", getattr(result, "state_note", "")),
     ):
         if value:
             parts.append(f"{label}={value}")

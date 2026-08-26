@@ -31,6 +31,12 @@ All notable user-facing changes are documented here. The format follows [Keep a 
 
 - `actions.codex_cli_version` and `actions.claude_code_version`; the hosted Agent CLI version is read from the Action's committed `npm` lockfile. A configuration that still sets either key fails with a message naming that key rather than a bare unknown-key error.
 
+### Fixed
+
+- Editing `touchstone.toml` no longer discards the repository's history. The State Snapshot carries the ledger and the Due Slot store — a record of what has already happened, which stays true whether or not a Loop was added afterwards — but it was checked against the configuration and profile digests on restore, and its artifact is named for the configuration digest while the workflow holds a copy of that name from `actions init`. Adding a Loop therefore renamed what the run looked for, and would have rejected the bundle even under the old name. The next run began with an empty ledger, rediscovered the defects it had already proposed, and opened a second pull request for each, with every stage green. The repository bundle is now validated on repository and schema alone, and a lookup that misses the current name falls back to the newest bundle the repository wrote, reporting `state=restored-under-earlier-name` so the workflow gets regenerated. A candidate keeps the strict check: it was analysed against one configuration and publishing it under another ships work nobody approved.
+
+- A Loop no longer starves behind another that shares its schedule. A hosted run claims one Due Slot, and equal-priority Loops were ordered by loop id alone, so `code`, `hardcode` and `naming` on one schedule gave every wake to `code` and the other two never ran. Within one priority the Loop that has waited longest now goes first; priority itself still preempts outright, because that is the operator's word and not a fairness hint.
+
 ### Changed
 
 - Run outcomes and pull-request lifecycle states are separate machine contracts.

@@ -218,6 +218,7 @@ class HostedOutputs:
     change_state: str = ""
     reason_code: str = ""
     clean_start_reason: str = ""
+    state_note: str = ""
     should_run: bool = False
     partial: bool = False
     version: int = 1
@@ -265,6 +266,7 @@ class HostedOutputs:
             "change_state": self.change_state,
             "reason_code": self.reason_code,
             "clean_start_reason": self.clean_start_reason,
+            "state_note": self.state_note,
             "should_run": str(self.should_run).lower(),
             "partial": str(self.partial).lower(),
         }
@@ -653,6 +655,7 @@ def _prepare_stage(
     directory = _fresh_directory(root, "prepare")
     resume = ResumeInput.from_environment(env)
     clean_start = ""
+    state_note = ""
 
     explicit = env.get("TOUCHSTONE_PREVIOUS_STATE_BUNDLE", "")
     if explicit:
@@ -668,6 +671,24 @@ def _prepare_stage(
             destination=directory / "state.bundle.json",
             require_compatible_state=True,
         )
+        if clean_start == "artifact-not-found":
+            # `actions init` writes this name into the workflow and the
+            # runtime recomputes it, so editing the configuration renames
+            # the bundle the next run looks for while the workflow still
+            # uploads under the old one. Nothing failed when that happened:
+            # the run simply started with an empty ledger. Fall back to the
+            # newest bundle this repository actually wrote.
+            recovered = _download_artifact_file(
+                config,
+                env,
+                artifact_prefix="touchstone-state-",
+                member="state.bundle.json",
+                destination=directory / "state.bundle.json",
+                require_compatible_state=True,
+            )
+            if not recovered:
+                clean_start = ""
+                state_note = "restored-under-earlier-name; run 'touchstone actions init'"
 
     if resume.candidate_id:
         explicit_candidate = env.get("TOUCHSTONE_PREVIOUS_CANDIDATE_BUNDLE", "")
@@ -697,6 +718,7 @@ def _prepare_stage(
         outcome="completed",
         candidate_id=resume.candidate_id,
         clean_start_reason=clean_start,
+        state_note=state_note,
         should_run=True,
     )
     output.write(directory / "result.json", env=env)
@@ -1994,6 +2016,7 @@ def _restore_state_bundle(
         config,
         loop="__repository__",
         lineage=None,
+        require_configuration=False,
     )
     if not checked.ok:
         return checked.clean_start_reason
@@ -2148,6 +2171,7 @@ def _download_artifact_file(
                             config,
                             loop="__repository__",
                             lineage=None,
+                            require_configuration=False,
                         ).ok
                     ):
                         continue

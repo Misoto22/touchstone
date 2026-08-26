@@ -67,20 +67,38 @@ def compatibility(
     *,
     loop: str,
     lineage: str | None,
+    require_configuration: bool = True,
 ) -> CompatibilityResult:
+    """Whether this bundle may be restored under this configuration.
+
+    A candidate is configuration-shaped: it was analysed against one set
+    of Loops, protected paths and Targets, and publishing it under another
+    ships work nobody authorised. `require_configuration` stays true there.
+
+    The repository State Snapshot is not. It carries the ledger and the Due
+    Slot store — a record of what has already happened, which stays true
+    whether or not a Loop was added afterwards. Checking it against the
+    configuration digest meant every edit to `touchstone.toml` discarded
+    the history silently: the next run began with an empty ledger, found
+    the defects it had already proposed, and opened a second pull request
+    for each. Every stage stayed green while it happened.
+    """
     expected = [
         (manifest.repository, config.forge.slug, "repository-mismatch"),
         (manifest.loop, loop, "loop-mismatch"),
         (manifest.schema_version, config.source.schema_version, "schema-mismatch"),
-        (manifest.config_digest, config_digest(config), "config-mismatch"),
-        (
-            manifest.profile_digest,
-            config.generated_metadata.source_digest
-            if getattr(config, "generated_metadata", None) is not None
-            else "v1",
-            "profile-mismatch",
-        ),
     ]
+    if require_configuration:
+        expected.append((manifest.config_digest, config_digest(config), "config-mismatch"))
+        expected.append(
+            (
+                manifest.profile_digest,
+                config.generated_metadata.source_digest
+                if getattr(config, "generated_metadata", None) is not None
+                else "v1",
+                "profile-mismatch",
+            )
+        )
     if lineage is not None:
         expected.append((manifest.lineage, lineage, "lineage-mismatch"))
     for actual, wanted, reason in expected:
