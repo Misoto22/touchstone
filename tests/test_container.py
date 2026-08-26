@@ -97,7 +97,10 @@ def test_a_compose_service_per_member_with_its_own_state_volume(tmp_path: Path) 
     # repository's state reach another's, which is the whole reason the
     # containers are separate.
     assert compose.count("touchstone-state-") >= 2
-    assert "ANTHROPIC_API_KEY" not in compose
+    # Variable names are the point of the file; values and vault references are
+    # what it must never carry. `test_the_compose_file_carries_references_and_
+    # never_values` holds that line.
+    assert "ANTHROPIC_API_KEY:" not in compose
 
 
 def test_the_compose_file_carries_references_and_never_values(tmp_path: Path) -> None:
@@ -121,3 +124,66 @@ def test_a_container_backed_loop_may_not_auto_merge() -> None:
     assert "policy-unsupported" in auto_merge_unsupported(
         requested=True, independently_verified=False
     )
+
+
+def test_each_service_names_the_variables_its_env_file_must_hold(tmp_path: Path) -> None:
+    from tests.test_fleet import PROJECT, _project
+    from touchstone.fleet import load_project, render_compose
+
+    body = PROJECT.replace(
+        "[defaults.engine.cheap]",
+        '[defaults.engine.cheap]\napi_key_env = "CHEAP_API_KEY"',
+    )
+    project = load_project(_project(tmp_path, body))
+
+    compose = render_compose(project)
+
+    # Without this the operator has to read the project file to learn what the
+    # env_file must contain, and a missing variable surfaces as a model call
+    # failing inside a container hours later.
+    widgets = compose.split("  acme-widgets:", 1)[1]
+    assert "CHEAP_API_KEY" in widgets
+    assert "GH_TOKEN" in widgets
+    # A member that takes no loop on the cheap engine is not told to hold its key.
+    gadgets = compose.split("  acme-gadgets:", 1)[1].split("volumes:", 1)[0]
+    assert "CHEAP_API_KEY" in gadgets
+
+
+def test_a_member_taking_no_loop_on_an_engine_is_not_asked_for_its_key(tmp_path: Path) -> None:
+    from tests.test_fleet import PROJECT, _project
+    from touchstone.fleet import load_project, render_compose
+
+    body = PROJECT.replace(
+        "[defaults.engine.cheap]",
+        '[defaults.engine.cheap]\napi_key_env = "CHEAP_API_KEY"',
+    ).replace('engine = "cheap"', "")
+    project = load_project(_project(tmp_path, body))
+
+    compose = render_compose(project)
+
+    assert "CHEAP_API_KEY" not in compose
+
+
+def test_a_volume_path_survives_the_project_being_cloned_elsewhere(tmp_path: Path) -> None:
+    from tests.test_fleet import PROJECT, _project
+    from touchstone.fleet import load_project, render_compose
+
+    project = load_project(_project(tmp_path, PROJECT))
+
+    compose = render_compose(project, base=tmp_path / "projects")
+
+    # Compose resolves a relative path against the file's own directory, so an
+    # absolute one pins the fleet to the machine that rendered it.
+    assert str(tmp_path) not in compose
+    assert "../widgets:/repository" in compose
+
+
+def test_an_absolute_path_is_kept_when_it_cannot_be_made_relative(tmp_path: Path) -> None:
+    from tests.test_fleet import PROJECT, _project
+    from touchstone.fleet import load_project, render_compose
+
+    project = load_project(_project(tmp_path, PROJECT))
+
+    compose = render_compose(project, base=Path("/"))
+
+    assert ":/repository" in compose

@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
+from touchstone.config import VENDOR_KEY_ENV as _VENDOR_KEY
 from touchstone.execution import Executor
 
 _RUNTIME_ENVIRONMENT = {
@@ -49,10 +50,6 @@ _ENGINE_ENVIRONMENT = {
         "ANTHROPIC_BASE_URL",
     },
 }
-
-
-#: The variable each engine's own CLI reads its credential from.
-_VENDOR_KEY = {"codex": "OPENAI_API_KEY", "claude": "ANTHROPIC_API_KEY"}
 
 
 def engine_environment(

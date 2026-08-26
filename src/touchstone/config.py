@@ -96,7 +96,7 @@ class EngineConfig:
 
         if self.api_key_env:
             return self.api_key_env
-        return "OPENAI_API_KEY" if self.name == "codex" else "ANTHROPIC_API_KEY"
+        return VENDOR_KEY_ENV.get(self.name, "ANTHROPIC_API_KEY")
 
 
 @dataclass(frozen=True, slots=True)
@@ -522,6 +522,14 @@ def _model_endpoint(engine: dict[str, Any], where: str = "engine") -> None:
 
 
 _ENV_NAME = re.compile(r"[A-Z][A-Z0-9_]*")
+
+#: The variable each engine's own CLI reads its credential from.
+#:
+#: Module-level because three places need the same answer — the configuration
+#: that resolves an engine's key, the environment handed to a model process,
+#: and the Compose file that tells an operator which variables to fill. Three
+#: copies of this mapping is three chances for one of them to drift.
+VENDOR_KEY_ENV = {"codex": "OPENAI_API_KEY", "claude": "ANTHROPIC_API_KEY"}
 
 
 def _engine_members(engine: dict[str, Any]) -> dict[str, dict[str, Any]]:

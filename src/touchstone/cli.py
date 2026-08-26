@@ -223,8 +223,10 @@ def _sync(args: argparse.Namespace) -> int:
         print(f"touchstone: {exc}", file=sys.stderr)
         return 78
     if args.compose:
-        rendered = render_compose(project)
         destination = Path(args.compose)
+        # Compose resolves a relative volume source against the file's own
+        # directory, so the file has to know where it is being written.
+        rendered = render_compose(project, base=destination.parent)
         if destination.exists() and destination.read_text(encoding="utf-8") == rendered:
             print(f"{destination}: current")
             return 0

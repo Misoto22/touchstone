@@ -16,6 +16,7 @@ unattended could grant itself a Gate.
 from __future__ import annotations
 
 import hashlib
+import os
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -300,7 +301,12 @@ def _digest(rendered: str) -> str:
     return hashlib.sha256(rendered.encode("utf-8")).hexdigest()[:12]
 
 
-def render_compose(project: ProjectConfig, *, image: str = "ghcr.io/misoto22/touchstone") -> str:
+def render_compose(
+    project: ProjectConfig,
+    *,
+    image: str = "ghcr.io/misoto22/touchstone",
+    base: Path | None = None,
+) -> str:
     """One container per member repository, each seeing only its own.
 
     A single container iterating every member would be the central-execution
@@ -315,6 +321,7 @@ def render_compose(project: ProjectConfig, *, image: str = "ghcr.io/misoto22/tou
     item to go after.
     """
 
+    anchor = (base or project.path.parent).resolve()
     services: list[str] = []
     volumes: list[str] = []
     for slug in sorted(project.members):
@@ -322,6 +329,7 @@ def render_compose(project: ProjectConfig, *, image: str = "ghcr.io/misoto22/tou
         service = slug.replace("/", "-").replace("_", "-").lower()
         volume = f"touchstone-state-{service}"
         volumes.append(f"  {volume}:")
+        required = "\n".join(f"      #   {name}" for name in _member_key_variables(project, member))
         services.append(
             "\n".join(
                 [
@@ -334,9 +342,11 @@ def render_compose(project: ProjectConfig, *, image: str = "ghcr.io/misoto22/tou
                     "      TOUCHSTONE_CONTAINER_INTERVAL_SECONDS: "
                     "${TOUCHSTONE_CONTAINER_INTERVAL_SECONDS:-900}",
                     "    env_file:",
+                    "      # This file is not committed. It has to hold, at least:",
+                    required,
                     f"      - ./secrets/{service}.env",
                     "    volumes:",
-                    f"      - {_compose_path(member.path)}:/repository",
+                    f"      - {_compose_path(member.path, anchor)}:/repository",
                     f"      - {volume}:/state",
                     "",
                 ]
@@ -352,8 +362,63 @@ def render_compose(project: ProjectConfig, *, image: str = "ghcr.io/misoto22/tou
     return header + "\n".join(services) + "\nvolumes:\n" + "\n".join(sorted(volumes)) + "\n"
 
 
-def _compose_path(path: Path) -> str:
-    return path.as_posix()
+def _member_key_variables(project: ProjectConfig, member: Member) -> tuple[str, ...]:
+    """Which environment variables this member's own containers need filled.
+
+    Named here because the Compose file is the only thing the operator reads
+    when writing the env file, and a variable they never learn about surfaces
+    as a model call failing inside a container hours later. Only the engines
+    this member's Loops actually reach are listed; a member taking no Loop on
+    the cheap engine has no business holding its key.
+
+    Variable names only. A Compose file is committed, and an `op://` reference
+    in one tells a reader which vault item to go after.
+    """
+
+    from touchstone.config import VENDOR_KEY_ENV
+
+    engines = merge_generated(
+        {"engine": project.defaults.get("engine", {})},
+        {"engine": member.overrides.get("engine", {})},
+    )["engine"]
+    loops = merge_generated(
+        {"loop": project.defaults.get("loop", {})},
+        {"loop": member.overrides.get("loop", {})},
+    )["loop"]
+
+    def key_of(table: dict[str, Any]) -> str:
+        declared = str(table.get("api_key_env", ""))
+        if declared:
+            return declared
+        return VENDOR_KEY_ENV.get(str(table.get("name", "codex")), "ANTHROPIC_API_KEY")
+
+    unnamed = {key: value for key, value in engines.items() if not isinstance(value, dict)}
+    needed = set()
+    for name in member.loops:
+        chosen = str(loops.get(name, {}).get("engine", ""))
+        member_engine = engines.get(chosen) if chosen else None
+        needed.add(key_of(member_engine if isinstance(member_engine, dict) else unnamed))
+    # The forge token is not an engine's, and publication cannot happen without
+    # it, so it belongs in the same list rather than in prose somewhere else.
+    needed.add("GH_TOKEN")
+    return tuple(sorted(needed))
+
+
+def _compose_path(path: Path, anchor: Path) -> str:
+    """A path Compose can resolve from wherever the file was written.
+
+    Compose reads a relative volume source against the Compose file's own
+    directory, so an absolute one pins the fleet to the machine that rendered
+    it. Falls back to absolute where no relative path exists — a checkout on
+    another drive, for instance — because a wrong relative path is worse than
+    an honest absolute one.
+    """
+
+    try:
+        relative = Path(os.path.relpath(path, anchor))
+    except ValueError:
+        return path.as_posix()
+    return relative.as_posix()
 
 
 def _without_loops(defaults: dict[str, Any]) -> dict[str, Any]:
