@@ -300,7 +300,7 @@ FROM ghcr.io/misoto22/touchstone:0.1.2
 RUN apt-get update && apt-get install -y --no-install-recommends <toolchain>
 ```
 
-Scheduling reuses `run-due` unchanged: the container supervisor is a fixed-interval wake signal, not a second clock, because `run-due` already claims its Due Slot and coalesces missed periods. A failed wake is a failed run, not a failed supervisor. Credentials arrive as injected environment variables listed in an uncommitted `secrets/<service>.env`; the rendered Compose file names the variables and carries no value and no reference. Auto-merge is unavailable on this backend, for the reason any backend without an independent Verify stage is refused.
+Scheduling reuses `run-due` unchanged: the container supervisor is a fixed-interval wake signal, not a second clock, because `run-due` already claims its Due Slot and coalesces missed periods. A failed wake is a failed run, not a failed supervisor — and it says so: every wake reports its exit code, and an exception that would otherwise be swallowed to keep the container alive is named in the log. The container's log is the only thing an operator can see, so nothing in it is buffered. Credentials arrive as injected environment variables listed in an uncommitted `secrets/<service>.env`; the rendered Compose file names the variables and carries no value and no reference. Auto-merge is unavailable on this backend, for the reason any backend without an independent Verify stage is refused.
 
 ---
 
