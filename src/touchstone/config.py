@@ -15,6 +15,7 @@ from urllib.parse import urlsplit
 
 if TYPE_CHECKING:
     from touchstone.config_v2 import GeneratedMetadata, TargetConfig
+    from touchstone.scheduling.window import MergeWindow
 
 EngineName = Literal["codex", "claude"]
 Target = Literal["local", "ssh"]
@@ -271,6 +272,25 @@ class LoopConfig:
     #: in `auto_merge_verdict`, and a backend without an independent Verify
     #: stage refuses rather than downgrading to an ordinary pull request.
     auto_merge: bool = False
+    #: How the forge is asked to merge. The repository decides which of these
+    #: it permits, so a Loop asking for one the repository disallows is refused
+    #: rather than attempted — the attempt would fail after the pull request
+    #: already existed, and say so in a place nobody reads.
+    auto_merge_strategy: Literal["squash", "merge", "rebase"] = "squash"
+    auto_merge_delete_branch: bool = True
+    #: When an unattended merge may be armed, in the configuration's timezone.
+    #:
+    #: Empty means no restriction. A window bounds when Touchstone hands the
+    #: merge to the forge, not when the forge completes it: `--auto` merges
+    #: once the required checks pass, which can be later. A project needing the
+    #: harder guarantee wants a required check that fails outside its hours.
+    auto_merge_window: tuple[MergeWindow, ...] = ()
+    #: Above this many changed files, the pull request waits for a person.
+    #:
+    #: Zero is no limit. Files rather than lines, because file count is the
+    #: scale on which someone judges whether a diff can be read in one sitting;
+    #: a line count is moved by a reformat that changed nothing.
+    auto_merge_max_files: int = 0
     context: tuple[tuple[str, str], ...] = ()
     #: Which member of the engine pool this Loop runs on. Empty is the unnamed
     #: engine. Naming one is how a Loop that hunts hardcoded values runs on a
@@ -456,7 +476,20 @@ _LOOP = {
     "context",
     "drafts_hold_slot",
     "auto_merge",
+    "auto_merge_strategy",
+    "auto_merge_delete_branch",
+    "auto_merge_window",
+    "auto_merge_max_files",
 }
+
+#: Keys that describe how an unattended merge happens, not whether it does.
+_MERGE_POLICY = (
+    "auto_merge_strategy",
+    "auto_merge_delete_branch",
+    "auto_merge_window",
+    "auto_merge_max_files",
+)
+MERGE_STRATEGIES = ("squash", "merge", "rebase")
 _ACTIONS = {
     "visibility",
     "wake_minutes",
@@ -809,6 +842,10 @@ def _validate(raw: dict[str, Any]) -> None:
         _positive_int(value, "priority", f"loop.{name}")
         _boolean(value, "drafts_hold_slot", f"loop.{name}")
         _boolean(value, "auto_merge", f"loop.{name}")
+        _boolean(value, "auto_merge_delete_branch", f"loop.{name}")
+        _string(value, "auto_merge_strategy", f"loop.{name}")
+        _string_array(value, "auto_merge_window", f"loop.{name}")
+        _merge_policy(value, name)
         _attachment(value, f"loop.{name}")
         for key in ("protected_paths", "require_change_under", "confine_to", "targets"):
             _string_array(value, key, f"loop.{name}")
@@ -832,8 +869,41 @@ def _state_dir(raw: dict[str, Any], base_dir: Path, *, identity: str) -> Path:
     return (xdg / "touchstone" / f"{leaf}-{digest}").expanduser().resolve()
 
 
+def _merge_policy(table: dict[str, Any], name: str) -> None:
+    """Check a Loop's merge policy against the switch that would use it.
+
+    A policy configured without `auto_merge = true` reads as "this merges by
+    rebase on weekday mornings" and behaves as "this never merges". Nothing
+    fails, nothing warns, and the difference surfaces only as pull requests
+    quietly waiting forever — so the mismatch is named here instead.
+    """
+
+    declared = [key for key in _MERGE_POLICY if key in table]
+    if declared and not table.get("auto_merge", False):
+        raise ConfigError(
+            f"loop.{name}.{declared[0]} configures how an unattended merge happens, but "
+            f"loop.{name}.auto_merge is not true, so none would ever be attempted"
+        )
+    strategy = str(table.get("auto_merge_strategy", "squash"))
+    if strategy not in MERGE_STRATEGIES:
+        allowed = ", ".join(MERGE_STRATEGIES)
+        raise ConfigError(f"loop.{name}.auto_merge_strategy must be one of {allowed}")
+    limit = table.get("auto_merge_max_files", 0)
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
+        raise ConfigError(
+            f"loop.{name}.auto_merge_max_files must be a whole number of files, or 0 for no limit"
+        )
+    from touchstone.scheduling.window import WindowError, parse_windows
+
+    try:
+        parse_windows(tuple(str(entry) for entry in table.get("auto_merge_window", ())))
+    except WindowError as exc:
+        raise ConfigError(f"loop.{name}.auto_merge_window: {exc}") from None
+
+
 def _loops(raw: dict[str, Any], base_dir: Path) -> dict[str, LoopConfig]:
     from touchstone.scheduling import ScheduleError, parse_schedule
+    from touchstone.scheduling.window import parse_windows
 
     result: dict[str, LoopConfig] = {}
     for name, table in raw.items():
@@ -847,6 +917,12 @@ def _loops(raw: dict[str, Any], base_dir: Path) -> dict[str, LoopConfig]:
             name=name,
             engine=str(table.get("engine", "")),
             auto_merge=bool(table.get("auto_merge", False)),
+            auto_merge_strategy=table.get("auto_merge_strategy", "squash"),
+            auto_merge_delete_branch=bool(table.get("auto_merge_delete_branch", True)),
+            auto_merge_window=parse_windows(
+                tuple(str(entry) for entry in table.get("auto_merge_window", ()))
+            ),
+            auto_merge_max_files=int(table.get("auto_merge_max_files", 0)),
             brief=str(_required(table, "brief", f"loop.{name}")),
             label=str(_required(table, "label", f"loop.{name}")),
             config_dir=base_dir,

@@ -78,6 +78,12 @@ class PublicationRequest:
     coauthor_name: str | None = None
     coauthor_email: str | None = None
     auto_merge: bool = False
+    auto_merge_strategy: str = "squash"
+    auto_merge_delete_branch: bool = True
+    #: Evaluated where the clock and the Loop's windows are both in hand, so
+    #: this carries the answer rather than the inputs.
+    within_merge_window: bool = True
+    files_within_merge_limit: bool = True
     #: Whether a stage holding no model credential already validated this
     #: candidate. Only such a backend may honour `auto_merge`.
     independently_verified: bool = False
@@ -167,6 +173,9 @@ def auto_merge_verdict(
     merge_allowed: bool,
     required_checks_declared: bool,
     protected_branch: bool,
+    strategy_allowed: bool = True,
+    within_window: bool = True,
+    files_within_limit: bool = True,
 ) -> AutoMergeVerdict:
     """Decide whether this publication may merge without a person.
 
@@ -207,7 +216,28 @@ def auto_merge_verdict(
         unmet.append("no required workflow is declared for this repository")
     if not protected_branch:
         unmet.append("the base branch has no branch protection")
+    if not strategy_allowed:
+        # Attempting it would fail after the pull request already existed, and
+        # a forge refusing a strategy says so into a detail string.
+        unmet.append("the repository does not permit the configured merge strategy")
+    if not within_window:
+        unmet.append("the current time is outside this loop's merge window")
+    if not files_within_limit:
+        unmet.append("the change touches more files than this loop merges unattended")
     return AutoMergeVerdict(tuple(unmet))
+
+
+@dataclass(frozen=True, slots=True)
+class ArmOutcome:
+    """Whether the forge took the merge, and what it said either way.
+
+    A bare "not armed" is indistinguishable from "armed and the forge refused",
+    and the two need different actions from a person: one is a condition that
+    will pass on the next run, the other is a configuration that never will.
+    """
+
+    armed: bool
+    detail: str = ""
 
 
 def _coauthor_trailer(request: PublicationRequest) -> str:
@@ -466,25 +496,31 @@ class RepositoryLifecycle:
             )
 
         armed = self._arm_auto_merge(request, number)
-        if armed:
+        if armed.armed:
             self._record(
                 request,
                 "awaiting_checks",
                 pr=number,
                 head_sha=head,
                 branch=request.branch,
-                detail=armed,
+                detail=armed.detail,
             )
             return PublicationResult(
                 "awaiting_checks",
                 request.finding_id,
                 number,
                 head,
-                armed,
+                armed.detail,
                 branch=request.branch,
             )
 
         detail = "independent review approved; pull request awaits checks and human merge"
+        if armed.detail:
+            # The loop asked to merge unattended and did not. Saying which
+            # condition stopped it is the difference between a policy someone
+            # can correct and a pull request that waits forever for no stated
+            # reason.
+            detail = f"{detail} (auto-merge not armed: {armed.detail})"
         self._record(
             request,
             "awaiting_checks",
@@ -502,7 +538,7 @@ class RepositoryLifecycle:
             branch=request.branch,
         )
 
-    def _arm_auto_merge(self, request: PublicationRequest, number: int) -> str:
+    def _arm_auto_merge(self, request: PublicationRequest, number: int) -> ArmOutcome:
         """Hand the merge to the forge when every condition holds.
 
         Returns what happened, or empty when the pull request stays for a
@@ -517,8 +553,13 @@ class RepositoryLifecycle:
         """
 
         if not request.auto_merge:
-            return ""
-        repository = self._forge.repository_info()
+            return ArmOutcome(False)
+        repository = self._forge.repository_info() or {}
+        permits = {
+            "squash": "squashMergeAllowed",
+            "merge": "mergeCommitAllowed",
+            "rebase": "rebaseMergeAllowed",
+        }.get(request.auto_merge_strategy, "")
         verdict = auto_merge_verdict(
             requested=True,
             independently_verified=request.independently_verified,
@@ -526,16 +567,27 @@ class RepositoryLifecycle:
             verdict=request.verdict,
             draft=False,
             gates_passed=True,
-            merge_allowed=bool(repository and repository.get("autoMergeAllowed")),
+            merge_allowed=bool(repository.get("autoMergeAllowed")),
             required_checks_declared=request.required_checks_declared,
             protected_branch=bool(self._forge.branch_protection(request.base)),
+            strategy_allowed=bool(permits and repository.get(permits, True)),
+            within_window=request.within_merge_window,
+            files_within_limit=request.files_within_merge_limit,
         )
         if not verdict.armed:
-            return ""
-        result = self._forge.arm_auto_merge(number)
+            return ArmOutcome(False, verdict.reason)
+        result = self._forge.arm_auto_merge(
+            number,
+            strategy=request.auto_merge_strategy,
+            delete_branch=request.auto_merge_delete_branch,
+        )
         if not result.ok:
-            return ""
-        return "every auto-merge condition held; the forge will merge once checks pass"
+            return ArmOutcome(False, f"the forge refused to arm the merge: {result.detail}")
+        return ArmOutcome(
+            True,
+            f"every auto-merge condition held; the forge will {request.auto_merge_strategy} "
+            "this once checks pass",
+        )
 
     def reconcile(self, loop: LoopConfig, now: dt.datetime) -> ReconcileReport:
         merged: list[int] = []

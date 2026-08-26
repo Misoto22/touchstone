@@ -84,9 +84,18 @@ def test_the_publication_request_prefers_the_supplied_identity(tmp_path: Path) -
                 slug="acme/widgets",
                 required_workflows=("ci.yml",),
             ),
+            timezone="UTC",
             git=GitConfig(author_name="Project Author", author_email="project@example.test"),
         ),
-        loop=lambda _name: SimpleNamespace(name="code", label="touchstone:audit", auto_merge=False),
+        loop=lambda _name: SimpleNamespace(
+            name="code",
+            label="touchstone:audit",
+            auto_merge=False,
+            auto_merge_strategy="squash",
+            auto_merge_delete_branch=True,
+            auto_merge_window=(),
+            auto_merge_max_files=0,
+        ),
     )
     base = {
         "loop": "code",

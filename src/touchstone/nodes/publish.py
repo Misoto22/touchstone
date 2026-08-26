@@ -18,6 +18,28 @@ from touchstone.lifecycle import (
     auto_merge_unsupported,
 )
 from touchstone.nodes.context import current
+from touchstone.scheduling.window import within_windows
+
+
+def _now() -> Any:
+    import datetime as dt
+
+    return dt.datetime.now(dt.UTC)
+
+
+def _within_file_limit(limit: int, changed: object) -> bool:
+    """Whether the change is small enough for this Loop to merge unattended.
+
+    Zero is no limit. An unmeasured count fails the check rather than passing
+    it: a limit that quietly does not apply is worse than no limit, because the
+    configuration says one thing and the merge does another.
+    """
+
+    if limit <= 0:
+        return True
+    if not isinstance(changed, int):
+        return False
+    return changed <= limit
 
 
 def _request(state: dict[str, Any], context: Any) -> PublicationRequest:
@@ -55,6 +77,16 @@ def _request(state: dict[str, Any], context: Any) -> PublicationRequest:
         coauthor_name=coauthor[0] if coauthor else None,
         coauthor_email=coauthor[1] if coauthor else None,
         auto_merge=loop.auto_merge,
+        auto_merge_strategy=loop.auto_merge_strategy,
+        auto_merge_delete_branch=loop.auto_merge_delete_branch,
+        within_merge_window=within_windows(loop.auto_merge_window, _now(), context.config.timezone),
+        # `changed_files` comes from classify, which already listed every path
+        # the commit picks up. Absent means the node did not run — a resume, a
+        # hosted republication — and an unknown count must not silently pass a
+        # limit it was never measured against.
+        files_within_merge_limit=_within_file_limit(
+            loop.auto_merge_max_files, state.get("changed_files")
+        ),
         independently_verified=bool(state.get("independently_verified", False)),
         required_checks_declared=bool(context.config.forge.required_workflows),
         pre_staged=bool(state.get("pre_staged", False)),

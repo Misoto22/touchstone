@@ -289,9 +289,18 @@ def test_node_builds_publication_from_project_configuration() -> None:
                 escalation_label="ops:review",
                 required_workflows=("ci.yml",),
             ),
+            timezone="UTC",
             git=GitConfig(author_name="Touchstone Bot", author_email="bot@example.com"),
         ),
-        loop=lambda name: SimpleNamespace(name=name, label="automation:audit", auto_merge=False),
+        loop=lambda name: SimpleNamespace(
+            name=name,
+            label="automation:audit",
+            auto_merge=False,
+            auto_merge_strategy="squash",
+            auto_merge_delete_branch=True,
+            auto_merge_window=(),
+            auto_merge_max_files=0,
+        ),
     )
     state = {
         "loop": "architecture",

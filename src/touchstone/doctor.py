@@ -323,6 +323,10 @@ def run_doctor(config: Config, context: DoctorContext) -> DoctorReport:
     )
 
     repository = context.forge.repository_info()
+    # Checked while the repository's own settings are in hand. A Loop asking
+    # for a strategy the repository forbids fails at publication otherwise,
+    # after the pull request exists and where nobody is reading.
+    checks.extend(merge_policy_checks(config, repository))
     repository_level: Level = "PASS" if repository else ("FAIL" if context.online else "WARN")
     checks.append(
         CheckResult(
@@ -658,6 +662,62 @@ def _actions_checks(config: Config, context: DoctorContext) -> list[CheckResult]
             )
         )
     return checks
+
+
+def merge_policy_checks(config: Config, repository: dict[str, Any] | None) -> list[CheckResult]:
+    """Compare each Loop's merge policy against what the repository permits.
+
+    Checked here because the alternative is finding out at publication time:
+    `gh pr merge --rebase` on a repository with rebase merging turned off fails
+    after the pull request already exists, and the refusal lands in a detail
+    string on a run nobody is watching. A Loop that does not auto-merge is not
+    mentioned at all — a repository forbidding a strategy nothing asks for is
+    not a finding.
+    """
+
+    permits = {
+        "squash": "squashMergeAllowed",
+        "merge": "mergeCommitAllowed",
+        "rebase": "rebaseMergeAllowed",
+    }
+    settings = repository or {}
+    results: list[CheckResult] = []
+    for name in sorted(config.loops):
+        loop = config.loops[name]
+        if not loop.auto_merge:
+            continue
+        if not settings.get("autoMergeAllowed", False):
+            results.append(
+                CheckResult(
+                    f"merge.{name}.allowed",
+                    "FAIL",
+                    f"loop.{name} auto-merges but the repository does not allow auto-merge",
+                    "Enable auto-merge in the repository's settings, or set "
+                    f"loop.{name}.auto_merge = false.",
+                )
+            )
+            continue
+        key = permits[loop.auto_merge_strategy]
+        if not settings.get(key, False):
+            results.append(
+                CheckResult(
+                    f"merge.{name}.strategy",
+                    "FAIL",
+                    f"loop.{name} merges by {loop.auto_merge_strategy}, which this "
+                    "repository does not permit",
+                    f"Allow {loop.auto_merge_strategy} merging in the repository's settings, "
+                    f"or change loop.{name}.auto_merge_strategy.",
+                )
+            )
+            continue
+        results.append(
+            CheckResult(
+                f"merge.{name}.strategy",
+                "PASS",
+                f"loop.{name} merges by {loop.auto_merge_strategy}, which this repository permits",
+            )
+        )
+    return results
 
 
 def _secret_remediation(missing: list[str], engines: dict[str, Any]) -> str:
