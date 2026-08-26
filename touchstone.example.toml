@@ -90,6 +90,20 @@ wake_minutes = 15
 artifact_retention_days = 90
 node_version = "24"
 auto_merge = false
+# How the forge is asked to merge. The repository decides which of these it
+# permits; `doctor` compares the two and names the mismatch, because attempting
+# a forbidden one fails after the pull request already exists.
+# auto_merge_strategy = "squash"   # squash | merge | rebase
+# auto_merge_delete_branch = true
+# When an unattended merge may be armed, in this configuration's timezone. No
+# window means no restriction. This bounds when Touchstone hands the merge to
+# the forge, not when the forge completes it: `--auto` merges once the required
+# checks pass, which can be later.
+# auto_merge_window = ["MON-THU,09:00-17:00", "FRI,09:00-12:00"]
+# Above this many changed files, the pull request waits for a person. Zero is
+# no limit. Files rather than lines: file count is the scale on which someone
+# judges whether a diff can be read in one sitting.
+# auto_merge_max_files = 5
 
 [loop.code]
 # Which pool member this Loop runs on. Omit for the unnamed engine.

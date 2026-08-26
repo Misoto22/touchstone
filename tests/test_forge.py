@@ -54,6 +54,9 @@ def test_repository_info_uses_the_current_github_api_shape() -> None:
         "nameWithOwner": "acme/widgets",
         "defaultBranchRef": {"name": "trunk"},
         "autoMergeAllowed": True,
+        "squashMergeAllowed": False,
+        "mergeCommitAllowed": False,
+        "rebaseMergeAllowed": False,
     }
 
 

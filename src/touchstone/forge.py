@@ -128,6 +128,11 @@ class Forge:
             "nameWithOwner": name,
             "defaultBranchRef": {"name": branch},
             "autoMergeAllowed": auto_merge,
+            # Which strategies this repository permits, so a Loop asking for
+            # one it does not can be refused before a branch is pushed.
+            "squashMergeAllowed": bool(payload.get("allow_squash_merge", False)),
+            "mergeCommitAllowed": bool(payload.get("allow_merge_commit", False)),
+            "rebaseMergeAllowed": bool(payload.get("allow_rebase_merge", False)),
         }
 
     def branch_protection(self, branch: str) -> bool | None:
@@ -259,8 +264,21 @@ class Forge:
             return False
         return None
 
-    def arm_auto_merge(self, number: int) -> OperationResult:
-        ok, detail = self._gh(["pr", "merge", str(number), "--auto", "--squash", "--delete-branch"])
+    def arm_auto_merge(
+        self, number: int, *, strategy: str = "squash", delete_branch: bool = True
+    ) -> OperationResult:
+        """Hand the merge to the forge, the way the Loop asked for it.
+
+        The strategy is a parameter because a repository decides which it
+        permits, and `gh` refuses the others. Hard-coding one meant a project
+        that had turned off squash merging got a failure after its pull request
+        already existed — reported into a detail string and nowhere else.
+        """
+
+        argv = ["pr", "merge", str(number), "--auto", f"--{strategy}"]
+        if delete_branch:
+            argv.append("--delete-branch")
+        ok, detail = self._gh(argv)
         return OperationResult(ok, "" if ok else detail)
 
     def to_draft(self, number: int) -> OperationResult:

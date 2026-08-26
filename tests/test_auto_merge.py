@@ -155,12 +155,12 @@ def test_the_forge_is_asked_to_merge_only_when_every_condition_holds() -> None:
             self.armed: list[int] = []
 
         def repository_info(self) -> dict[str, object]:
-            return {"autoMergeAllowed": self.allowed}
+            return {"autoMergeAllowed": self.allowed, "squashMergeAllowed": True}
 
         def branch_protection(self, _branch: str) -> bool:
             return self.protected
 
-        def arm_auto_merge(self, number: int) -> OperationResult:
+        def arm_auto_merge(self, number: int, **_kwargs: object) -> OperationResult:
             self.armed.append(number)
             return OperationResult(True, "")
 
@@ -195,7 +195,7 @@ def test_the_forge_is_asked_to_merge_only_when_every_condition_holds() -> None:
         executor=SimpleNamespace(),  # type: ignore[arg-type]
     )
 
-    assert lifecycle._arm_auto_merge(_request(), 7) != ""
+    assert lifecycle._arm_auto_merge(_request(), 7).armed is True
     assert forge.armed == [7]
 
     # A repository that does not allow auto-merge is not asked to perform one.
@@ -206,7 +206,7 @@ def test_the_forge_is_asked_to_merge_only_when_every_condition_holds() -> None:
         reap_after_hours=6,
         executor=SimpleNamespace(),  # type: ignore[arg-type]
     )
-    assert refusing._arm_auto_merge(_request(), 7) == ""
+    assert refusing._arm_auto_merge(_request(), 7).armed is False
     assert refuses.armed == []
 
     # An unprotected base branch is not asked either.
@@ -217,7 +217,7 @@ def test_the_forge_is_asked_to_merge_only_when_every_condition_holds() -> None:
         reap_after_hours=6,
         executor=SimpleNamespace(),  # type: ignore[arg-type]
     )
-    assert lax._arm_auto_merge(_request(), 7) == ""
+    assert lax._arm_auto_merge(_request(), 7).armed is False
     assert unprotected.armed == []
 
 

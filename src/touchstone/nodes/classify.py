@@ -167,4 +167,9 @@ def run(state: dict[str, Any]) -> dict[str, Any]:
             "escalation": f"a translation was left behind: {', '.join(stranded)}",
         }
 
-    return {"risk": risk}
+    # Counted here because `paths` is already the right list. Recomputing it
+    # in publish would reach for `git diff --name-only`, which this module
+    # documents at length as the wrong one: it misses the untracked files the
+    # commit picks up, so the limit would guard a smaller diff than the one
+    # that merges.
+    return {"risk": risk, "changed_files": len(paths)}

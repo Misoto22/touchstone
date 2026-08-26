@@ -118,9 +118,18 @@ def test_the_publication_request_carries_both_identities(tmp_path: Path) -> None
                 slug="acme/widgets",
                 required_workflows=("ci.yml",),
             ),
+            timezone="UTC",
             git=_git(),
         ),
-        loop=lambda _name: SimpleNamespace(name="code", label="touchstone:audit", auto_merge=False),
+        loop=lambda _name: SimpleNamespace(
+            name="code",
+            label="touchstone:audit",
+            auto_merge=False,
+            auto_merge_strategy="squash",
+            auto_merge_delete_branch=True,
+            auto_merge_window=(),
+            auto_merge_max_files=0,
+        ),
     )
     state = {
         "loop": "code",
