@@ -32,7 +32,7 @@ def test_audit_author_receives_the_resolved_harness_header(monkeypatch) -> None:
     context = SimpleNamespace(
         loop=lambda _name: loop,
         harness_prompt=lambda: "RESOLVED HARNESS\n\n",
-        ledger=SimpleNamespace(handled_titles=lambda: ()),
+        ledger=SimpleNamespace(handled_titles=lambda: (), open_changes=lambda: ()),
         engine_for=lambda _name: engine,
     )
     monkeypatch.setattr(audit, "current", lambda: context)

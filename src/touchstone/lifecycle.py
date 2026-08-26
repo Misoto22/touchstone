@@ -91,6 +91,7 @@ class PublicationRequest:
     pre_staged: bool = False
     repository: str = ""
     isolated_push: bool = False
+    paths: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -840,6 +841,7 @@ class RepositoryLifecycle:
                 detail=detail,
                 branch=branch,
                 partial=partial,
+                paths=request.paths,
             )
         )
 
