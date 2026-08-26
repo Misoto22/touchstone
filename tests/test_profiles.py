@@ -244,3 +244,59 @@ def test_a_generic_target_declares_no_naming_context(tmp_path: Path) -> None:
     # Absent rather than empty: an empty string would override the brief's own
     # default and hand the session a blank where a sentence belongs.
     assert "naming" not in generated.data["loop"]["code"]["context"]
+
+
+def _generated_for(tmp_path: Path, loops: tuple[str, ...]):  # type: ignore[no-untyped-def]
+    from touchstone.profiles.materialize import detect_repository, materialize
+
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "widget"\nversion = "0.1.0"\n', encoding="utf-8"
+    )
+    for directory in ("src", "tests"):
+        (tmp_path / directory).mkdir(exist_ok=True)
+        (tmp_path / directory / "widget.py").write_text("", encoding="utf-8")
+    discovery, matches, catalog = detect_repository(tmp_path)
+    return materialize(discovery, matches, catalog, repository=tmp_path, loops=loops)
+
+
+def test_every_configured_loop_gets_the_generated_scope(tmp_path: Path) -> None:
+    """The table was written for a Loop literally named `code`. A project that
+    called its Loops anything else got no protected paths, no source
+    confinement and no rendered context — and the only way to scope one was to
+    copy these values into the project file, where refresh could never reach
+    them again."""
+    generated = _generated_for(tmp_path, ("code", "hardcode", "naming"))
+
+    assert set(generated.data["loop"]) == {"code", "hardcode", "naming"}
+    for table in generated.data["loop"].values():
+        assert table["require_change_under"] == ["src/", "tests/"]
+        assert table["context"]["project"].startswith("widget at .")
+
+
+def test_a_project_with_one_loop_generates_exactly_what_it_did_before(tmp_path: Path) -> None:
+    """The default keeps every existing repository byte-identical, so nobody's
+    generated file reads as drift on the release that adds this."""
+    generated = _generated_for(tmp_path, ("code",))
+
+    assert set(generated.data["loop"]) == {"code"}
+
+
+def test_loop_order_does_not_move_the_digest(tmp_path: Path) -> None:
+    """The digest is taken over this table, and a repository whose Loops
+    arrived in a different order would otherwise regenerate to different bytes
+    and read as drift on every check."""
+    first = _generated_for(tmp_path, ("naming", "code", "hardcode"))
+    second = _generated_for(tmp_path, ("code", "hardcode", "naming", "code"))
+
+    assert first.text == second.text
+    assert first.source_digest == second.source_digest
+
+
+def test_each_loop_holds_its_own_table(tmp_path: Path) -> None:
+    """Sharing one dict between the entries would make a later edit to one
+    Loop's scope silently rewrite every other Loop's."""
+    generated = _generated_for(tmp_path, ("code", "naming"))
+
+    generated.data["loop"]["code"]["require_change_under"].append("docs/")
+
+    assert generated.data["loop"]["naming"]["require_change_under"] == ["src/", "tests/"]

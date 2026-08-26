@@ -6,6 +6,7 @@ import difflib
 import hashlib
 import json
 import tomllib
+from copy import deepcopy
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -116,6 +117,16 @@ def detect_repository(
     return discovery, matches, catalog
 
 
+def _loop_names(loops: tuple[str, ...]) -> tuple[str, ...]:
+    """Sorted and deduplicated, because the digest is taken over this table.
+
+    A repository whose Loops arrived in a different order would otherwise
+    regenerate to different bytes and read as drift on every check.
+    """
+
+    return tuple(sorted(dict.fromkeys(loops))) or ("code",)
+
+
 def _naming_sentence(rules: dict[str, str]) -> str:
     """State declared naming rules as one line a brief can drop into a prompt.
 
@@ -138,6 +149,7 @@ def materialize(
     repository: Path,
     package_managers: tuple[str, ...] = (),
     strict_package_managers: bool = False,
+    loops: tuple[str, ...] = ("code",),
 ) -> MaterializedConfig:
     used_profiles: list[str] = []
     targets: dict[str, Any] = {}
@@ -227,6 +239,20 @@ def materialize(
         for name in catalog.profiles
         if name in used_profiles or name == "generic"
     }
+    loop_table: dict[str, Any] = {
+        "protected_paths": protected,
+        "require_change_under": source_paths,
+        "context": {
+            "project": "; ".join(context) or "this repository",
+            "ledger": ("No project findings ledger is configured; treat the queue as empty."),
+            "protected": "the generated and project-owned protected paths",
+            "rules_clause": "",
+        }
+        # Absent rather than empty when no Profile declares a rule: an
+        # empty value would override the brief's own default and hand
+        # the session a blank where a sentence belongs.
+        | ({"naming": _naming_sentence(naming)} if naming else {}),
+    }
     data: dict[str, Any] = {
         "metadata": {
             "package_version": _package_version(),
@@ -234,24 +260,14 @@ def materialize(
             "profile_versions": profile_versions,
         },
         "target": targets,
-        "loop": {
-            "code": {
-                "protected_paths": protected,
-                "require_change_under": source_paths,
-                "context": {
-                    "project": "; ".join(context) or "this repository",
-                    "ledger": (
-                        "No project findings ledger is configured; treat the queue as empty."
-                    ),
-                    "protected": "the generated and project-owned protected paths",
-                    "rules_clause": "",
-                }
-                # Absent rather than empty when no Profile declares a rule: an
-                # empty value would override the brief's own default and hand
-                # the session a blank where a sentence belongs.
-                | ({"naming": _naming_sentence(naming)} if naming else {}),
-            }
-        },
+        # Every configured Loop, not one spelling of one. This table was written
+        # for a Loop literally named `code`, so a project that named its Loops
+        # anything else got no protected paths, no source confinement and no
+        # rendered context at all — the brief fell back to "this repository" and
+        # the classify checks to the built-in list. The only way to scope such a
+        # Loop was to copy these values into the project file by hand, where
+        # `profile refresh` could never update them again.
+        "loop": {name: deepcopy(loop_table) for name in _loop_names(loops)},
     }
     digest = _digest(data)
     data["metadata"]["source_digest"] = digest
@@ -294,6 +310,7 @@ def profile_diff(config: Config) -> ProfileDiff:
         catalog,
         repository=config.repo_path,
         package_managers=managers,
+        loops=tuple(config.loops),
     )
     try:
         current = generated_path.read_text(encoding="utf-8")
