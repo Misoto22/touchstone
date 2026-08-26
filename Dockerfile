@@ -31,11 +31,26 @@ RUN apt-get update \
 
 # The Agent CLI comes from the committed lockfile, never from a floating tag:
 # the version this image runs is the version the repository recorded.
+#
+# The runtime directory is a private manifest with no `bin` of its own, so the
+# executable lands in its `node_modules/.bin` and that is what goes on PATH.
+# `npm link` published the empty wrapper instead and left the image without a
+# working CLI - an image that builds, starts, and cannot audit anything.
+#
+# `--ignore-scripts` is deliberate and has a consequence: Claude Code fetches
+# its platform binary from a postinstall script, so skipping every script means
+# running that one by hand afterwards. This mirrors what the hosted install
+# stage already does.
 COPY agent-runtime /opt/touchstone/agent-runtime
 ARG TOUCHSTONE_ENGINE=claude
+ENV TOUCHSTONE_ENGINE=${TOUCHSTONE_ENGINE}
 RUN cd "/opt/touchstone/agent-runtime/${TOUCHSTONE_ENGINE}" \
- && npm ci --ignore-scripts --omit=dev \
- && npm link
+ && npm ci --ignore-scripts --include=optional --no-audit --no-fund \
+ && if [ "${TOUCHSTONE_ENGINE}" = "claude" ]; then \
+      node node_modules/@anthropic-ai/claude-code/install.cjs; \
+    fi \
+ && test -x "node_modules/.bin/${TOUCHSTONE_ENGINE}"
+ENV PATH="/opt/touchstone/agent-runtime/claude/node_modules/.bin:/opt/touchstone/agent-runtime/codex/node_modules/.bin:${PATH}"
 
 COPY . /opt/touchstone/src
 RUN pip install --no-cache-dir /opt/touchstone/src
@@ -43,6 +58,9 @@ RUN pip install --no-cache-dir /opt/touchstone/src
 # The repository is mounted, not baked in, so the image says nothing about
 # which repository it audits.
 WORKDIR /repository
+# Nothing in a container's log is worth having late. The entrypoint sets line
+# buffering on its own streams; this covers every subprocess it starts.
+ENV PYTHONUNBUFFERED=1
 ENV TOUCHSTONE_CONTAINER_INTERVAL_SECONDS=900
 
 # `run-due` evaluates the durable schedules itself, so this is a wake signal

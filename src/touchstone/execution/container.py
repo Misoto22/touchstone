@@ -48,11 +48,19 @@ def supervise(
     sleep: Callable[[float], None] = time.sleep,
     interval_seconds: int,
     iterations: int | None = None,
+    report: Callable[[str], None] = print,
 ) -> SupervisorReport:
     """Wake `run` on a fixed interval until told to stop.
 
     `iterations` bounds the loop for tests; a container passes nothing and runs
     until the container does not.
+
+    `report` receives one line per wake. A container's log is the only thing an
+    operator can see, and a supervisor that wakes silently is indistinguishable
+    from one that stopped hours ago. Catching an exception to stay alive is
+    correct; catching it and saying nothing is the swallowed failure this
+    project's own brief ranks first, and it would leave a container looping on
+    a broken configuration all day behind an empty log.
     """
 
     if interval_seconds < MINIMUM_INTERVAL_SECONDS:
@@ -63,13 +71,20 @@ def supervise(
     woken = 0
     failed = 0
     while iterations is None or woken < iterations:
+        wake = woken + 1
         try:
             code = run()
-        except Exception:
+        except Exception as exc:
             failed += 1
+            report(f"touchstone: wake {wake} raised {type(exc).__name__}: {exc}")
         else:
+            # `3` is blocked, which is a decision the loop made and recorded,
+            # not a malfunction. Reported all the same: an operator watching a
+            # container needs to tell blocked-every-hour apart from nothing
+            # happening at all.
             if code not in (0, 3):
                 failed += 1
+            report(f"touchstone: wake {wake} finished with exit {code}")
         woken += 1
         sleep(float(interval_seconds))
     return SupervisorReport(woken=woken, failed=failed)

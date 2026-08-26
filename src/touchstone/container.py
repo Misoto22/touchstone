@@ -8,6 +8,7 @@ does is already a supported command.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 
@@ -32,6 +33,13 @@ def _interval() -> int:
 
 def main() -> int:
     from touchstone.cli import main as cli
+
+    # Python block-buffers stdout when it is not a tty, which is exactly what a
+    # container gets. Left alone, `run-due` prints what it did into a buffer
+    # nobody sees until it fills - the log stays empty while the loop works.
+    for stream in (sys.stdout, sys.stderr):
+        with contextlib.suppress(AttributeError, ValueError):
+            stream.reconfigure(line_buffering=True)
 
     interval = _interval()
     print(f"touchstone: waking run-due every {interval}s", flush=True)

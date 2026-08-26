@@ -81,6 +81,20 @@ def test_the_image_installs_the_agent_cli_from_its_committed_lock() -> None:
 
     assert "agent-runtime" in dockerfile
     assert "npm ci" in dockerfile
+    # The runtime directory is a private manifest with no `bin` of its own, so
+    # the executable lands in its node_modules and that is what has to be on
+    # PATH. `npm link` published the empty wrapper instead, and the image built,
+    # started, and could not audit anything.
+    commands = [line for line in dockerfile.splitlines() if not line.lstrip().startswith("#")]
+    assert not any("npm link" in line for line in commands)
+    assert "node_modules/.bin" in dockerfile
+    # `--ignore-scripts` skips the postinstall that fetches Claude Code's
+    # platform binary, so the image runs that one by hand. Same as the hosted
+    # install stage.
+    assert "install.cjs" in dockerfile
+    # Built, not assumed: the layer fails rather than shipping an image whose
+    # CLI is missing.
+    assert 'test -x "node_modules/.bin/${TOUCHSTONE_ENGINE}"' in dockerfile
 
 
 def test_a_compose_service_per_member_with_its_own_state_volume(tmp_path: Path) -> None:
@@ -187,3 +201,56 @@ def test_an_absolute_path_is_kept_when_it_cannot_be_made_relative(tmp_path: Path
     compose = render_compose(project, base=Path("/"))
 
     assert ":/repository" in compose
+
+
+def test_every_wake_says_what_happened() -> None:
+    said: list[str] = []
+    outcomes = iter([0, 3, 1])
+
+    supervise(
+        run=lambda: next(outcomes),
+        sleep=lambda _s: None,
+        interval_seconds=60,
+        iterations=3,
+        report=said.append,
+    )
+
+    # A container's log is the only thing an operator can see. A supervisor
+    # that wakes silently is indistinguishable from one that stopped.
+    assert len(said) == 3
+    assert "0" in said[0]
+    assert "3" in said[1]
+    assert "1" in said[2]
+
+
+def test_a_swallowed_exception_still_reaches_the_log() -> None:
+    said: list[str] = []
+
+    def explode() -> int:
+        raise RuntimeError("the store was unreachable")
+
+    report = supervise(
+        run=explode,
+        sleep=lambda _s: None,
+        interval_seconds=60,
+        iterations=2,
+        report=said.append,
+    )
+
+    assert report.failed == 2
+    # Catching an exception to keep the supervisor alive is correct; catching
+    # it and saying nothing is the swallowed failure this project's own brief
+    # ranks first, and it would leave a container looping on a broken
+    # configuration for a day with an empty log.
+    assert all("the store was unreachable" in line for line in said)
+    assert all("RuntimeError" in line for line in said)
+
+
+def test_the_container_entrypoint_does_not_buffer_its_output() -> None:
+    entrypoint = (ROOT / "src/touchstone/container.py").read_text(encoding="utf-8")
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+
+    # Python block-buffers stdout when it is not a tty, which is exactly what a
+    # container gets. Without this the log stays empty until the buffer fills.
+    assert "line_buffering" in entrypoint
+    assert "PYTHONUNBUFFERED" in dockerfile
