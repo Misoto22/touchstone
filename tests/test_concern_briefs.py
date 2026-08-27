@@ -77,4 +77,5 @@ def test_hardcode_brief_requires_proof_of_the_configured_value_path() -> None:
 
     assert "non-default value" in brief
     assert "runtime consumer" in brief
+    assert "observable setup" in brief
     assert "default-only assertion is not coverage" in brief
