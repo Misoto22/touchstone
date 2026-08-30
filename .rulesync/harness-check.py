@@ -191,6 +191,7 @@ def validate_shared_contract() -> None:
             raise CheckError(f"incomplete shared registry entry: {rule_id}")
         registered[rule_id] = rule
     occurrences: dict[str, str] = {}
+    stack_projections: dict[str, frozenset[str]] = {}
     sources = sorted((ROOT / ".rulesync" / "rules").glob("[12]0-*.md"))
     sources += sorted((ROOT / ".rulesync" / "nested").glob("**/20-stack-*.md"))
     for path in sources:
@@ -221,6 +222,12 @@ def validate_shared_contract() -> None:
                 ):
                     raise CheckError(f"duplicate shared source rule id: {rule_id}")
                 occurrences[rule_id] = source_name
+        if expected_scope == "stack":
+            projection = frozenset(local_seen)
+            previous_projection = stack_projections.get(path.name)
+            if previous_projection is not None and previous_projection != projection:
+                raise CheckError(f"shared stack projection mismatch: {path}")
+            stack_projections[path.name] = projection
     active = {rule_id for rule_id, rule in registered.items() if rule["status"] == "active"}
     if set(occurrences) != active:
         raise CheckError("shared registry/source rule mismatch")
@@ -257,11 +264,16 @@ def legacy_rule_records(
     if not isinstance(rules, list):
         raise CheckError(f"legacy registry rules must be a list: {label}")
     declarations: dict[str, tuple[tuple[str, str, str], str]] = {}
+    stack_projections: dict[str, frozenset[str]] = {}
     for source_path, text in sources.items():
+        source_name = source_path.rsplit("/", 1)[-1]
+        local_seen: set[str] = set()
         for rule_id, level, name, statement in DECLARATION.findall(text):
+            if rule_id in local_seen:
+                raise CheckError(f"duplicate legacy rule declaration: {rule_id}")
+            local_seen.add(rule_id)
             declaration = (level, name, statement)
             previous = declarations.get(rule_id)
-            source_name = source_path.rsplit("/", 1)[-1]
             if previous is not None:
                 previous_declaration, previous_source = previous
                 if previous_declaration != declaration:
@@ -269,6 +281,12 @@ def legacy_rule_records(
                 if not (source_name.startswith("20-stack-") and previous_source == source_name):
                     raise CheckError(f"duplicate legacy rule declaration: {rule_id}")
             declarations[rule_id] = (declaration, source_name)
+        if source_name.startswith("20-stack-"):
+            projection = frozenset(local_seen)
+            previous_projection = stack_projections.get(source_name)
+            if previous_projection is not None and previous_projection != projection:
+                raise CheckError(f"legacy stack projection mismatch: {source_path}")
+            stack_projections[source_name] = projection
     records: dict[str, tuple[tuple[object, ...], str]] = {}
     for rule in rules:
         if not isinstance(rule, dict) or not isinstance(rule.get("id"), str):
