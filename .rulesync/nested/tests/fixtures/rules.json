@@ -1,0 +1,4 @@
+{"rules":[
+  {"id":"TOUCH-FIX-001","level":"MUST","scope":"nested","owner":"Misoto22/touchstone","sources":["tests/fixtures","README.md"],"enforcement":"lint"},
+  {"id":"TOUCH-FIX-002","level":"MUST","scope":"nested","owner":"Misoto22/touchstone","sources":["tests"],"enforcement":"test"}
+]}
