@@ -248,6 +248,7 @@ def validate_shared_projections(
     if set(projections) != actual_sources:
         raise CheckError(f"shared projection path mismatch: {label}")
     occurrences: dict[str, str] = {}
+    stack_memberships: dict[str, frozenset[str]] = {}
     for relative, expected_ids in projections.items():
         source_name = relative.rsplit("/", 1)[-1]
         expected_scope = "core" if source_name.startswith("10-core-") else "stack"
@@ -261,6 +262,12 @@ def validate_shared_projections(
             declarations[rule_id] = (level, name, statement)
         if set(declarations) != expected_ids:
             raise CheckError(f"shared projection rule mismatch: {relative}")
+        if expected_scope == "stack":
+            membership = frozenset(declarations)
+            previous_membership = stack_memberships.get(source_name)
+            if previous_membership is not None and previous_membership != membership:
+                raise CheckError(f"shared stack projection mismatch: {relative}")
+            stack_memberships[source_name] = membership
         for rule_id, (level, name, statement) in declarations.items():
             rule = registered.get(rule_id)
             if (
