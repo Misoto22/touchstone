@@ -14,6 +14,8 @@ from io import BytesIO
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import tomli_w
+
 from touchstone.config import Config, ConfigError
 from touchstone.execution.local import LocalExecutor
 
@@ -68,6 +70,47 @@ def load_registry(path: Path | None = None) -> dict[str, Path]:
             raise ConfigError(f"harnesses.{source}.path must be an absolute local path")
         result[source] = Path(local).expanduser().resolve()
     return result
+
+
+def write_registry(entries: dict[str, Path], path: Path | None = None) -> Path:
+    """Atomically replace only the machine-local Harness registry."""
+
+    chosen = (path or registry_path()).expanduser()
+    chosen.parent.mkdir(parents=True, exist_ok=True)
+    data = {
+        "harnesses": {
+            source: {"path": str(local.expanduser().resolve())}
+            for source, local in sorted(entries.items())
+        }
+    }
+    descriptor, temporary_name = tempfile.mkstemp(prefix=".harnesses-", dir=chosen.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(tomli_w.dumps(data))
+        temporary.chmod(0o600)
+        temporary.replace(chosen)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+    return chosen
+
+
+def register_harness(source: str, checkout: Path) -> Path:
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", source):
+        raise ConfigError("Harness source must use a canonical owner/repository identity")
+    local = checkout.expanduser().resolve()
+    if not local.is_dir():
+        raise ConfigError(f"Harness checkout is not a directory: {checkout}")
+    entries = load_registry()
+    entries[source] = local
+    return write_registry(entries)
+
+
+def unregister_harness(source: str) -> Path:
+    entries = load_registry()
+    entries.pop(source, None)
+    return write_registry(entries)
 
 
 def resolve_harness(
@@ -266,6 +309,9 @@ __all__ = [
     "HarnessContext",
     "HarnessResolutionError",
     "load_registry",
+    "register_harness",
     "registry_path",
     "resolve_harness",
+    "unregister_harness",
+    "write_registry",
 ]

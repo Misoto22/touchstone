@@ -27,8 +27,21 @@ def test_documented_first_run_commands_exist() -> None:
         "run-due",
         "status",
         "install-scheduler",
+        "config",
+        "harness",
     ):
         assert command in result.stdout
+
+
+def test_installed_cli_reports_its_version() -> None:
+    result = subprocess.run(
+        [str(Path(sys.executable).parent / "touchstone"), "--version"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert re.fullmatch(r"touchstone \d+\.\d+\.\d+\n", result.stdout)
 
 
 def test_readme_starts_with_the_installable_first_run() -> None:
