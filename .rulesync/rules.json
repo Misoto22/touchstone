@@ -1,7 +1,129 @@
-{"rules":[
-  {"id":"TOUCH-ARCH-001","level":"MUST","scope":"project","owner":"Misoto22/touchstone","sources":["README.md"],"enforcement":"test"},
-  {"id":"TOUCH-SEC-001","level":"MUST","scope":"project","owner":"Misoto22/touchstone","sources":["README.md"],"enforcement":"test"},
-  {"id":"TOUCH-CONF-001","level":"MUST","scope":"project","owner":"Misoto22/touchstone","sources":["README.md"],"enforcement":"test"},
-  {"id":"TOUCH-GATE-001","level":"MUST","scope":"project","owner":"Misoto22/touchstone","sources":["README.md"],"enforcement":"test"},
-  {"id":"TOUCH-TEST-001","level":"MUST","scope":"project","owner":"Misoto22/touchstone","sources":["pyproject.toml","README.md"],"enforcement":"test"}
-]}
+{
+  "schemaVersion": 2,
+  "rules": [
+    {
+      "id": "TOUCH-ARCH-001",
+      "name": "Keep unattended work fail-closed",
+      "level": "MUST",
+      "scope": "project",
+      "owner": "Misoto22/touchstone",
+      "status": "active",
+      "since": "0.1.0",
+      "statement": "Durable schedules, candidate lineage, verification attestations, publishing authority, and recovery state remain separated across the documented stages.",
+      "rationale": "This repository-owned constraint preserves its established architecture and delivery contract.",
+      "sources": [
+        {
+          "type": "policy",
+          "ref": "README.md"
+        }
+      ],
+      "enforcement": [
+        {
+          "kind": "test",
+          "check": "Repository-owned TOUCH-ARCH-001 test gate",
+          "blocking": true
+        }
+      ]
+    },
+    {
+      "id": "TOUCH-SEC-001",
+      "name": "Preserve credential isolation",
+      "level": "MUST",
+      "scope": "project",
+      "owner": "Misoto22/touchstone",
+      "status": "active",
+      "since": "0.1.0",
+      "statement": "Project code and preparation gates do not receive model, state, or publishing credentials; each stage receives only its documented credential and sanitized environment.",
+      "rationale": "This repository-owned constraint preserves its established architecture and delivery contract.",
+      "sources": [
+        {
+          "type": "policy",
+          "ref": "README.md"
+        }
+      ],
+      "enforcement": [
+        {
+          "kind": "test",
+          "check": "Repository-owned TOUCH-SEC-001 test gate",
+          "blocking": true
+        }
+      ]
+    },
+    {
+      "id": "TOUCH-CONF-001",
+      "name": "Respect configuration ownership",
+      "level": "MUST",
+      "scope": "project",
+      "owner": "Misoto22/touchstone",
+      "status": "active",
+      "since": "0.1.0",
+      "statement": "`touchstone.toml` is project-owned, `.touchstone/generated.toml` is machine-owned, unknown keys fail closed, and generated configuration changes use the supported migration or profile commands.",
+      "rationale": "This repository-owned constraint preserves its established architecture and delivery contract.",
+      "sources": [
+        {
+          "type": "policy",
+          "ref": "README.md"
+        }
+      ],
+      "enforcement": [
+        {
+          "kind": "test",
+          "check": "Repository-owned TOUCH-CONF-001 test gate",
+          "blocking": true
+        }
+      ]
+    },
+    {
+      "id": "TOUCH-GATE-001",
+      "name": "Keep executable validation explicit",
+      "level": "MUST",
+      "scope": "project",
+      "owner": "Misoto22/touchstone",
+      "status": "active",
+      "since": "0.1.0",
+      "statement": "New validation commands start disabled, require reviewed capabilities and preparation, and never become passing evidence when unsupported or inconclusive.",
+      "rationale": "This repository-owned constraint preserves its established architecture and delivery contract.",
+      "sources": [
+        {
+          "type": "policy",
+          "ref": "README.md"
+        }
+      ],
+      "enforcement": [
+        {
+          "kind": "test",
+          "check": "Repository-owned TOUCH-GATE-001 test gate",
+          "blocking": true
+        }
+      ]
+    },
+    {
+      "id": "TOUCH-TEST-001",
+      "name": "Run package quality gates",
+      "level": "MUST",
+      "scope": "project",
+      "owner": "Misoto22/touchstone",
+      "status": "active",
+      "since": "0.1.0",
+      "statement": "Use the uv-managed development environment and run pytest, Ruff, packaging, and repository-specific integration checks applicable to the change.",
+      "rationale": "This repository-owned constraint preserves its established architecture and delivery contract.",
+      "sources": [
+        {
+          "type": "policy",
+          "ref": "pyproject.toml"
+        },
+        {
+          "type": "policy",
+          "ref": "README.md"
+        }
+      ],
+      "enforcement": [
+        {
+          "kind": "test",
+          "check": "Repository-owned TOUCH-TEST-001 test gate",
+          "blocking": true
+        }
+      ]
+    }
+  ]
+}
