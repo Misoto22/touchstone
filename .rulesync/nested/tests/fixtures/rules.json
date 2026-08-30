@@ -1,4 +1,57 @@
-{"rules":[
-  {"id":"TOUCH-FIX-001","level":"MUST","scope":"nested","owner":"Misoto22/touchstone","sources":["tests/fixtures","README.md"],"enforcement":"lint"},
-  {"id":"TOUCH-FIX-002","level":"MUST","scope":"nested","owner":"Misoto22/touchstone","sources":["tests"],"enforcement":"test"}
-]}
+{
+  "schemaVersion": 2,
+  "rules": [
+    {
+      "id": "TOUCH-FIX-001",
+      "name": "Keep fixtures inert and synthetic",
+      "level": "MUST",
+      "scope": "nested",
+      "owner": "Misoto22/touchstone",
+      "status": "active",
+      "since": "0.1.0",
+      "statement": "Fixture tokens, repository states, configuration, and outputs are test data only; never copy live credentials, personal data, or private infrastructure values here.",
+      "rationale": "This repository-owned constraint preserves its established architecture and delivery contract.",
+      "sources": [
+        {
+          "type": "policy",
+          "ref": "tests/fixtures"
+        },
+        {
+          "type": "policy",
+          "ref": "README.md"
+        }
+      ],
+      "enforcement": [
+        {
+          "kind": "lint",
+          "check": "Repository-owned TOUCH-FIX-001 lint gate",
+          "blocking": true
+        }
+      ]
+    },
+    {
+      "id": "TOUCH-FIX-002",
+      "name": "Update the consuming test",
+      "level": "MUST",
+      "scope": "nested",
+      "owner": "Misoto22/touchstone",
+      "status": "active",
+      "since": "0.1.0",
+      "statement": "A fixture change must name and pass the test that exercises its intended failure or success path.",
+      "rationale": "This repository-owned constraint preserves its established architecture and delivery contract.",
+      "sources": [
+        {
+          "type": "policy",
+          "ref": "tests"
+        }
+      ],
+      "enforcement": [
+        {
+          "kind": "test",
+          "check": "Repository-owned TOUCH-FIX-002 test gate",
+          "blocking": true
+        }
+      ]
+    }
+  ]
+}

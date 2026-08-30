@@ -1,4 +1,65 @@
-{"rules":[
-  {"id":"TOUCH-AGENT-001","level":"MUST","scope":"nested","owner":"Misoto22/touchstone","sources":["agent-runtime/claude/package-lock.json","agent-runtime/codex/package-lock.json","README.md"],"enforcement":"test"},
-  {"id":"TOUCH-AGENT-002","level":"MUST","scope":"nested","owner":"Misoto22/touchstone","sources":["README.md","agent-runtime source"],"enforcement":"test"}
-]}
+{
+  "schemaVersion": 2,
+  "rules": [
+    {
+      "id": "TOUCH-AGENT-001",
+      "name": "Keep each runtime independently locked",
+      "level": "MUST",
+      "scope": "nested",
+      "owner": "Misoto22/touchstone",
+      "status": "active",
+      "since": "0.1.0",
+      "statement": "Claude and Codex runtime packages retain their own committed lockfiles and must not float dependencies during an unattended run.",
+      "rationale": "This repository-owned constraint preserves its established architecture and delivery contract.",
+      "sources": [
+        {
+          "type": "policy",
+          "ref": "agent-runtime/claude/package-lock.json"
+        },
+        {
+          "type": "policy",
+          "ref": "agent-runtime/codex/package-lock.json"
+        },
+        {
+          "type": "policy",
+          "ref": "README.md"
+        }
+      ],
+      "enforcement": [
+        {
+          "kind": "test",
+          "check": "Repository-owned TOUCH-AGENT-001 test gate",
+          "blocking": true
+        }
+      ]
+    },
+    {
+      "id": "TOUCH-AGENT-002",
+      "name": "Preserve the engine boundary",
+      "level": "MUST",
+      "scope": "nested",
+      "owner": "Misoto22/touchstone",
+      "status": "active",
+      "since": "0.1.0",
+      "statement": "Runtime adapters translate the shared Touchstone candidate contract without moving verification, publishing authority, or another engine's credential into the model process.",
+      "rationale": "This repository-owned constraint preserves its established architecture and delivery contract.",
+      "sources": [
+        {
+          "type": "policy",
+          "ref": "README.md"
+        },
+        {
+          "type": "policy",
+          "ref": "agent-runtime source"
+        }
+      ],
+      "enforcement": [
+        {
+          "kind": "test",
+          "check": "Repository-owned TOUCH-AGENT-002 test gate",
+          "blocking": true
+        }
+      ]
+    }
+  ]
+}
