@@ -20,6 +20,7 @@ def _config(tmp_path: Path):  # type: ignore[no-untyped-def]
         # The wake unit's start timeout is derived from this: systemd must not
         # win a race against the timeout that produces a diagnosis.
         engine=SimpleNamespace(timeout_seconds=2700),
+        forge=SimpleNamespace(slug="acme/widgets"),
         loops={
             "code": SimpleNamespace(name="code", schedule="hourly"),
             "weekly": SimpleNamespace(name="weekly", schedule="weekly@MON,09:30"),
@@ -44,6 +45,19 @@ def test_launchd_file_has_absolute_paths_and_no_environment_secrets(tmp_path: Pa
     text = report.files[0].read_text(encoding="utf-8")
     assert "GH_TOKEN" not in text
     assert "SECRET" not in text
+
+
+def test_two_repositories_render_distinct_launchd_labels(tmp_path: Path) -> None:
+    scheduler = LaunchdScheduler(LocalExecutor(), executable=Path("/absolute/bin/touchstone"))
+    first = _config(tmp_path / "first")
+    second = _config(tmp_path / "second")
+    second.forge.slug = "acme/gadgets"
+
+    first_files = scheduler._render(first, tmp_path / "rendered")
+    second_files = scheduler._render(second, tmp_path / "rendered")
+
+    assert set(first_files).isdisjoint(second_files)
+    assert next(iter(first_files)).name.startswith("io.touchstone.agent.acme-widgets-")
 
 
 def test_systemd_install_is_idempotent_and_skips_unscheduled_loops(tmp_path: Path) -> None:

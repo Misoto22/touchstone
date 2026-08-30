@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from touchstone.fleet import FleetError, load_project, render, sync_check
+from touchstone.fleet import FleetError, load_checkout_map, load_project, render, sync_check
 
 PROJECT = """
 version = 1
@@ -63,6 +63,37 @@ def test_a_member_receives_only_the_loops_it_takes(tmp_path: Path) -> None:
 
     assert set(widgets["loop"]) == {"hardcode", "naming"}
     assert set(gadgets["loop"]) == {"hardcode"}
+
+
+def test_a_member_can_resolve_a_portable_logical_checkout(tmp_path: Path) -> None:
+    body = PROJECT.replace('path = "../widgets"', 'checkout = "widgets"')
+    checkout = tmp_path / "local/widgets"
+    checkout.mkdir(parents=True)
+    checkout_map = tmp_path / "harness.local.toml"
+    checkout_map.write_text(f'[checkouts]\nwidgets = "{checkout}"\n', encoding="utf-8")
+
+    project = load_project(_project(tmp_path, body), checkout_map=checkout_map)
+
+    assert project.members["acme/widgets"].path == checkout.resolve()
+
+
+def test_an_unresolved_logical_checkout_is_not_installed(tmp_path: Path) -> None:
+    body = PROJECT.replace('path = "../widgets"', 'checkout = "widgets"')
+    checkout_map = tmp_path / "harness.local.toml"
+    checkout_map.write_text("[checkouts]\n", encoding="utf-8")
+
+    with pytest.raises(FleetError) as error:
+        load_project(_project(tmp_path, body), checkout_map=checkout_map)
+
+    assert error.value.reason_code == "checkout-not-installed"
+
+
+def test_checkout_map_accepts_only_absolute_paths(tmp_path: Path) -> None:
+    checkout_map = tmp_path / "harness.local.toml"
+    checkout_map.write_text('[checkouts]\nwidgets = "../widgets"\n', encoding="utf-8")
+
+    with pytest.raises(FleetError, match="absolute"):
+        load_checkout_map(checkout_map)
 
 
 def test_a_member_override_wins_over_the_shared_default(tmp_path: Path) -> None:

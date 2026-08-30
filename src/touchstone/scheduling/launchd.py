@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import plistlib
+import re
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -82,7 +84,7 @@ class LaunchdScheduler:
         self, config: Any, *, target: Path | None = None, dry_run: bool = False
     ) -> InstallReport:
         destination = (target or self._home / "Library" / "LaunchAgents").resolve()
-        files = self._wake_files(destination)
+        files = self._wake_files(config, destination)
         if target is None and not dry_run:
             domain = f"gui/{os.getuid()}"
             for path in files:
@@ -105,7 +107,7 @@ class LaunchdScheduler:
 
     def status(self, config: Any) -> SchedulerStatus:
         destination = self._home / "Library" / "LaunchAgents"
-        owned = self._wake_files(destination)
+        owned = self._wake_files(config, destination)
         expected = tuple(self._render(config, destination))
         return SchedulerStatus(
             adapter=self.name,
@@ -117,7 +119,7 @@ class LaunchdScheduler:
     def _render(self, config: Any, destination: Path) -> dict[Path, str]:
         if not any(loop.schedule for loop in config.loops.values()):
             return {}
-        label = "io.touchstone.agent.wake"
+        label = self._label(config)
         payload: dict[str, Any] = {
             "Label": label,
             "ProgramArguments": [
@@ -136,16 +138,40 @@ class LaunchdScheduler:
         content = plistlib.dumps(payload, fmt=plistlib.FMT_XML, sort_keys=True).decode()
         return {destination / f"{label}.plist": content}
 
-    def _wake_files(self, destination: Path) -> tuple[Path, ...]:
+    def _label(self, config: Any) -> str:
+        slug = str(getattr(getattr(config, "forge", None), "slug", "repository"))
+        normalized = re.sub(r"[^a-z0-9]+", "-", slug.casefold()).strip("-") or "repository"
+        identity = str(Path(config.source.path).resolve())
+        digest = hashlib.sha256(identity.encode()).hexdigest()[:10]
+        return f"io.touchstone.agent.{normalized}-{digest}.wake"
+
+    def _wake_files(self, config: Any, destination: Path) -> tuple[Path, ...]:
         """The agent path this adapter owns, whether or not a schedule exists."""
-        return (destination / "io.touchstone.agent.wake.plist",)
+        return (destination / f"{self._label(config)}.plist",)
 
     def _legacy_files(self, config: Any, destination: Path) -> tuple[Path, ...]:
-        return tuple(
+        candidates = [destination / "io.touchstone.agent.wake.plist"]
+        candidates.extend(
             destination / f"io.touchstone.agent.{name}.plist"
             for name, loop in sorted(config.loops.items())
             if loop.schedule
         )
+        expected_config = str(Path(config.source.path).resolve())
+        return tuple(
+            path
+            for path in candidates
+            if not path.exists() or self._legacy_selects(path, expected_config)
+        )
+
+    @staticmethod
+    def _legacy_selects(path: Path, expected_config: str) -> bool:
+        try:
+            with path.open("rb") as handle:
+                payload = plistlib.load(handle)
+        except (OSError, plistlib.InvalidFileException):
+            return False
+        arguments = payload.get("ProgramArguments", [])
+        return isinstance(arguments, list) and expected_config in arguments
 
 
 __all__ = ["LaunchdScheduler"]

@@ -353,7 +353,9 @@ def _sync(args: argparse.Namespace) -> int:
     )
 
     try:
-        project = load_project(Path(args.project))
+        project = load_project(
+            Path(args.project), checkout_map=Path(args.checkouts) if args.checkouts else None
+        )
     except FleetError as exc:
         print(f"touchstone: {exc}", file=sys.stderr)
         return 78
@@ -929,6 +931,10 @@ def main(argv: list[str] | None = None) -> int:
         "sync", help="render a project's shared configuration for its member repositories"
     )
     sync.add_argument("--project", required=True, help="path to the project configuration")
+    sync.add_argument(
+        "--checkouts",
+        help="machine-local [checkouts] map for members using logical checkout names",
+    )
     sync.add_argument(
         "--check",
         action="store_true",
