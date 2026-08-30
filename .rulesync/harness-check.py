@@ -190,19 +190,78 @@ def validate_shared_contract() -> None:
         ):
             raise CheckError(f"incomplete shared registry entry: {rule_id}")
         registered[rule_id] = rule
-    occurrences: dict[str, str] = {}
-    stack_projections: dict[str, frozenset[str]] = {}
     sources = sorted((ROOT / ".rulesync" / "rules").glob("[12]0-*.md"))
     sources += sorted((ROOT / ".rulesync" / "nested").glob("**/20-stack-*.md"))
-    for path in sources:
-        expected_scope = "core" if path.name.startswith("10-core-") else "stack"
-        text = path.read_text(encoding="utf-8")
-        if source_scope(text, path) != expected_scope:
-            raise CheckError(f"shared source scope mismatch: {path}")
-        local_seen: set[str] = set()
+    source_texts = {
+        path.relative_to(ROOT).as_posix(): path.read_text(encoding="utf-8") for path in sources
+    }
+    validate_shared_projections(payload, registered, source_texts, str(registry_path))
+
+
+def is_shared_source_path(relative: str) -> bool:
+    name = relative.rsplit("/", 1)[-1]
+    return (
+        relative.startswith(".rulesync/rules/")
+        and name.startswith(("10-core-", "20-stack-"))
+        and re.fullmatch(r"[12]0-[a-z0-9][a-z0-9.-]*\.md", name) is not None
+    ) or (
+        relative.startswith(".rulesync/nested/")
+        and name.startswith("20-stack-")
+        and re.fullmatch(r"20-stack-[a-z0-9][a-z0-9.-]*\.md", name) is not None
+        and re.fullmatch(
+            r"(?:[a-z0-9][a-z0-9._-]*/)+20-stack-[a-z0-9][a-z0-9.-]*\.md",
+            relative.removeprefix(".rulesync/nested/"),
+        )
+        is not None
+    )
+
+
+def projection_records(payload: dict[str, object], label: str) -> dict[str, frozenset[str]]:
+    projections = payload.get("projections")
+    if not isinstance(projections, dict) or not projections:
+        raise CheckError(f"shared projections must be a non-empty object: {label}")
+    records: dict[str, frozenset[str]] = {}
+    for relative, rule_ids in projections.items():
+        if (
+            not isinstance(relative, str)
+            or not is_shared_source_path(relative)
+            or not isinstance(rule_ids, list)
+            or not rule_ids
+            or not all(
+                isinstance(rule_id, str) and RULE_ID.fullmatch(rule_id) for rule_id in rule_ids
+            )
+            or len(set(rule_ids)) != len(rule_ids)
+        ):
+            raise CheckError(f"invalid shared projection: {relative}")
+        records[relative] = frozenset(rule_ids)
+    return records
+
+
+def validate_shared_projections(
+    payload: dict[str, object],
+    registered: dict[str, dict[str, object]],
+    source_texts: dict[str, str],
+    label: str,
+) -> None:
+    projections = projection_records(payload, label)
+    actual_sources = {relative for relative in source_texts if is_shared_source_path(relative)}
+    if set(projections) != actual_sources:
+        raise CheckError(f"shared projection path mismatch: {label}")
+    occurrences: dict[str, str] = {}
+    for relative, expected_ids in projections.items():
+        source_name = relative.rsplit("/", 1)[-1]
+        expected_scope = "core" if source_name.startswith("10-core-") else "stack"
+        text = source_texts[relative]
+        if source_scope(text, Path(relative)) != expected_scope:
+            raise CheckError(f"shared source scope mismatch: {relative}")
+        declarations: dict[str, tuple[str, str, str]] = {}
         for rule_id, level, name, statement in DECLARATION.findall(text):
-            if not RULE_ID.fullmatch(rule_id) or rule_id in local_seen:
+            if not RULE_ID.fullmatch(rule_id) or rule_id in declarations:
                 raise CheckError(f"invalid or duplicate shared source rule id: {rule_id}")
+            declarations[rule_id] = (level, name, statement)
+        if set(declarations) != expected_ids:
+            raise CheckError(f"shared projection rule mismatch: {relative}")
+        for rule_id, (level, name, statement) in declarations.items():
             rule = registered.get(rule_id)
             if (
                 rule is None
@@ -213,24 +272,15 @@ def validate_shared_contract() -> None:
                 or rule.get("statement") != statement
             ):
                 raise CheckError(f"shared registry mismatch: {rule_id}")
-            local_seen.add(rule_id)
-            if rule["status"] == "active":
-                source_name = path.name
-                previous_source = occurrences.get(rule_id)
-                if previous_source is not None and not (
-                    expected_scope == "stack" and previous_source == source_name
-                ):
-                    raise CheckError(f"duplicate shared source rule id: {rule_id}")
-                occurrences[rule_id] = source_name
-        if expected_scope == "stack":
-            projection = frozenset(local_seen)
-            previous_projection = stack_projections.get(path.name)
-            if previous_projection is not None and previous_projection != projection:
-                raise CheckError(f"shared stack projection mismatch: {path}")
-            stack_projections[path.name] = projection
-    active = {rule_id for rule_id, rule in registered.items() if rule["status"] == "active"}
+            previous_source = occurrences.get(rule_id)
+            if previous_source is not None and not (
+                expected_scope == "stack" and previous_source == source_name
+            ):
+                raise CheckError(f"duplicate shared source rule id: {rule_id}")
+            occurrences[rule_id] = source_name
+    active = {rule_id for rule_id, rule in registered.items() if rule.get("status") == "active"}
     if set(occurrences) != active:
-        raise CheckError("shared registry/source rule mismatch")
+        raise CheckError(f"shared registry/source rule mismatch: {label}")
 
 
 def rule_records(
@@ -441,6 +491,7 @@ def validate_historical_identities() -> None:
     historical_identities: dict[str, tuple[object, ...]] = {}
     lifecycle_states: dict[str, dict[str, str]] = {}
     schema_states: dict[str, set[str]] = {}
+    projection_states: dict[str, bool] = {}
     cat_file = subprocess.Popen(
         ["git", "cat-file", "--batch"],
         cwd=ROOT,
@@ -455,12 +506,14 @@ def validate_historical_identities() -> None:
             commit, *parents = row
             inherited_statuses: dict[str, set[str]] = {}
             inherited_v2: set[str] = set()
+            inherited_projections = False
             for parent in parents:
                 if parent not in lifecycle_states:
                     raise CheckError("invalid registry history graph")
                 for rule_id, status in lifecycle_states[parent].items():
                     inherited_statuses.setdefault(rule_id, set()).add(status)
                 inherited_v2.update(schema_states[parent])
+                inherited_projections = inherited_projections or projection_states[parent]
 
             snapshot_records: dict[str, tuple[tuple[object, ...], str]] = {}
             snapshot_locations: dict[str, str] = {}
@@ -521,6 +574,24 @@ def validate_historical_identities() -> None:
                     historical = legacy_rule_records(payload, relative, legacy_sources)
                 else:
                     inherited_v2.add(relative)
+                    if relative == ".rulesync/shared-rules.json":
+                        rules = payload.get("rules")
+                        registered = (
+                            {
+                                rule["id"]: rule
+                                for rule in rules
+                                if isinstance(rule, dict) and isinstance(rule.get("id"), str)
+                            }
+                            if isinstance(rules, list)
+                            else {}
+                        )
+                        if "projections" in payload:
+                            validate_shared_projections(
+                                payload, registered, source_texts, f"{commit}:{relative}"
+                            )
+                            inherited_projections = True
+                        elif inherited_projections:
+                            raise CheckError("historical shared projection contract regressed")
                     historical = rule_records(payload, relative)
                 for rule_id, record in historical.items():
                     previous_location = snapshot_locations.get(rule_id)
@@ -549,6 +620,7 @@ def validate_historical_identities() -> None:
 
             lifecycle_states[commit] = commit_statuses
             schema_states[commit] = inherited_v2
+            projection_states[commit] = inherited_projections
         stream_complete = True
     finally:
         if cat_file.stdin is not None and not cat_file.stdin.closed:
