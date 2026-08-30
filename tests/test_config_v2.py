@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 import tomli_w
 
-from touchstone.config import ConfigError, load
+from touchstone.config import ConfigError, HarnessConfig, load
 
 
 def _write(path: Path, data: dict[str, object]) -> Path:
@@ -116,6 +116,52 @@ def test_v2_loads_generated_then_project_override(tmp_path: Path) -> None:
     assert config.actions.node_version == "24"
     assert config.actions.auto_merge is False
     assert config.generated_metadata.source_digest == "sha256:test"
+
+
+def test_v2_loads_explicit_embedded_harness(tmp_path: Path) -> None:
+    _write(tmp_path / ".touchstone/generated.toml", _generated_config())
+    root_data = _root_config()
+    root_data["harness"] = {"mode": "embedded", "entrypoint": "AGENTS.md"}
+    root = _write(tmp_path / "touchstone.toml", root_data)
+
+    config = load(root)
+
+    assert config.harness == HarnessConfig(mode="embedded", entrypoint="AGENTS.md")
+
+
+def test_v2_without_harness_preserves_legacy_instruction_discovery(tmp_path: Path) -> None:
+    _write(tmp_path / ".touchstone/generated.toml", _generated_config())
+    root = _write(tmp_path / "touchstone.toml", _root_config())
+
+    assert load(root).harness is None
+
+
+@pytest.mark.parametrize(
+    ("harness", "message"),
+    [
+        ({"mode": "embedded", "entrypoint": "../AGENTS.md"}, "stay inside"),
+        (
+            {"mode": "embedded", "entrypoint": "AGENTS.md", "source": "acme/harness"},
+            "must not set source",
+        ),
+        (
+            {"mode": "external", "entrypoint": "rules.md", "source": "acme/harness"},
+            "requires ref",
+        ),
+        ({"mode": "external", "entrypoint": "rules.md", "ref": "origin/main"}, "source"),
+        ({"mode": "embedded", "entrypoint": "AGENTS.md", "typo": True}, "harness.typo"),
+    ],
+)
+def test_v2_rejects_invalid_harness_declarations(
+    tmp_path: Path, harness: dict[str, object], message: str
+) -> None:
+    _write(tmp_path / ".touchstone/generated.toml", _generated_config())
+    root_data = _root_config()
+    root_data["harness"] = harness
+    root = _write(tmp_path / "touchstone.toml", root_data)
+
+    with pytest.raises(ConfigError, match=message):
+        load(root)
 
 
 def test_generated_path_cannot_escape_repository(tmp_path: Path) -> None:
