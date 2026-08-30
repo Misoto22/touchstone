@@ -90,7 +90,8 @@ def validate_contract(registry_path: Path, source_path: Path, expected_scope: st
                 and entry.get("kind") in ENFORCEMENTS
                 and isinstance(entry.get("blocking"), bool)
                 and (
-                    not entry["blocking"] or isinstance(entry.get("check"), str) and entry["check"]
+                    not entry["blocking"]
+                    or (isinstance(entry.get("check"), str) and entry["check"])
                 )
                 for entry in enforcement
             )
@@ -161,7 +162,8 @@ def validate_shared_contract() -> None:
                 and entry.get("kind") in ENFORCEMENTS
                 and isinstance(entry.get("blocking"), bool)
                 and (
-                    not entry["blocking"] or isinstance(entry.get("check"), str) and entry["check"]
+                    not entry["blocking"]
+                    or (isinstance(entry.get("check"), str) and entry["check"])
                 )
                 for entry in enforcement
             )
