@@ -31,6 +31,7 @@ MAX_HISTORY_COMMITS = 2048
 MAX_HISTORY_PATHS = 128
 MAX_HISTORY_OBJECTS = 32768
 MAX_REGISTRY_BYTES = 2 * 1024 * 1024
+MAX_HISTORY_BYTES = 64 * 1024 * 1024
 
 
 class CheckError(ValueError):
@@ -189,7 +190,7 @@ def validate_shared_contract() -> None:
         ):
             raise CheckError(f"incomplete shared registry entry: {rule_id}")
         registered[rule_id] = rule
-    occurrences: dict[str, int] = {}
+    occurrences: dict[str, str] = {}
     sources = sorted((ROOT / ".rulesync" / "rules").glob("[12]0-*.md"))
     sources += sorted((ROOT / ".rulesync" / "nested").glob("**/20-stack-*.md"))
     for path in sources:
@@ -213,10 +214,15 @@ def validate_shared_contract() -> None:
                 raise CheckError(f"shared registry mismatch: {rule_id}")
             local_seen.add(rule_id)
             if rule["status"] == "active":
-                occurrences[rule_id] = occurrences.get(rule_id, 0) + 1
+                source_name = path.name
+                previous_source = occurrences.get(rule_id)
+                if previous_source is not None and not (
+                    expected_scope == "stack" and previous_source == source_name
+                ):
+                    raise CheckError(f"duplicate shared source rule id: {rule_id}")
+                occurrences[rule_id] = source_name
     active = {rule_id for rule_id, rule in registered.items() if rule["status"] == "active"}
-    duplicates = sorted(rule_id for rule_id, count in occurrences.items() if count != 1)
-    if set(occurrences) != active or duplicates:
+    if set(occurrences) != active:
         raise CheckError("shared registry/source rule mismatch")
 
 
@@ -241,6 +247,51 @@ def rule_records(
         ):
             raise CheckError(f"invalid historical rule identity: {rule_id}")
         records[rule_id] = (identity, status)
+    return records
+
+
+def legacy_rule_records(
+    payload: dict[str, object], label: str, sources: dict[str, str]
+) -> dict[str, tuple[tuple[object, ...], str]]:
+    rules = payload.get("rules")
+    if not isinstance(rules, list):
+        raise CheckError(f"legacy registry rules must be a list: {label}")
+    declarations: dict[str, tuple[tuple[str, str, str], str]] = {}
+    for source_path, text in sources.items():
+        for rule_id, level, name, statement in DECLARATION.findall(text):
+            declaration = (level, name, statement)
+            previous = declarations.get(rule_id)
+            source_name = source_path.rsplit("/", 1)[-1]
+            if previous is not None:
+                previous_declaration, previous_source = previous
+                if previous_declaration != declaration:
+                    raise CheckError(f"conflicting legacy rule declaration: {rule_id}")
+                if not (source_name.startswith("20-stack-") and previous_source == source_name):
+                    raise CheckError(f"duplicate legacy rule declaration: {rule_id}")
+            declarations[rule_id] = (declaration, source_name)
+    records: dict[str, tuple[tuple[object, ...], str]] = {}
+    for rule in rules:
+        if not isinstance(rule, dict) or not isinstance(rule.get("id"), str):
+            raise CheckError(f"invalid legacy registry entry: {label}")
+        rule_id = rule["id"]
+        level = rule.get("level")
+        scope = rule.get("scope")
+        declaration_record = declarations.get(rule_id)
+        if (
+            rule_id in records
+            or not RULE_ID.fullmatch(rule_id)
+            or level not in LEVELS
+            or not isinstance(scope, str)
+            or not scope
+            or declaration_record is None
+            or declaration_record[0][0] != level
+        ):
+            raise CheckError(f"invalid legacy rule identity: {rule_id}")
+        declaration, _source_name = declaration_record
+        _, name, statement = declaration
+        records[rule_id] = ((name, level, scope, statement), "active")
+    if set(declarations) != set(records):
+        raise CheckError(f"legacy registry/source rule mismatch: {label}")
     return records
 
 
@@ -343,9 +394,30 @@ def validate_historical_identities() -> None:
             or (path.startswith(".rulesync/nested/") and path.endswith("/rules.json"))
         }
     )
-    if len(historical_paths) > MAX_HISTORY_PATHS:
+    historical_source_paths = sorted(
+        {
+            path
+            for path in changed_paths.stdout.splitlines()
+            if (
+                path.startswith(".rulesync/rules/")
+                and (
+                    path.rsplit("/", 1)[-1] == "50-project.md"
+                    or re.fullmatch(r"[12]0-[^/]+\.md", path.rsplit("/", 1)[-1]) is not None
+                )
+            )
+            or (
+                path.startswith(".rulesync/nested/")
+                and (
+                    path.rsplit("/", 1)[-1] == "50-project.md"
+                    or path.rsplit("/", 1)[-1].startswith("20-stack-")
+                )
+            )
+        }
+    )
+    all_history_paths = historical_paths + historical_source_paths
+    if len(all_history_paths) > MAX_HISTORY_PATHS:
         raise CheckError("registry history exceeds path limit")
-    if len(graph_rows) * len(historical_paths) > MAX_HISTORY_OBJECTS:
+    if len(graph_rows) * len(all_history_paths) > MAX_HISTORY_OBJECTS:
         raise CheckError("registry history exceeds object limit")
 
     historical_identities: dict[str, tuple[object, ...]] = {}
@@ -359,6 +431,7 @@ def validate_historical_identities() -> None:
         stderr=subprocess.DEVNULL,
     )
     stream_complete = False
+    history_bytes = 0
     try:
         for row in graph_rows:
             commit, *parents = row
@@ -373,10 +446,25 @@ def validate_historical_identities() -> None:
 
             snapshot_records: dict[str, tuple[tuple[object, ...], str]] = {}
             snapshot_locations: dict[str, str] = {}
+            source_texts: dict[str, str] = {}
+            for relative in historical_source_paths:
+                body = read_git_blob(cat_file, f"{commit}:{relative}")
+                if body is None:
+                    continue
+                history_bytes += len(body)
+                if history_bytes > MAX_HISTORY_BYTES:
+                    raise CheckError("registry history exceeds byte limit")
+                try:
+                    source_texts[relative] = body.decode("utf-8")
+                except UnicodeDecodeError as error:
+                    raise CheckError(f"historical rule source is not UTF-8: {relative}") from error
             for relative in historical_paths:
                 body = read_git_blob(cat_file, f"{commit}:{relative}")
                 if body is None:
                     continue
+                history_bytes += len(body)
+                if history_bytes > MAX_HISTORY_BYTES:
+                    raise CheckError("registry history exceeds byte limit")
                 try:
                     text = body.decode("utf-8")
                 except UnicodeDecodeError as error:
@@ -390,9 +478,33 @@ def validate_historical_identities() -> None:
                         raise CheckError(f"unsupported historical registry schema: {relative}")
                     if relative in inherited_v2:
                         raise CheckError(f"historical registry schema regressed: {relative}")
-                    continue
-                inherited_v2.add(relative)
-                for rule_id, record in rule_records(payload, relative).items():
+                    if relative == ".rulesync/shared-rules.json":
+                        legacy_sources = {
+                            path: text
+                            for path, text in source_texts.items()
+                            if (
+                                path.startswith(".rulesync/rules/")
+                                and path.rsplit("/", 1)[-1].startswith(("10-core-", "20-stack-"))
+                            )
+                            or (
+                                path.startswith(".rulesync/nested/")
+                                and path.rsplit("/", 1)[-1].startswith("20-stack-")
+                            )
+                        }
+                    elif relative == ".rulesync/rules.json":
+                        legacy_sources = {
+                            ".rulesync/rules/50-project.md": source_texts.get(
+                                ".rulesync/rules/50-project.md", ""
+                            )
+                        }
+                    else:
+                        source_path = f"{relative.rsplit('/', 1)[0]}/50-project.md"
+                        legacy_sources = {source_path: source_texts.get(source_path, "")}
+                    historical = legacy_rule_records(payload, relative, legacy_sources)
+                else:
+                    inherited_v2.add(relative)
+                    historical = rule_records(payload, relative)
+                for rule_id, record in historical.items():
                     previous_location = snapshot_locations.get(rule_id)
                     if previous_location is not None and previous_location != relative:
                         raise CheckError(
