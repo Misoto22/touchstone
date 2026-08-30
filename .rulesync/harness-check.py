@@ -10,14 +10,68 @@ import os
 import re
 import subprocess
 import sys
+from html import unescape
 from pathlib import Path
 
 ROOT = Path.cwd().resolve()
 RULE_ID = re.compile(r"^(?:HAR|[A-Z][A-Z0-9]{1,11})-[A-Z][A-Z0-9]{1,11}-\d{3}$")
+RULE_LIKE_TOKEN = re.compile(r"(?s)^.*\S.*$")
 DECLARATION = re.compile(
-    r"^- \*\*\[([^\]\n]+)\] (MUST|SHOULD|MAY) — (.+?)\.\*\* (\S.*)$", re.MULTILINE
+    r"^- \*\*\[([^\]\n]+)\] (MUST NOT|SHOULD NOT|MUST|SHOULD|MAY) — "
+    r"(.+?)\.\*\* (\S.*)$",
+    re.MULTILINE,
 )
-LEVELS = {"MUST", "SHOULD", "MAY"}
+DECLARATION_LEVEL_PREFIX = re.compile(r"^[A-Z][A-Z0-9]*(?:\s+[A-Z][A-Z0-9]*)*(?=\s*[^\w\s]+)")
+HTML_ENTITY = re.compile(r"&(?:#[xX][0-9A-Fa-f]+|#[0-9]+|[A-Za-z][A-Za-z0-9]+);")
+MARKDOWN_ESCAPE = re.compile(r"""\\([!"#$%&'()*+,\-./:;<=>?@\[\]^_`{|}~])""")
+URI_AUTOLINK = r"[A-Za-z][A-Za-z0-9+.-]{1,31}:[^<>\x00-\x20\x7f]*"
+EMAIL_DOMAIN_PART = r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+EMAIL_AUTOLINK = (
+    rf"[A-Za-z0-9.!#$%&'*+/=?^_`{{|}}~-]+@{EMAIL_DOMAIN_PART}"
+    rf"(?:\.{EMAIL_DOMAIN_PART})*"
+)
+AUTOLINK = re.compile(rf"<(?:{URI_AUTOLINK}|{EMAIL_AUTOLINK})>")
+LINE_BREAK_CHARACTERS = "\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029"
+LINE_END_PATTERN = r"(?:\r\n|[\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029])"
+LINE_END = re.compile(LINE_END_PATTERN)
+BLANK_LINE_BOUNDARY = re.compile(rf"{LINE_END_PATTERN}[ \t]*{LINE_END_PATTERN}")
+COMMONMARK_TAG_NAME = r"[A-Za-z][A-Za-z0-9-]*"
+COMMONMARK_OPTIONAL_SPACE = r"[ \t]*(?:(?:\r\n|\r|\n)[ \t]*)?"
+COMMONMARK_REQUIRED_SPACE = r"(?:[ \t]+(?:(?:\r\n|\r|\n)[ \t]*)?|[ \t]*(?:\r\n|\r|\n)[ \t]*)"
+COMMONMARK_ATTRIBUTE_NAME = r"[A-Za-z_:][A-Za-z0-9_.:-]*"
+COMMONMARK_ATTRIBUTE_VALUE = r"""(?:[^ \t\r\n"'=<>`]+|'[^']*'|"[^"]*")"""
+COMMONMARK_ATTRIBUTE_VALUE_SPEC = (
+    rf"{COMMONMARK_OPTIONAL_SPACE}={COMMONMARK_OPTIONAL_SPACE}{COMMONMARK_ATTRIBUTE_VALUE}"
+)
+COMMONMARK_ATTRIBUTE = (
+    rf"{COMMONMARK_REQUIRED_SPACE}{COMMONMARK_ATTRIBUTE_NAME}"
+    rf"(?:{COMMONMARK_ATTRIBUTE_VALUE_SPEC})?"
+)
+COMMONMARK_OPEN_TAG = re.compile(
+    rf"<{COMMONMARK_TAG_NAME}(?:{COMMONMARK_ATTRIBUTE})*{COMMONMARK_OPTIONAL_SPACE}/?>"
+)
+COMMONMARK_CLOSING_TAG = re.compile(rf"</{COMMONMARK_TAG_NAME}{COMMONMARK_OPTIONAL_SPACE}>")
+FENCED_CODE_OPEN = re.compile(r"^ {0,3}(`{3,}|~{3,})([^\r\n]*)$")
+LIST_ITEM_OPEN = re.compile(r"^( {0,3})([-+*]|[0-9]{1,9}[.)])( +|$)")
+BLOCK_QUOTE_PREFIX = re.compile(r"^ {0,3}> ?")
+ATX_HEADING_OPEN = re.compile(r"^ {0,3}#{1,6}(?:[ \t]+|$)")
+THEMATIC_BREAK = re.compile(r"^ {0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$")
+SETEXT_HEADING_UNDERLINE = re.compile(r"^ {0,3}(?:=+|-+)[ \t]*$")
+HTML_BLOCK_TYPE1_START = re.compile(
+    r"^ {0,3}<(?:pre|script|style|textarea)(?=[ \t>]|$)", re.IGNORECASE
+)
+HTML_BLOCK_TYPE1_END = re.compile(r"</(?:pre|script|style|textarea)>", re.IGNORECASE)
+HTML_BLOCK_TYPE6_NAMES = (
+    "address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|"
+    "details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|"
+    "h1|h2|h3|h4|h5|h6|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|"
+    "noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|"
+    "thead|title|tr|track|ul"
+)
+HTML_BLOCK_TYPE6_START = re.compile(
+    rf"^ {{0,3}}</?(?:{HTML_BLOCK_TYPE6_NAMES})(?=[ \t>/]|$)", re.IGNORECASE
+)
+LEVELS = {"MUST", "MUST NOT", "SHOULD", "SHOULD NOT", "MAY"}
 STATUSES = {"draft", "active", "deprecated", "retired"}
 LEGAL_STATUS_TRANSITIONS = {
     "draft": {"draft", "active"},
@@ -71,6 +125,936 @@ def source_scope(text: str, path: Path) -> str:
     return values[0]
 
 
+def normalize_reference_label(label: str) -> str | None:
+    normalized = " ".join(unescape(MARKDOWN_ESCAPE.sub(r"\1", label)).split()).casefold()
+    return normalized if normalized and len(label) <= 999 else None
+
+
+def reference_continuation(
+    raw_lines: list[str],
+    lines: list[tuple[str, int, int]],
+    line_index: int,
+    container_indent: int,
+    quote_depth: int,
+) -> str:
+    if line_index >= len(lines):
+        return ""
+    continuation, _, continuation_quote_depth = lines[line_index]
+    if not container_indent:
+        return continuation if continuation_quote_depth == quote_depth else ""
+    expanded = raw_lines[line_index].expandtabs(4)
+    relative, continuation_quote_depth = blockquote_content(expanded)
+    relative_indent = len(relative) - len(relative.lstrip(" "))
+    starts_item = list_item_content_indent(relative, 0) is not None
+    return (
+        relative[container_indent:]
+        if continuation_quote_depth == quote_depth
+        and not starts_item
+        and relative_indent >= container_indent
+        else ""
+    )
+
+
+def reference_labels(text: str) -> frozenset[str]:
+    labels: set[str] = set()
+    raw_lines = text.splitlines()
+    lines = [container_content_details(line) for line in raw_lines]
+    for line_index, (line, container_indent, quote_depth) in enumerate(lines):
+        indent = len(line) - len(line.lstrip(" "))
+        if indent > 3 or line[indent : indent + 1] != "[":
+            continue
+        definition_line = line
+        definition_line_index = line_index
+        label_end = closing_bracket_end(definition_line, indent)
+        if label_end is None:
+            continuation = reference_continuation(
+                raw_lines,
+                lines,
+                line_index + 1,
+                container_indent,
+                quote_depth,
+            )
+            definition_line = f"{line}\n{continuation}"
+            definition_line_index += 1
+            label_end = closing_bracket_end(definition_line, indent)
+        if label_end is None or definition_line[label_end : label_end + 1] != ":":
+            continue
+        definition = definition_line[label_end + 1 :]
+        valid_definition = valid_reference_definition(definition)
+        if not valid_definition and definition_line_index + 1 < len(lines):
+            continuation = reference_continuation(
+                raw_lines,
+                lines,
+                definition_line_index + 1,
+                container_indent,
+                quote_depth,
+            )
+            continuation_indent = len(continuation) - len(continuation.lstrip(" "))
+            if continuation_indent <= 3 and continuation.strip():
+                valid_definition = valid_reference_definition(f"{definition}\n{continuation}")
+        if not valid_definition:
+            continue
+        label = normalize_reference_label(definition_line[indent + 1 : label_end - 1])
+        if label is not None:
+            labels.add(label)
+    return frozenset(labels)
+
+
+def container_content(line: str) -> str:
+    return container_content_details(line)[0]
+
+
+def container_content_details(line: str) -> tuple[str, int, int]:
+    content = line.expandtabs(4)
+    content, quote_depth = blockquote_content(content)
+    container_indent = 0
+    while True:
+        item_indent = list_item_content_indent(content, 0)
+        if item_indent is None:
+            return content, container_indent, quote_depth
+        container_indent += item_indent
+        content = content[item_indent:]
+
+
+def link_destination_end(text: str, start: int, *, allow_empty: bool) -> int | None:
+    if start < len(text) and text[start] == "<":
+        escaped = False
+        for index in range(start + 1, len(text)):
+            character = text[index]
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == ">":
+                return index + 1 if allow_empty or index > start + 1 else None
+            elif character == "<" or character in LINE_BREAK_CHARACTERS:
+                return None
+        return None
+
+    depth = 0
+    escaped = False
+    index = start
+    while index < len(text):
+        character = text[index]
+        if escaped:
+            escaped = False
+        elif character == "\\":
+            escaped = True
+        elif character.isspace() or ord(character) < 32 or ord(character) == 127:
+            break
+        elif character in "<>":
+            return None
+        elif character == "(":
+            depth += 1
+        elif character == ")":
+            if depth == 0:
+                break
+            depth -= 1
+        index += 1
+    if depth or (index == start and not allow_empty):
+        return None
+    return index
+
+
+def link_title_end(text: str, start: int) -> int | None:
+    if start >= len(text) or text[start] not in "\"'(":
+        return None
+    closing = ")" if text[start] == "(" else text[start]
+    escaped = False
+    for index in range(start + 1, len(text)):
+        character = text[index]
+        if escaped:
+            escaped = False
+        elif character == "\\":
+            escaped = True
+        elif character == closing:
+            return index + 1
+        elif text[start] == "(" and character == "(":
+            return None
+    return None
+
+
+def inline_link_suffix_length(text: str) -> int | None:
+    destination_start = 1
+    while destination_start < len(text) and text[destination_start].isspace():
+        destination_start += 1
+    destination_end = link_destination_end(text, destination_start, allow_empty=True)
+    if destination_end is None:
+        return None
+    index = destination_end
+    if index < len(text) and text[index] == ")":
+        return index + 1
+    whitespace_start = index
+    while index < len(text) and text[index].isspace():
+        index += 1
+    if index == whitespace_start:
+        return None
+    if index < len(text) and text[index] == ")":
+        return index + 1
+    title_end = link_title_end(text, index)
+    if title_end is None:
+        return None
+    index = title_end
+    while index < len(text) and text[index].isspace():
+        index += 1
+    return index + 1 if index < len(text) and text[index] == ")" else None
+
+
+def valid_reference_definition(text: str) -> bool:
+    destination_start = len(text) - len(text.lstrip(" \t\r\n"))
+    destination_end = link_destination_end(text, destination_start, allow_empty=False)
+    if destination_end is None:
+        return False
+    index = destination_end
+    if not text[index:].strip():
+        return True
+    whitespace_start = index
+    while index < len(text) and text[index] in " \t":
+        index += 1
+    if index == whitespace_start:
+        return False
+    title_end = link_title_end(text, index)
+    return title_end is not None and not text[title_end:].strip()
+
+
+def link_suffix_length(
+    text: str,
+    *,
+    known_reference_labels: frozenset[str] | None = None,
+    fallback_label: str | None = None,
+) -> int | None:
+    if text.startswith("["):
+        escaped = False
+        for index, character in enumerate(text[1:], start=1):
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == "]":
+                if known_reference_labels is not None:
+                    raw_label = text[1:index] or fallback_label
+                    label = normalize_reference_label(raw_label) if raw_label is not None else None
+                    if label not in known_reference_labels:
+                        return 0
+                return index + 1
+        return None
+    return inline_link_suffix_length(text) if text.startswith("(") else 0
+
+
+def after_link_suffix_with_break(
+    text: str,
+    *,
+    known_reference_labels: frozenset[str] | None = None,
+    fallback_label: str | None = None,
+) -> tuple[str, bool] | None:
+    length = link_suffix_length(
+        text, known_reference_labels=known_reference_labels, fallback_label=fallback_label
+    )
+    if length is None:
+        return None
+    return text[length:], has_line_break(text[:length])
+
+
+def after_link_suffix(
+    text: str,
+    *,
+    known_reference_labels: frozenset[str] | None = None,
+    fallback_label: str | None = None,
+) -> str | None:
+    result = after_link_suffix_with_break(
+        text, known_reference_labels=known_reference_labels, fallback_label=fallback_label
+    )
+    return None if result is None else result[0]
+
+
+def has_line_break(text: str) -> bool:
+    return any(character in LINE_BREAK_CHARACTERS for character in text)
+
+
+def ascii_uppercase_letter(character: str) -> bool:
+    return "A" <= character <= "Z"
+
+
+def inline_html_end(text: str, start: int) -> int | None:
+    if AUTOLINK.match(text, start):
+        return None
+    if text.startswith("<!--", start):
+        terminator = "-->"
+    elif text.startswith("<?", start):
+        terminator = "?>"
+    elif text.startswith("<![CDATA[", start):
+        terminator = "]]>"
+    elif (
+        text.startswith("<!", start)
+        and start + 2 < len(text)
+        and ascii_uppercase_letter(text[start + 2])
+    ):
+        terminator = ">"
+    else:
+        tag = COMMONMARK_OPEN_TAG.match(text, start) or COMMONMARK_CLOSING_TAG.match(text, start)
+        return None if tag is None else tag.end()
+    terminator_start = text.find(terminator, start + 2)
+    return None if terminator_start == -1 else terminator_start + len(terminator)
+
+
+def transparent_prefix(text: str, *, allow_line_break: bool) -> tuple[int, bool]:
+    index = 0
+    external_breaks = 0
+    saw_line_break = False
+    while index < len(text):
+        character = text[index]
+        if character in LINE_BREAK_CHARACTERS:
+            if not allow_line_break or external_breaks == 1:
+                break
+            external_breaks += 1
+            saw_line_break = True
+            if character == "\r" and text[index : index + 2] == "\r\n":
+                index += 2
+            else:
+                index += 1
+            continue
+        if character == "\\":
+            if index + 1 < len(text) and text[index + 1] in LINE_BREAK_CHARACTERS:
+                index += 1
+                continue
+            break
+        if character.isspace() or character in "*_~`":
+            index += 1
+            continue
+        if character == "<":
+            end = inline_html_end(text, index)
+            if end is None:
+                break
+            saw_line_break = saw_line_break or has_line_break(text[index:end])
+            index = end
+            continue
+        break
+    return index, saw_line_break
+
+
+def rendered_text(text: str) -> str:
+    return HTML_ENTITY.sub(decode_rendered_entity, text)
+
+
+def decode_rendered_entity(match: re.Match[str]) -> str:
+    decoded = unescape(match.group(0))
+    if decoded in {'"', "'", "<", ">", "(", ")", "\\"}:
+        return match.group(0)
+    return decoded
+
+
+def mask_code_characters(text: str) -> str:
+    return "".join(character if character in LINE_BREAK_CHARACTERS else " " for character in text)
+
+
+def list_item_content_indent(text: str, container_indent: int) -> int | None:
+    match = LIST_ITEM_OPEN.match(text[container_indent:])
+    if match is None:
+        return None
+    gap = len(match.group(3))
+    gap = gap if 1 <= gap <= 4 else 1
+    return container_indent + len(match.group(1)) + len(match.group(2)) + gap
+
+
+def blockquote_content(text: str) -> tuple[str, int]:
+    depth = 0
+    while match := BLOCK_QUOTE_PREFIX.match(text):
+        text = text[match.end() :]
+        depth += 1
+    return text, depth
+
+
+def continues_block_container(body: str, container_indent: int, quote_depth: int) -> bool:
+    relative, current_quote_depth = blockquote_content(body.expandtabs(4))
+    if not relative.strip():
+        return True
+    relative_indent = len(relative) - len(relative.lstrip(" "))
+    return current_quote_depth == quote_depth and (
+        not container_indent or relative_indent >= container_indent
+    )
+
+
+def without_block_code(text: str) -> str:
+    rendered: list[str] = []
+    fence_character: str | None = None
+    fence_length = 0
+    fence_container_indent = 0
+    fence_quote_depth = 0
+    in_indented_code = False
+    indented_container_indent = 0
+    previous_blank = True
+    list_indents: list[int] = []
+    active_quote_depth = 0
+    for line in text.splitlines(keepends=True):
+        body = line[:-2] if line.endswith("\r\n") else line
+        if body and body[-1] in LINE_BREAK_CHARACTERS:
+            body = body[:-1]
+        expanded_body = body.expandtabs(4)
+        block_body, quote_depth = blockquote_content(expanded_body)
+        if fence_character is not None:
+            if not continues_block_container(body, fence_container_indent, fence_quote_depth):
+                fence_character = None
+                fence_length = 0
+            else:
+                rendered.append(mask_code_characters(line))
+                relative = block_body[fence_container_indent:]
+                if re.fullmatch(
+                    rf" {{0,3}}{re.escape(fence_character)}{{{fence_length},}} *", relative
+                ):
+                    fence_character = None
+                    fence_length = 0
+                    previous_blank = True
+                continue
+        if not block_body.strip():
+            rendered.append(mask_code_characters(line) if in_indented_code else line)
+            previous_blank = True
+            continue
+        if quote_depth != active_quote_depth:
+            list_indents.clear()
+            in_indented_code = False
+            active_quote_depth = quote_depth
+        raw_indent = len(block_body) - len(block_body.lstrip(" "))
+        while list_indents and raw_indent < list_indents[-1]:
+            list_indents.pop()
+        container_indent = list_indents[-1] if list_indents else 0
+        relative = block_body[container_indent:]
+        if in_indented_code:
+            relative_indent = len(relative) - len(relative.lstrip(" "))
+            if container_indent == indented_container_indent and relative_indent >= 4:
+                rendered.append(mask_code_characters(line))
+                previous_blank = False
+                continue
+            in_indented_code = False
+        item_indent = list_item_content_indent(block_body, container_indent)
+        fence_indent = container_indent
+        opening = FENCED_CODE_OPEN.fullmatch(relative)
+        if opening is None and item_indent is not None:
+            opening = FENCED_CODE_OPEN.fullmatch(block_body[item_indent:])
+            fence_indent = item_indent
+        if opening is not None and not (
+            opening.group(1).startswith("`") and "`" in opening.group(2)
+        ):
+            fence_character = opening.group(1)[0]
+            fence_length = len(opening.group(1))
+            fence_container_indent = fence_indent
+            fence_quote_depth = quote_depth
+            if item_indent is not None and fence_indent == item_indent:
+                list_indents.append(item_indent)
+            rendered.append(mask_code_characters(line))
+            continue
+        relative_indent = len(relative) - len(relative.lstrip(" "))
+        if previous_blank and relative_indent >= 4:
+            in_indented_code = True
+            indented_container_indent = container_indent
+            previous_blank = False
+            rendered.append(mask_code_characters(line))
+            continue
+        rendered.append(line)
+        if item_indent is not None:
+            list_indents.append(item_indent)
+        leaf_content = block_body[item_indent:] if item_indent is not None else relative
+        previous_blank = bool(
+            ATX_HEADING_OPEN.match(leaf_content)
+            or THEMATIC_BREAK.match(leaf_content)
+            or SETEXT_HEADING_UNDERLINE.match(leaf_content)
+        )
+    return "".join(rendered)
+
+
+def without_html_blocks(text: str) -> str:
+    rendered: list[str] = []
+    terminator: re.Pattern[str] | str | None = None
+    html_container_indent = 0
+    html_quote_depth = 0
+    previous_blank = True
+    for line in text.splitlines(keepends=True):
+        body = line.rstrip(LINE_BREAK_CHARACTERS)
+        content, line_container_indent, line_quote_depth = container_content_details(body)
+        if terminator is not None and not continues_block_container(
+            body, html_container_indent, html_quote_depth
+        ):
+            terminator = None
+        if terminator is not None:
+            rendered.append(mask_code_characters(line))
+            ended = (
+                terminator.search(content) is not None
+                if isinstance(terminator, re.Pattern)
+                else terminator in content
+            )
+            if ended:
+                terminator = None
+            previous_blank = False
+            continue
+
+        stripped = content.lstrip(" ")
+        if HTML_BLOCK_TYPE1_START.match(content):
+            rendered.append(mask_code_characters(line))
+            if HTML_BLOCK_TYPE1_END.search(content) is None:
+                terminator = HTML_BLOCK_TYPE1_END
+                html_container_indent = line_container_indent
+                html_quote_depth = line_quote_depth
+        elif re.match(r"^ {0,3}<!--", content):
+            rendered.append(mask_code_characters(line))
+            if "-->" not in content:
+                terminator = "-->"
+                html_container_indent = line_container_indent
+                html_quote_depth = line_quote_depth
+        elif re.match(r"^ {0,3}<\?", content):
+            rendered.append(mask_code_characters(line))
+            if "?>" not in content:
+                terminator = "?>"
+                html_container_indent = line_container_indent
+                html_quote_depth = line_quote_depth
+        elif re.match(r"^ {0,3}<![A-Z]", content):
+            rendered.append(mask_code_characters(line))
+            if ">" not in content:
+                terminator = ">"
+                html_container_indent = line_container_indent
+                html_quote_depth = line_quote_depth
+        elif re.match(r"^ {0,3}<!\[CDATA\[", content):
+            rendered.append(mask_code_characters(line))
+            if "]]>" not in content:
+                terminator = "]]>"
+                html_container_indent = line_container_indent
+                html_quote_depth = line_quote_depth
+        elif HTML_BLOCK_TYPE6_START.match(content) or (
+            previous_blank
+            and (
+                COMMONMARK_OPEN_TAG.fullmatch(stripped)
+                or COMMONMARK_CLOSING_TAG.fullmatch(stripped)
+            )
+        ):
+            rendered.append(line)
+        else:
+            rendered.append(line)
+        previous_blank = bool(
+            not content.strip()
+            or ATX_HEADING_OPEN.match(content)
+            or THEMATIC_BREAK.match(content)
+            or SETEXT_HEADING_UNDERLINE.match(content)
+        )
+    return "".join(rendered)
+
+
+def restore_visible_html_content(original: str, block_text: str, masked_text: str) -> str:
+    if len(original) != len(block_text) or len(original) != len(masked_text):
+        raise CheckError("Markdown masking changed source length")
+    rendered = list(masked_text)
+    offset = 0
+    in_visible_block = False
+    visible_container_indent = 0
+    visible_quote_depth = 0
+    previous_blank = True
+    for original_line, block_line in zip(
+        original.splitlines(keepends=True), block_text.splitlines(keepends=True), strict=True
+    ):
+        original_body = original_line.rstrip(LINE_BREAK_CHARACTERS)
+        block_body = block_line.rstrip(LINE_BREAK_CHARACTERS)
+        content, line_container_indent, line_quote_depth = container_content_details(block_body)
+        if in_visible_block and not continues_block_container(
+            original_body, visible_container_indent, visible_quote_depth
+        ):
+            in_visible_block = False
+        restore_line = False
+        if in_visible_block:
+            original_content = container_content(original_body)
+            if original_content.strip():
+                restore_line = True
+            else:
+                in_visible_block = False
+        else:
+            stripped = content.lstrip(" ")
+            if HTML_BLOCK_TYPE6_START.match(content) or (
+                previous_blank
+                and (
+                    COMMONMARK_OPEN_TAG.fullmatch(stripped)
+                    or COMMONMARK_CLOSING_TAG.fullmatch(stripped)
+                )
+            ):
+                restore_line = True
+                in_visible_block = True
+                visible_container_indent = line_container_indent
+                visible_quote_depth = line_quote_depth
+        if restore_line:
+            rendered[offset : offset + len(original_line)] = original_line
+        offset += len(original_line)
+        previous_blank = bool(
+            not content.strip()
+            or ATX_HEADING_OPEN.match(content)
+            or THEMATIC_BREAK.match(content)
+            or SETEXT_HEADING_UNDERLINE.match(content)
+        )
+    return "".join(rendered)
+
+
+def inline_block_limit(text: str, start: int) -> int:
+    boundary = BLANK_LINE_BOUNDARY.search(text, start)
+    limit = boundary.start() if boundary is not None else len(text)
+    current_line_start = 0
+    for previous_end in LINE_END.finditer(text, 0, start):
+        current_line_start = previous_end.end()
+    current_content, current_quote_depth = blockquote_content(
+        text[current_line_start:start].expandtabs(4)
+    )
+    current_line_is_item = LIST_ITEM_OPEN.match(current_content) is not None
+    line_end = LINE_END.search(text, start)
+    while line_end is not None and line_end.end() < limit:
+        line_start = line_end.end()
+        next_end = LINE_END.search(text, line_start)
+        line_limit = next_end.start() if next_end is not None else len(text)
+        content, quote_depth = blockquote_content(text[line_start:line_limit].expandtabs(4))
+        list_item = LIST_ITEM_OPEN.match(content)
+        list_boundary = bool(
+            list_item
+            and (
+                current_line_is_item
+                or (
+                    content[list_item.end() :].strip()
+                    and (not list_item.group(2)[0].isdigit() or int(list_item.group(2)[:-1]) == 1)
+                )
+            )
+        )
+        if (
+            (quote_depth > 0 and quote_depth != current_quote_depth)
+            or list_boundary
+            or ATX_HEADING_OPEN.match(content)
+            or THEMATIC_BREAK.match(content)
+            or SETEXT_HEADING_UNDERLINE.match(content)
+        ):
+            return line_start
+        line_end = next_end
+    return limit
+
+
+def code_protected_positions(text: str) -> bytearray:
+    protected = bytearray(len(text))
+    index = 0
+    while index < len(text):
+        if protected[index]:
+            index += 1
+            continue
+        if text[index] == "`":
+            run_end = index + 1
+            while run_end < len(text) and text[run_end] == "`":
+                run_end += 1
+            backslashes = 0
+            before = index - 1
+            while before >= 0 and text[before] == "\\":
+                backslashes += 1
+                before -= 1
+            if backslashes % 2:
+                index = run_end
+                continue
+            run_length = run_end - index
+            candidate = run_end
+            block_limit = inline_block_limit(text, index)
+            closing_end: int | None = None
+            while candidate < block_limit:
+                candidate = text.find("`", candidate, block_limit)
+                if candidate == -1:
+                    break
+                candidate_end = candidate + 1
+                while candidate_end < len(text) and text[candidate_end] == "`":
+                    candidate_end += 1
+                if protected[candidate]:
+                    candidate = candidate_end
+                    continue
+                if candidate_end - candidate == run_length:
+                    closing_end = candidate_end
+                    break
+                candidate = candidate_end
+            index = closing_end if closing_end is not None else run_end
+            continue
+        if text[index] == "<":
+            autolink = AUTOLINK.match(text, index)
+            end = autolink.end() if autolink is not None else inline_html_end(text, index)
+            if end is not None:
+                protected[index:end] = b"\x01" * (end - index)
+                index = end
+                continue
+        label_start = index + 1 if text.startswith("![", index) else index
+        if text[label_start : label_start + 1] == "[":
+            backslashes = 0
+            before = label_start - 1
+            while before >= 0 and text[before] == "\\":
+                backslashes += 1
+                before -= 1
+            if backslashes % 2 == 0:
+                label_end = closing_bracket_end(text, label_start)
+                if label_end is not None:
+                    suffix_length = link_suffix_length(text[label_end:])
+                    if suffix_length not in {None, 0}:
+                        end = label_end + suffix_length
+                        protected[label_end:end] = b"\x01" * (end - label_end)
+        index += 1
+    return protected
+
+
+def without_markdown_code(text: str) -> str:
+    text = without_block_code(text)
+    rendered = list(text)
+    protected = code_protected_positions(text)
+    index = 0
+    while index < len(text):
+        if text[index] != "`" or protected[index]:
+            index += 1
+            continue
+        run_end = index + 1
+        while run_end < len(text) and text[run_end] == "`":
+            run_end += 1
+        backslashes = 0
+        before = index - 1
+        while before >= 0 and text[before] == "\\":
+            backslashes += 1
+            before -= 1
+        if backslashes % 2:
+            index = run_end
+            continue
+        run_length = run_end - index
+        candidate = run_end
+        block_limit = inline_block_limit(text, index)
+        closing_end: int | None = None
+        while candidate < block_limit:
+            candidate = text.find("`", candidate, block_limit)
+            if candidate == -1:
+                break
+            candidate_end = candidate + 1
+            while candidate_end < len(text) and text[candidate_end] == "`":
+                candidate_end += 1
+            if protected[candidate]:
+                candidate = candidate_end
+                continue
+            if candidate_end - candidate == run_length:
+                closing_end = candidate_end
+                break
+            candidate = candidate_end
+        if closing_end is None:
+            index = run_end
+            continue
+        for masked_index in range(index, closing_end):
+            if rendered[masked_index] not in LINE_BREAK_CHARACTERS:
+                rendered[masked_index] = " "
+        index = closing_end
+    return "".join(rendered)
+
+
+def without_html_comments(text: str) -> str:
+    rendered: list[str] = []
+    index = 0
+    while True:
+        start = text.find("<!--", index)
+        if start == -1:
+            rendered.append(text[index:])
+            break
+        rendered.append(text[index:start])
+        end = inline_html_end(text, start)
+        if end is None:
+            rendered.append(text[start : start + 4])
+            index = start + 4
+            continue
+        comment = text[start:end]
+        if has_line_break(comment):
+            rendered.extend(
+                character for character in comment if character in LINE_BREAK_CHARACTERS
+            )
+        else:
+            rendered.append(comment)
+        index = end
+    return "".join(rendered)
+
+
+def bracket_tokens(line: str) -> list[tuple[str, int, int]]:
+    stack: list[int] = []
+    tokens: list[tuple[int, str, int]] = []
+    escaped = False
+    index = 0
+    while index < len(line):
+        character = line[index]
+        if not escaped and character == "<":
+            end = inline_html_end(line, index)
+            if end is not None:
+                index = end
+                continue
+        if escaped:
+            if character == "[":
+                stack.append(index)
+            elif character == "]" and stack:
+                start = stack.pop()
+                tokens.append((start, line[start + 1 : index], index + 1))
+            escaped = False
+        elif character == "\\":
+            escaped = True
+        elif character == "[":
+            stack.append(index)
+        elif character == "]" and stack:
+            start = stack.pop()
+            tokens.append((start, line[start + 1 : index], index + 1))
+        index += 1
+    return [(content, start, end) for start, content, end in sorted(tokens)]
+
+
+def closing_bracket_end(text: str, start: int) -> int | None:
+    depth = 0
+    escaped = False
+    index = start
+    while index < len(text):
+        character = text[index]
+        if not escaped and character == "<":
+            end = inline_html_end(text, index)
+            if end is not None:
+                index = end
+                continue
+        if escaped:
+            escaped = False
+        elif character == "\\":
+            escaped = True
+        elif character == "[":
+            depth += 1
+        elif character == "]":
+            depth -= 1
+            if depth == 0:
+                return index + 1
+        index += 1
+    return None
+
+
+def transparent_inline_projection(
+    text: str, known_reference_labels: frozenset[str] = frozenset()
+) -> tuple[str, list[bool]]:
+    rendered: list[str] = []
+    line_breaks: list[bool] = []
+    saw_line_break = False
+    index = 0
+    while index < len(text):
+        escaped = MARKDOWN_ESCAPE.match(text, index)
+        if escaped is not None:
+            rendered.append(escaped.group(1))
+            line_breaks.append(saw_line_break)
+            index = escaped.end()
+            continue
+        label_start = index + 1 if text.startswith("![", index) else index
+        if text[label_start : label_start + 1] == "[":
+            label_end = closing_bracket_end(text, label_start)
+            if label_end is not None:
+                label = text[label_start + 1 : label_end - 1]
+                suffix_length = link_suffix_length(
+                    text[label_end:],
+                    known_reference_labels=known_reference_labels,
+                    fallback_label=label,
+                )
+                shortcut_reference = (
+                    label_start == index
+                    and (normalized_label := normalize_reference_label(label)) is not None
+                    and normalized_label in known_reference_labels
+                )
+                if suffix_length not in {None, 0} or shortcut_reference:
+                    label_text, label_breaks = transparent_inline_projection(
+                        label, known_reference_labels
+                    )
+                    rendered.extend(label_text)
+                    line_breaks.extend(saw_line_break or value for value in label_breaks)
+                    if suffix_length is None:
+                        suffix_length = 0
+                    consumed_end = label_end + suffix_length
+                    saw_line_break = saw_line_break or has_line_break(text[index:consumed_end])
+                    index = consumed_end
+                    continue
+        if text[index] == "<":
+            end = inline_html_end(text, index)
+            if end is not None:
+                saw_line_break = saw_line_break or has_line_break(text[index:end])
+                index = end
+                continue
+        saw_line_break = saw_line_break or text[index] in LINE_BREAK_CHARACTERS
+        if text[index] not in "*_~`":
+            rendered.append(text[index])
+            line_breaks.append(saw_line_break)
+        index += 1
+    return "".join(rendered), line_breaks
+
+
+def transparent_inline_text(text: str, known_reference_labels: frozenset[str] = frozenset()) -> str:
+    return transparent_inline_projection(text, known_reference_labels)[0]
+
+
+def rule_identity(token: str, known_reference_labels: frozenset[str]) -> str | None:
+    rendered = transparent_inline_text(token, known_reference_labels)
+    if RULE_LIKE_TOKEN.fullmatch(rendered):
+        return rendered
+    nested = [
+        rendered_content
+        for content, _, _ in bracket_tokens(token)
+        if RULE_LIKE_TOKEN.fullmatch(
+            rendered_content := transparent_inline_text(content, known_reference_labels)
+        )
+    ]
+    return nested[0] if len(nested) == 1 else None
+
+
+def declaration_candidates(
+    text: str, known_reference_labels: frozenset[str] | None = None
+) -> list[str]:
+    candidates: list[str] = []
+    rendered = rendered_text(text)
+    if known_reference_labels is None:
+        known_reference_labels = reference_labels(rendered)
+    for line in rendered.splitlines():
+        for token, start, end in bracket_tokens(line):
+            if start and line[start - 1] == "]":
+                continue
+            rule_id = rule_identity(token, known_reference_labels)
+            if rule_id is None:
+                continue
+            suffix = after_link_suffix(
+                line[end:], known_reference_labels=known_reference_labels, fallback_label=token
+            )
+            if suffix is None:
+                continue
+            formatting_end, _ = transparent_prefix(suffix, allow_line_break=False)
+            if DECLARATION_LEVEL_PREFIX.match(
+                transparent_inline_text(suffix[formatting_end:], known_reference_labels)
+            ):
+                candidates.append(rule_id)
+    for token, start, end in bracket_tokens(rendered):
+        if start and rendered[start - 1] == "]":
+            continue
+        rule_id = rule_identity(token, known_reference_labels)
+        if rule_id is None:
+            continue
+        link_result = after_link_suffix_with_break(
+            rendered[end:], known_reference_labels=known_reference_labels, fallback_label=token
+        )
+        if link_result is None:
+            continue
+        suffix, link_has_line_break = link_result
+        formatting_end, saw_line_break = transparent_prefix(suffix, allow_line_break=True)
+        level_text, level_line_breaks = transparent_inline_projection(
+            suffix[formatting_end:], known_reference_labels
+        )
+        level_match = DECLARATION_LEVEL_PREFIX.match(level_text)
+        level_has_line_break = bool(
+            level_match and level_match.end() and level_line_breaks[level_match.end() - 1]
+        )
+        if level_match and (
+            saw_line_break or link_has_line_break or has_line_break(token) or level_has_line_break
+        ):
+            candidates.append(rule_id)
+    return candidates
+
+
+def declaration_records(text: str, label: str) -> list[tuple[str, str, str, str]]:
+    block_text = without_html_blocks(without_block_code(text))
+    masked_candidate_text = without_markdown_code(block_text)
+    candidate_text = without_html_comments(
+        restore_visible_html_content(text, block_text, masked_candidate_text)
+    )
+    candidates = declaration_candidates(candidate_text, reference_labels(candidate_text))
+    declarations = DECLARATION.findall(without_html_comments(block_text))
+    if len(declarations) != len(candidates):
+        raise CheckError(f"invalid rule declaration: {label}")
+    return declarations
+
+
 def validate_contract(registry_path: Path, source_path: Path, expected_scope: str) -> None:
     payload = load_json(registry_path)
     if payload.get("schemaVersion") != 2:
@@ -122,7 +1106,7 @@ def validate_contract(registry_path: Path, source_path: Path, expected_scope: st
     text = source_path.read_text(encoding="utf-8")
     if source_scope(text, source_path) != expected_scope:
         raise CheckError(f"source scope mismatch: {source_path}")
-    declarations = DECLARATION.findall(text)
+    declarations = declaration_records(text, str(source_path))
     seen: dict[str, tuple[str, str, str]] = {}
     for rule_id, level, name, statement in declarations:
         if not RULE_ID.fullmatch(rule_id) or rule_id in seen:
@@ -190,20 +1174,33 @@ def validate_shared_contract() -> None:
         ):
             raise CheckError(f"incomplete shared registry entry: {rule_id}")
         registered[rule_id] = rule
-    sources = sorted((ROOT / ".rulesync" / "rules").glob("[12]0-*.md"))
-    sources += sorted((ROOT / ".rulesync" / "nested").glob("**/20-stack-*.md"))
+    sources = sorted((ROOT / ".rulesync" / "rules").rglob("*.md"))
+    sources += sorted((ROOT / ".rulesync" / "nested").glob("**/*.md"))
     source_texts = {
         path.relative_to(ROOT).as_posix(): path.read_text(encoding="utf-8") for path in sources
     }
-    validate_shared_projections(payload, registered, source_texts, str(registry_path))
+    current_registry_paths = {".rulesync/rules.json"}
+    current_registry_paths.update(
+        path.relative_to(ROOT).as_posix()
+        for path in (ROOT / ".rulesync" / "nested").glob("**/rules.json")
+    )
+    validate_shared_projections(
+        payload,
+        registered,
+        source_texts,
+        str(registry_path),
+        registered_project_source_paths(current_registry_paths),
+    )
 
 
 def is_shared_source_path(relative: str) -> bool:
     name = relative.rsplit("/", 1)[-1]
     return (
-        relative.startswith(".rulesync/rules/")
-        and name.startswith(("10-core-", "20-stack-"))
-        and re.fullmatch(r"[12]0-[a-z0-9][a-z0-9.-]*\.md", name) is not None
+        re.fullmatch(
+            r"\.rulesync/rules/(?:10-core|20-stack)-[a-z0-9][a-z0-9.-]*\.md",
+            relative,
+        )
+        is not None
     ) or (
         relative.startswith(".rulesync/nested/")
         and name.startswith("20-stack-")
@@ -214,6 +1211,52 @@ def is_shared_source_path(relative: str) -> bool:
         )
         is not None
     )
+
+
+def registered_project_source_paths(registry_paths: set[str]) -> set[str]:
+    sources: set[str] = set()
+    if ".rulesync/rules.json" in registry_paths:
+        sources.add(".rulesync/rules/50-project.md")
+    sources.update(
+        f"{relative.rsplit('/', 1)[0]}/50-project.md"
+        for relative in registry_paths
+        if relative.startswith(".rulesync/nested/") and relative.endswith("/rules.json")
+    )
+    return sources
+
+
+def is_discovered_shared_source_path(relative: str, registered_project_sources: set[str]) -> bool:
+    name = relative.rsplit("/", 1)[-1]
+    return (
+        relative.startswith((".rulesync/rules/", ".rulesync/nested/"))
+        and name.endswith(".md")
+        and name != "00-generated-metadata.md"
+        and relative not in registered_project_sources
+    )
+
+
+def canonical_shared_source_texts(
+    source_texts: dict[str, str], label: str, registered_project_sources: set[str]
+) -> dict[str, str]:
+    metadata_with_declarations = sorted(
+        relative
+        for relative, text in source_texts.items()
+        if relative.rsplit("/", 1)[-1] == "00-generated-metadata.md"
+        and declaration_candidates(text)
+    )
+    if metadata_with_declarations:
+        raise CheckError(
+            f"generated metadata cannot declare rules: {metadata_with_declarations[0]} ({label})"
+        )
+    discovered = {
+        relative: text
+        for relative, text in source_texts.items()
+        if is_discovered_shared_source_path(relative, registered_project_sources)
+    }
+    invalid = sorted(relative for relative in discovered if not is_shared_source_path(relative))
+    if invalid:
+        raise CheckError(f"noncanonical shared source path: {invalid[0]} ({label})")
+    return discovered
 
 
 def projection_records(payload: dict[str, object], label: str) -> dict[str, frozenset[str]]:
@@ -237,14 +1280,49 @@ def projection_records(payload: dict[str, object], label: str) -> dict[str, froz
     return records
 
 
+def canonical_projection_origins(source_paths: set[str]) -> frozenset[str]:
+    root_paths = {
+        source_path for source_path in source_paths if source_path.startswith(".rulesync/rules/")
+    }
+    selected = root_paths or source_paths
+    role = "root" if root_paths else "nested"
+    return frozenset(f"{role}:{source_path.rsplit('/', 1)[-1]}" for source_path in selected)
+
+
+def projection_origins(
+    projections: dict[str, frozenset[str]],
+) -> dict[str, frozenset[str]]:
+    source_paths_by_rule: dict[str, set[str]] = {}
+    for source_path, rule_ids in projections.items():
+        for rule_id in rule_ids:
+            source_paths_by_rule.setdefault(rule_id, set()).add(source_path)
+    return {
+        rule_id: canonical_projection_origins(source_paths)
+        for rule_id, source_paths in source_paths_by_rule.items()
+    }
+
+
+def preserve_projection_origins(
+    snapshot: dict[str, frozenset[str]],
+    historical: dict[str, frozenset[str]],
+) -> None:
+    for rule_id, source_paths in snapshot.items():
+        previous = historical.get(rule_id)
+        if previous is not None and previous != source_paths:
+            raise CheckError(f"historical shared projection origin changed: {rule_id}")
+        historical[rule_id] = source_paths
+
+
 def validate_shared_projections(
     payload: dict[str, object],
     registered: dict[str, dict[str, object]],
     source_texts: dict[str, str],
     label: str,
+    registered_project_sources: set[str],
 ) -> None:
+    source_texts = canonical_shared_source_texts(source_texts, label, registered_project_sources)
     projections = projection_records(payload, label)
-    actual_sources = {relative for relative in source_texts if is_shared_source_path(relative)}
+    actual_sources = set(source_texts)
     if set(projections) != actual_sources:
         raise CheckError(f"shared projection path mismatch: {label}")
     occurrences: dict[str, str] = {}
@@ -256,7 +1334,7 @@ def validate_shared_projections(
         if source_scope(text, Path(relative)) != expected_scope:
             raise CheckError(f"shared source scope mismatch: {relative}")
         declarations: dict[str, tuple[str, str, str]] = {}
-        for rule_id, level, name, statement in DECLARATION.findall(text):
+        for rule_id, level, name, statement in declaration_records(text, relative):
             if not RULE_ID.fullmatch(rule_id) or rule_id in declarations:
                 raise CheckError(f"invalid or duplicate shared source rule id: {rule_id}")
             declarations[rule_id] = (level, name, statement)
@@ -316,28 +1394,33 @@ def rule_records(
 
 def legacy_rule_records(
     payload: dict[str, object], label: str, sources: dict[str, str]
-) -> tuple[dict[str, tuple[tuple[object, ...], str]], dict[str, str]]:
+) -> tuple[dict[str, tuple[tuple[object, ...], str]], dict[str, frozenset[str]]]:
     rules = payload.get("rules")
     if not isinstance(rules, list):
         raise CheckError(f"legacy registry rules must be a list: {label}")
-    declarations: dict[str, tuple[tuple[str, str, str], str]] = {}
+    declarations: dict[str, tuple[tuple[str, str, str], set[str]]] = {}
     stack_projections: dict[str, frozenset[str]] = {}
     for source_path, text in sources.items():
         source_name = source_path.rsplit("/", 1)[-1]
         local_seen: set[str] = set()
-        for rule_id, level, name, statement in DECLARATION.findall(text):
+        for rule_id, level, name, statement in declaration_records(text, source_path):
             if rule_id in local_seen:
                 raise CheckError(f"duplicate legacy rule declaration: {rule_id}")
             local_seen.add(rule_id)
             declaration = (level, name, statement)
             previous = declarations.get(rule_id)
             if previous is not None:
-                previous_declaration, previous_source = previous
+                previous_declaration, previous_sources = previous
                 if previous_declaration != declaration:
                     raise CheckError(f"conflicting legacy rule declaration: {rule_id}")
-                if not (source_name.startswith("20-stack-") and previous_source == source_name):
+                if not source_name.startswith("20-stack-") or any(
+                    previous_path.rsplit("/", 1)[-1] != source_name
+                    for previous_path in previous_sources
+                ):
                     raise CheckError(f"duplicate legacy rule declaration: {rule_id}")
-            declarations[rule_id] = (declaration, source_name)
+                previous_sources.add(source_path)
+            else:
+                declarations[rule_id] = (declaration, {source_path})
         if source_name.startswith("20-stack-"):
             projection = frozenset(local_seen)
             previous_projection = stack_projections.get(source_name)
@@ -345,7 +1428,7 @@ def legacy_rule_records(
                 raise CheckError(f"legacy stack projection mismatch: {source_path}")
             stack_projections[source_name] = projection
     records: dict[str, tuple[tuple[object, ...], str]] = {}
-    origins: dict[str, str] = {}
+    origins: dict[str, frozenset[str]] = {}
     for rule in rules:
         if not isinstance(rule, dict) or not isinstance(rule.get("id"), str):
             raise CheckError(f"invalid legacy registry entry: {label}")
@@ -363,10 +1446,10 @@ def legacy_rule_records(
             or declaration_record[0][0] != level
         ):
             raise CheckError(f"invalid legacy rule identity: {rule_id}")
-        declaration, source_name = declaration_record
+        declaration, source_paths = declaration_record
         _, name, statement = declaration
         records[rule_id] = ((name, level, scope, statement), "active")
-        origins[rule_id] = source_name
+        origins[rule_id] = canonical_projection_origins(source_paths)
     if set(declarations) != set(records):
         raise CheckError(f"legacy registry/source rule mismatch: {label}")
     return records, origins
@@ -475,20 +1558,7 @@ def validate_historical_identities() -> None:
         {
             path
             for path in changed_paths.stdout.splitlines()
-            if (
-                path.startswith(".rulesync/rules/")
-                and (
-                    path.rsplit("/", 1)[-1] == "50-project.md"
-                    or re.fullmatch(r"[12]0-[^/]+\.md", path.rsplit("/", 1)[-1]) is not None
-                )
-            )
-            or (
-                path.startswith(".rulesync/nested/")
-                and (
-                    path.rsplit("/", 1)[-1] == "50-project.md"
-                    or path.rsplit("/", 1)[-1].startswith("20-stack-")
-                )
-            )
+            if path.startswith((".rulesync/rules/", ".rulesync/nested/")) and path.endswith(".md")
         }
     )
     all_history_paths = historical_paths + historical_source_paths
@@ -498,7 +1568,7 @@ def validate_historical_identities() -> None:
         raise CheckError("registry history exceeds object limit")
 
     historical_identities: dict[str, tuple[object, ...]] = {}
-    historical_projection_origins: dict[str, str] = {}
+    historical_projection_origins: dict[str, frozenset[str]] = {}
     lifecycle_states: dict[str, dict[str, str]] = {}
     schema_states: dict[str, set[str]] = {}
     projection_states: dict[str, bool] = {}
@@ -539,6 +1609,7 @@ def validate_historical_identities() -> None:
                     source_texts[relative] = body.decode("utf-8")
                 except UnicodeDecodeError as error:
                     raise CheckError(f"historical rule source is not UTF-8: {relative}") from error
+            snapshot_registry_texts: dict[str, str] = {}
             for relative in historical_paths:
                 body = read_git_blob(cat_file, f"{commit}:{relative}")
                 if body is None:
@@ -547,9 +1618,11 @@ def validate_historical_identities() -> None:
                 if history_bytes > MAX_HISTORY_BYTES:
                     raise CheckError("registry history exceeds byte limit")
                 try:
-                    text = body.decode("utf-8")
+                    snapshot_registry_texts[relative] = body.decode("utf-8")
                 except UnicodeDecodeError as error:
                     raise CheckError(f"historical registry is not UTF-8: {relative}") from error
+            snapshot_project_sources = registered_project_source_paths(set(snapshot_registry_texts))
+            for relative, text in snapshot_registry_texts.items():
                 payload = parse_json(text, f"{commit}:{relative}")
                 schema_version = payload.get("schemaVersion")
                 if schema_version != 2:
@@ -560,18 +1633,9 @@ def validate_historical_identities() -> None:
                     if relative in inherited_v2:
                         raise CheckError(f"historical registry schema regressed: {relative}")
                     if relative == ".rulesync/shared-rules.json":
-                        legacy_sources = {
-                            path: text
-                            for path, text in source_texts.items()
-                            if (
-                                path.startswith(".rulesync/rules/")
-                                and path.rsplit("/", 1)[-1].startswith(("10-core-", "20-stack-"))
-                            )
-                            or (
-                                path.startswith(".rulesync/nested/")
-                                and path.rsplit("/", 1)[-1].startswith("20-stack-")
-                            )
-                        }
+                        legacy_sources = canonical_shared_source_texts(
+                            source_texts, f"{commit}:{relative}", snapshot_project_sources
+                        )
                     elif relative == ".rulesync/rules.json":
                         legacy_sources = {
                             ".rulesync/rules/50-project.md": source_texts.get(
@@ -585,13 +1649,7 @@ def validate_historical_identities() -> None:
                         payload, relative, legacy_sources
                     )
                     if relative == ".rulesync/shared-rules.json":
-                        for rule_id, source_name in legacy_origins.items():
-                            previous_origin = historical_projection_origins.get(rule_id)
-                            if previous_origin is not None and previous_origin != source_name:
-                                raise CheckError(
-                                    f"historical shared projection origin changed: {rule_id}"
-                                )
-                            historical_projection_origins[rule_id] = source_name
+                        preserve_projection_origins(legacy_origins, historical_projection_origins)
                 else:
                     inherited_v2.add(relative)
                     if relative == ".rulesync/shared-rules.json":
@@ -607,33 +1665,39 @@ def validate_historical_identities() -> None:
                         )
                         if "projections" in payload:
                             validate_shared_projections(
-                                payload, registered, source_texts, f"{commit}:{relative}"
+                                payload,
+                                registered,
+                                source_texts,
+                                f"{commit}:{relative}",
+                                snapshot_project_sources,
                             )
-                            snapshot_origins: dict[str, str] = {}
-                            for source_path, rule_ids in projection_records(
-                                payload, f"{commit}:{relative}"
-                            ).items():
-                                source_name = source_path.rsplit("/", 1)[-1]
-                                for rule_id in rule_ids:
-                                    previous_snapshot_origin = snapshot_origins.get(rule_id)
-                                    if (
-                                        previous_snapshot_origin is not None
-                                        and previous_snapshot_origin != source_name
-                                    ):
-                                        raise CheckError(
-                                            f"historical shared projection is ambiguous: {rule_id}"
-                                        )
-                                    snapshot_origins[rule_id] = source_name
-                            for rule_id, source_name in snapshot_origins.items():
-                                previous_origin = historical_projection_origins.get(rule_id)
-                                if previous_origin is not None and previous_origin != source_name:
-                                    raise CheckError(
-                                        f"historical shared projection origin changed: {rule_id}"
-                                    )
-                                historical_projection_origins[rule_id] = source_name
+                            snapshot_origins = projection_origins(
+                                projection_records(payload, f"{commit}:{relative}")
+                            )
+                            preserve_projection_origins(
+                                snapshot_origins, historical_projection_origins
+                            )
                             inherited_projections = True
                         elif inherited_projections:
                             raise CheckError("historical shared projection contract regressed")
+                        else:
+                            active_rules = [
+                                rule
+                                for rule in rules
+                                if isinstance(rule, dict) and rule.get("status") == "active"
+                            ]
+                            _, snapshot_origins = legacy_rule_records(
+                                {"rules": active_rules},
+                                relative,
+                                canonical_shared_source_texts(
+                                    source_texts,
+                                    f"{commit}:{relative}",
+                                    snapshot_project_sources,
+                                ),
+                            )
+                            preserve_projection_origins(
+                                snapshot_origins, historical_projection_origins
+                            )
                     historical = rule_records(payload, relative)
                 for rule_id, record in historical.items():
                     previous_location = snapshot_locations.get(rule_id)
