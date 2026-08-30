@@ -5,6 +5,7 @@ import tomllib
 from pathlib import Path
 
 from touchstone.cli import main
+from touchstone.harnesses import HarnessContext
 from touchstone.inspection import configuration_paths, effective_configuration
 
 
@@ -122,6 +123,30 @@ def test_harness_resolve_json_does_not_expose_machine_snapshot_path(tmp_path: Pa
     payload = json.loads(capsys.readouterr().out)
     assert payload["entrypoint"] == "AGENTS.md"
     assert str(tmp_path) not in json.dumps(payload)
+
+
+def test_harness_resolve_removes_external_snapshot_after_inspection(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:  # type: ignore[no-untyped-def]
+    config = _configured_repository(tmp_path)
+    snapshot = tmp_path / "snapshot-test"
+    entrypoint = snapshot / "harness/00-INDEX.md"
+    entrypoint.parent.mkdir(parents=True)
+    entrypoint.write_text("rules\n", encoding="utf-8")
+    context = HarnessContext(
+        mode="external",
+        source="acme/harness",
+        entrypoint=entrypoint,
+        revision="abc123",
+        context_root=snapshot,
+        evidence=("ref:origin/main",),
+    )
+    monkeypatch.setattr("touchstone.harnesses.resolve_harness", lambda *_args, **_kwargs: context)
+
+    assert main(["--config", str(config), "harness", "resolve", "--json"]) == 0
+    capsys.readouterr()
+
+    assert not snapshot.exists()
 
 
 def test_harness_registry_commands_mutate_only_the_local_registry(

@@ -8,13 +8,14 @@ they live here and are looked up by name instead of travelling in the state.
 from __future__ import annotations
 
 from contextvars import ContextVar
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from pathlib import Path
 
 from touchstone import engines, execution
 from touchstone.config import Config, LoopConfig, load
 from touchstone.forge import Forge
+from touchstone.harnesses import HarnessContext
 from touchstone.ledger import Ledger
 
 
@@ -28,6 +29,7 @@ class Context:
     forge: Forge
     ledger: Ledger
     _engines: dict[object, engines.Engine] = field(default_factory=dict)
+    harness: HarnessContext | None = None
 
     def loop(self, name: str) -> LoopConfig:
         return self.config.loop(name)
@@ -46,6 +48,24 @@ class Context:
             cached = engines.build(self.config, self.executor, resolved)
             self._engines[resolved] = cached
         return cached
+
+    def harness_prompt(self) -> str:
+        """Describe the one already-resolved Harness without reparsing config."""
+
+        if self.harness is None:
+            return ""
+        entrypoint = self.harness.entrypoint.relative_to(self.harness.context_root).as_posix()
+        lines = [
+            "## Resolved project Harness",
+            "",
+            f"- mode: {self.harness.mode}",
+            f"- source: {self.harness.source}",
+            f"- revision: {self.harness.revision}",
+            f"- entrypoint: {entrypoint}",
+        ]
+        if self.harness.mode == "external":
+            lines.append(f"- read-only context root: {self.harness.context_root}")
+        return "\n".join(lines) + "\n\n"
 
     @staticmethod
     def build(config: Config) -> Context:
@@ -75,6 +95,14 @@ def configure(config: Config) -> Context:
     return context
 
 
+def bind_harness(harness: HarnessContext) -> Context:
+    """Attach one immutable resolution to the context shared by all nodes."""
+
+    context = replace(current(), harness=harness)
+    _ACTIVE.set(context)
+    return context
+
+
 def reset() -> None:
     """Drop an explicit binding, primarily for isolated callers and tests."""
     _ACTIVE.set(None)
@@ -96,4 +124,4 @@ def current() -> Context:
     return _ACTIVE.get() or _discovered()
 
 
-__all__ = ["Context", "configure", "current", "reset"]
+__all__ = ["Context", "bind_harness", "configure", "current", "reset"]

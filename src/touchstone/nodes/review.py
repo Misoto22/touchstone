@@ -129,7 +129,7 @@ def run(state: dict[str, Any]) -> dict[str, Any]:
     if reviewable.refusal:
         return {"verdict": "skipped", "verdict_reason": reviewable.refusal}
     finding = state.get("finding", {})
-    prompt = (
+    prompt = context.harness_prompt() + (
         f"{brief}\n\n## The change under review\n\n### Stated intent\n\n"
         f"{finding.get('title', '')} — {finding.get('summary', '')}\n\n"
         f"### Diff\n\n```diff\n{reviewable.diff}\n```"

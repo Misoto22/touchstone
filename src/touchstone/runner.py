@@ -25,12 +25,22 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from touchstone.config import Config, LoopConfig
 from touchstone.events import EventLog, run_event
 from touchstone.graph import build
-from touchstone.nodes.context import configure, current
+from touchstone.harnesses import (
+    HarnessContext,
+    HarnessResolutionError,
+    cleanup_harness,
+    resolve_harness,
+)
+from touchstone.nodes.context import bind_harness, configure, current
 from touchstone.outcomes import ChangeState, RunOutcome, RunResult, from_legacy_outcome
 
 
 class Held(Exception):
     """A gate said no. Not an error: the loop declining to start is it working."""
+
+    def __init__(self, detail: str, *, reason_code: str = "safety-gate") -> None:
+        super().__init__(detail)
+        self.reason_code = reason_code
 
 
 def _lock(state_dir: Path) -> Path:
@@ -214,6 +224,8 @@ def execute(config: Config, *, loop: str, dry_run: bool = False) -> int:
     final_risk = ""
     final_verdict = ""
     final_pr: int | None = None
+    final_reason_code = ""
+    harness_context: HarnessContext | None = None
 
     try:
         lock = _lock(state_dir)
@@ -228,6 +240,7 @@ def execute(config: Config, *, loop: str, dry_run: bool = False) -> int:
                 outcome=RunOutcome.BLOCKED.value,
                 duration_seconds=time.monotonic() - started,
                 detail=str(held),
+                reason_code=held.reason_code,
             )
         )
         return 3
@@ -237,6 +250,12 @@ def execute(config: Config, *, loop: str, dry_run: bool = False) -> int:
     try:
         _gates(config, loop, dry_run=dry_run)
         path, branch = _worktree(config)
+        if config.harness is not None:
+            try:
+                harness_context = resolve_harness(config, target_checkout=Path(path))
+            except HarnessResolutionError as exc:
+                raise Held(exc.detail, reason_code=exc.reason_code) from None
+            bind_harness(harness_context)
         thread_id = f"{loop}-{branch}"
         with SqliteSaver.from_conn_string(str(state_dir / "checkpoints.sqlite")) as saver:
             app = build().compile(checkpointer=saver)
@@ -287,6 +306,7 @@ def execute(config: Config, *, loop: str, dry_run: bool = False) -> int:
     except Held as held:
         print(held)
         final_detail = str(held)
+        final_reason_code = held.reason_code
         final_outcome = RunOutcome.BLOCKED.value
         return RunResult(
             RunOutcome.BLOCKED,
@@ -300,6 +320,7 @@ def execute(config: Config, *, loop: str, dry_run: bool = False) -> int:
                 print(f"warning: {error}", file=sys.stderr)
             if cleanup_errors:
                 final_detail = "; ".join(filter(None, (final_detail, *cleanup_errors)))
+        cleanup_harness(harness_context)
         shutil.rmtree(lock, ignore_errors=True)
         event_log.append(
             run_event(
@@ -314,6 +335,10 @@ def execute(config: Config, *, loop: str, dry_run: bool = False) -> int:
                 verdict=final_verdict,
                 pr=final_pr,
                 detail=final_detail,
+                reason_code=final_reason_code,
+                harness_mode=harness_context.mode if harness_context else "",
+                harness_source=harness_context.source if harness_context else "",
+                harness_revision=harness_context.revision if harness_context else "",
             )
         )
 

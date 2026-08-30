@@ -31,6 +31,10 @@ class RunEvent:
     verdict: str = ""
     pr: int | None = None
     detail: str = ""
+    reason_code: str = ""
+    harness_mode: str = ""
+    harness_source: str = ""
+    harness_revision: str = ""
     ts: str = ""
 
 
@@ -73,6 +77,10 @@ def run_event(
     verdict: str = "",
     pr: int | None = None,
     detail: str = "",
+    reason_code: str = "",
+    harness_mode: str = "",
+    harness_source: str = "",
+    harness_revision: str = "",
 ) -> RunEvent:
     execution = config.execution
     host = platform.node()
@@ -97,10 +105,15 @@ def run_event(
         verdict=verdict,
         pr=pr,
         detail=detail,
+        reason_code=reason_code,
+        harness_mode=harness_mode,
+        harness_source=harness_source,
+        harness_revision=harness_revision,
     )
 
 
 def config_fingerprint(config: Any) -> str:
+    harness = getattr(config, "harness", None)
     safe = {
         "version": config.source.schema_version,
         "forge": {
@@ -113,6 +126,16 @@ def config_fingerprint(config: Any) -> str:
             "effort": config.engine.audit_effort,
         },
         "execution": config.execution.target,
+        "harness": (
+            {
+                "mode": harness.mode,
+                "source": harness.source,
+                "ref": harness.ref,
+                "entrypoint": harness.entrypoint,
+            }
+            if harness is not None
+            else None
+        ),
         "loops": {name: {"schedule": loop.schedule} for name, loop in sorted(config.loops.items())},
     }
     encoded = json.dumps(safe, sort_keys=True, separators=(",", ":")).encode()

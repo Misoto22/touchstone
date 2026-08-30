@@ -28,7 +28,7 @@ def _config_path(args: argparse.Namespace) -> int:
 
 
 def _config_check(args: argparse.Namespace) -> int:
-    from touchstone.harnesses import HarnessResolutionError, resolve_harness
+    from touchstone.harnesses import HarnessResolutionError, cleanup_harness, resolve_harness
 
     config = load(args.config)
     if config.harness is None:
@@ -49,6 +49,7 @@ def _config_check(args: argparse.Namespace) -> int:
             "reason": "harness-resolved",
             "detail": f"{context.mode}:{context.source}@{context.revision}",
         }
+        cleanup_harness(context)
     _print_payload(payload, json_output=args.json)
     return 0
 
@@ -106,7 +107,7 @@ def _harness_list(args: argparse.Namespace) -> int:
 
 
 def _harness_resolve(args: argparse.Namespace) -> int:
-    from touchstone.harnesses import HarnessResolutionError, resolve_harness
+    from touchstone.harnesses import HarnessResolutionError, cleanup_harness, resolve_harness
 
     try:
         context = resolve_harness(load(args.config))
@@ -124,6 +125,7 @@ def _harness_resolve(args: argparse.Namespace) -> int:
         "revision": context.revision,
         "evidence": list(context.evidence),
     }
+    cleanup_harness(context)
     _print_payload(payload, json_output=args.json)
     return 0
 
@@ -163,31 +165,34 @@ def _init(args: argparse.Namespace) -> int:
     visibility = args.visibility
     wake_minutes = args.wake_minutes
     if args.non_interactive:
-        if not engine or not model or not workflows or not schedule:
+        missing_workflow = args.backend == "actions" and not workflows
+        if not engine or not model or not schedule or missing_workflow:
             raise ConfigError(
-                "non-interactive init requires --engine, --model, --schedule, "
-                "and at least one --workflow"
+                "non-interactive init requires --engine, --model, and --schedule; "
+                "the actions backend also requires at least one --workflow"
             )
-        visibility = visibility or "public"
+        if args.backend == "actions":
+            visibility = visibility or "public"
     else:
         engine = engine or input("Engine (codex or claude) [codex]: ").strip() or "codex"
         model = model or input("Model: ").strip()
-        if not workflows:
+        if args.backend == "actions" and not workflows:
             workflow = input("Required workflow [ci.yml]: ").strip() or "ci.yml"
             workflows = (workflow,)
         schedule = schedule or input("Schedule [hourly@00]: ").strip() or "hourly@00"
-        visibility = (
-            visibility
-            or input("Repository visibility (public or private) [public]: ").strip()
-            or "public"
-        )
-        default_wake = 15 if visibility == "public" else 60
-        if wake_minutes is None:
-            wake_raw = input(f"GitHub Actions wake minutes [{default_wake}]: ").strip()
-            try:
-                wake_minutes = int(wake_raw) if wake_raw else default_wake
-            except ValueError:
-                raise ConfigError("GitHub Actions wake minutes must be an integer") from None
+        if args.backend == "actions":
+            visibility = (
+                visibility
+                or input("Repository visibility (public or private) [public]: ").strip()
+                or "public"
+            )
+            default_wake = 15 if visibility == "public" else 60
+            if wake_minutes is None:
+                wake_raw = input(f"GitHub Actions wake minutes [{default_wake}]: ").strip()
+                try:
+                    wake_minutes = int(wake_raw) if wake_raw else default_wake
+                except ValueError:
+                    raise ConfigError("GitHub Actions wake minutes must be an integer") from None
         managers = detect_package_managers(discovered.root)
         ambiguous = ambiguous_package_managers(managers)
         if package_manager is None and ambiguous:
@@ -200,6 +205,7 @@ def _init(args: argparse.Namespace) -> int:
             start=args.path,
             engine=engine,
             model=model or "",
+            backend=args.backend,
             workflows=workflows,
             schedule=schedule or "hourly@00",
             timezone=args.timezone,
@@ -722,6 +728,12 @@ def main(argv: list[str] | None = None) -> int:
     init.add_argument("--path", type=Path, default=Path.cwd(), help="repository or child path")
     init.add_argument("--output", type=Path, help="configuration destination")
     init.add_argument("--non-interactive", action="store_true")
+    init.add_argument(
+        "--backend",
+        choices=("local", "actions"),
+        default="actions",
+        help="local native scheduler or GitHub Actions (default: actions for compatibility)",
+    )
     init.add_argument("--engine", choices=("codex", "claude"))
     init.add_argument("--model")
     init.add_argument("--workflow", action="append", help="required default-branch workflow")
