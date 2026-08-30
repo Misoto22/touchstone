@@ -1,0 +1,4 @@
+{"rules":[
+  {"id":"TOUCH-AGENT-001","level":"MUST","scope":"nested","owner":"Misoto22/touchstone","sources":["agent-runtime/claude/package-lock.json","agent-runtime/codex/package-lock.json","README.md"],"enforcement":"test"},
+  {"id":"TOUCH-AGENT-002","level":"MUST","scope":"nested","owner":"Misoto22/touchstone","sources":["README.md","agent-runtime source"],"enforcement":"test"}
+]}

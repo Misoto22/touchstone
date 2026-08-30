@@ -1,0 +1,109 @@
+{
+  "schemaVersion": 2,
+  "files": [
+    {
+      "path": ".github/workflows/misoto-harness.yml",
+      "sha256": "919312fe65c5559d0c550ae8dd5ca2c6a806b6ab270ceda1924012e3a173d0eb"
+    },
+    {
+      "path": ".rulesync/harness-check.py",
+      "sha256": "a83468c73ed9928cc6caf89486824bd6ce7ef6e693549977b8f00c8401020e4c"
+    },
+    {
+      "path": ".rulesync/nested/agent-runtime/00-generated-metadata.md",
+      "sha256": "181071274b5a0b5f888c9ed3a9d805bdd81b4727d138983ea1736da72d41b906"
+    },
+    {
+      "path": ".rulesync/nested/agent-runtime/20-stack-typescript.md",
+      "sha256": "1246207c45378f26e2c4cacbe50350f146db9c704c1e4c867310feedbdd14e3c"
+    },
+    {
+      "path": ".rulesync/nested/tests/fixtures/00-generated-metadata.md",
+      "sha256": "2cbe7cc3e6cb0cfe0c7cef602ab2d647ac56ed80393dc15c0ab4184c98cb7bd3"
+    },
+    {
+      "path": ".rulesync/nested/tests/fixtures/20-stack-docs.md",
+      "sha256": "cfa1dffa7f7ff0c70826812c83fbe55a356a399adf4d67aeaed821a94d09f083"
+    },
+    {
+      "path": ".rulesync/package.json",
+      "sha256": "792a59d65b8de0bd240875d61016cc6fc21c2640136d416a140e77c7b7d60a6e"
+    },
+    {
+      "path": ".rulesync/pnpm-lock.yaml",
+      "sha256": "78c4e4b97504acc680ac69460f762bb23d6c48cd3f6899c91c7582144bce9004"
+    },
+    {
+      "path": ".rulesync/rules/00-generated-metadata.md",
+      "sha256": "71361c9fba33451a4c06307dad6444b44022367233ae561a3f43632afa554f1b"
+    },
+    {
+      "path": ".rulesync/rules/10-core-behavior.md",
+      "sha256": "63cb1ad920fb72a3afd66f892957b82a5a4800e9394c77b9e2c45c28fa2461d5"
+    },
+    {
+      "path": ".rulesync/rules/10-core-git.md",
+      "sha256": "d9a304cefb8027fb08b7bb29e49b633039df6048802e4bdff8bd029f1b29ebd5"
+    },
+    {
+      "path": ".rulesync/rules/10-core-security.md",
+      "sha256": "8143456468bfae48ef9a51803387a0718f574688ac096b8cd63774792a565ef8"
+    },
+    {
+      "path": ".rulesync/rules/10-core-testing.md",
+      "sha256": "4b42b46eaabe0fb5448b0f722d1fcb708d5ed18c99df53e0e0d62f00abed0593"
+    },
+    {
+      "path": ".rulesync/rules/20-stack-python.md",
+      "sha256": "bee22a2cd529da5f06ed4426c81522eeac06fdcd1e222011f58978713644d9e1"
+    },
+    {
+      "path": ".rulesync/shared-rules.json",
+      "sha256": "9a3c7a9e8942920c34c33e39d9484ba600a59c03cd3e0dae2e9b75a214042834"
+    },
+    {
+      "path": "AGENTS.md",
+      "sha256": "5d1afe8e93ce77505a246860ddc74e15cd9571b954406afe9d9bc3cb3e518645"
+    },
+    {
+      "path": "CLAUDE.md",
+      "sha256": "20352b5cf7eca859e271bb92afaafb42adbc03f3f288b8ddd03ab7c8ba8e0057"
+    },
+    {
+      "path": "GEMINI.md",
+      "sha256": "52ec18ffc9ae4d109c7e3d34d7c6fe44bc847b24b72ad8f2d1e8f0e911854198"
+    },
+    {
+      "path": "agent-runtime/AGENTS.md",
+      "sha256": "1cbaee2060f4044cc9aaa4b25f297c55fd5a3b89fc2ccce172263d64f63061bb"
+    },
+    {
+      "path": "agent-runtime/CLAUDE.md",
+      "sha256": "f61f4877fc8a107d9a56f27d3352eff859be2959f6737ce13bb2ca330d4490b6"
+    },
+    {
+      "path": "agent-runtime/GEMINI.md",
+      "sha256": "789a4e536baa42dac70d30a00c7cd7196ab5fef062f39f7130682e430af594ee"
+    },
+    {
+      "path": "rulesync.jsonc",
+      "sha256": "06575d7cc265187bd7f9e80ebf95b1623bad991472d541c83b1d2c5f805ec17f"
+    },
+    {
+      "path": "rulesync.lock.json",
+      "sha256": "9a439390727aeb1aec72583b70901a82634843af0fa079105cf8fe9234b56c9f"
+    },
+    {
+      "path": "tests/fixtures/AGENTS.md",
+      "sha256": "09d5c54bc7c3896d86d56783c16ff300ec058b7f15dc895f48a53934dcf141e6"
+    },
+    {
+      "path": "tests/fixtures/CLAUDE.md",
+      "sha256": "5954e5da05f6026492ea0dcb942b56ff7dccad84576ddb148bbca534f563decf"
+    },
+    {
+      "path": "tests/fixtures/GEMINI.md",
+      "sha256": "9de78c3e3195ef67e2b7c648528af3060b2bb637ae8dec47a73834c4517e4656"
+    }
+  ]
+}

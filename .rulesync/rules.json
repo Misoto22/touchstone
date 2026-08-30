@@ -1,0 +1,7 @@
+{"rules":[
+  {"id":"TOUCH-ARCH-001","level":"MUST","scope":"project","owner":"Misoto22/touchstone","sources":["README.md"],"enforcement":"test"},
+  {"id":"TOUCH-SEC-001","level":"MUST","scope":"project","owner":"Misoto22/touchstone","sources":["README.md"],"enforcement":"test"},
+  {"id":"TOUCH-CONF-001","level":"MUST","scope":"project","owner":"Misoto22/touchstone","sources":["README.md"],"enforcement":"test"},
+  {"id":"TOUCH-GATE-001","level":"MUST","scope":"project","owner":"Misoto22/touchstone","sources":["README.md"],"enforcement":"test"},
+  {"id":"TOUCH-TEST-001","level":"MUST","scope":"project","owner":"Misoto22/touchstone","sources":["pyproject.toml","README.md"],"enforcement":"test"}
+]}
