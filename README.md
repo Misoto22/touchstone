@@ -86,8 +86,10 @@ Install Touchstone, then rehearse one loop inside a GitHub repository you are au
 ```bash
 pipx install touchstone-agent
 cd /path/to/your/repository
-touchstone init
+touchstone init --backend local
 touchstone profile detect
+touchstone config check
+touchstone harness resolve
 touchstone doctor
 touchstone setup --dry-run
 touchstone setup
@@ -95,24 +97,21 @@ touchstone doctor
 touchstone run code --dry-run
 ```
 
-`touchstone init` finds the Git root, GitHub slug, default branch, package managers, workspace Targets, and stack Profiles. A Target ID comes from the package name in `package.json` or `pyproject.toml`, so it survives renaming the checkout directory; a repository-relative path hash covers collisions and unnamed Targets. It asks for the engine, model, required default-branch workflow, Loop schedule, repository visibility, and hosted wake cadence, then writes the project-owned and generated configuration files. The rehearsal runs the configured model and validation path but does not publish.
+`touchstone init --backend local` finds the Git root, GitHub slug, default branch, package managers, workspace Targets, and stack Profiles. A Target ID comes from the package name in `package.json` or `pyproject.toml`, with a repository-relative path hash for collisions and unnamed Targets. Local initialization asks only for the engine, model, and Loop schedule; GitHub Actions visibility and wake cadence are not local-backend decisions. It writes an embedded Harness declaration plus the project-owned and generated configuration files. The rehearsal runs the configured model and validation path but does not publish.
 
 **Prerequisites** — Python 3.12+, pipx, Git, authenticated `gh`, and an authenticated Codex or Claude CLI. Native scheduling is supported on macOS and Linux.
 
 For non-interactive initialization, provide every decision explicitly:
 
 ```bash
-touchstone init --non-interactive \
+touchstone init --backend local --non-interactive \
   --engine codex \
   --model YOUR_MODEL_ID \
-  --workflow ci.yml \
-  --schedule hourly@00 \
-  --timezone Australia/Sydney \
-  --visibility public \
-  --wake-minutes 15
+  --schedule weekly@SUN,03:00 \
+  --timezone Australia/Sydney
 ```
 
-Use `--visibility private` for a private repository. Hosted wake cadence accepts `5`, `10`, `15`, `20`, `30`, or `60` minutes; defaults are 15 minutes for public repositories and 60 minutes for private repositories.
+Use `--backend actions`, `--workflow`, `--visibility`, and `--wake-minutes` only for hosted execution.
 
 ---
 
@@ -139,7 +138,7 @@ git add .github/workflows/touchstone.yml touchstone.toml .touchstone/generated.t
 git commit -m "ci: add touchstone audit loop"
 ```
 
-`actions init` resolves the release tag matching the installed `touchstone-agent` version — `v0.1.2` today — to a 40-character commit SHA, so the generated workflow pins the revision this CLI documents rather than a moving branch. Automation may pass an audited revision with `--action-sha`, and must when a development build is installed. `--check` is read-only and exits `3` when the committed workflow has drifted.
+`actions init` resolves the release tag matching the installed `touchstone-agent` version — `v0.1.2` is the currently published release — to a 40-character commit SHA, so the generated workflow pins the revision this CLI documents rather than a moving branch. Automation may pass an audited revision with `--action-sha`, and must when a development or release-candidate build is installed. `--check` is read-only and exits `3` when the committed workflow has drifted.
 
 > [!WARNING]
 > `touchstone actions setup` opens GitHub twice: first to review and create an owner-controlled GitHub App, then to install it for only the selected repository. Read the owner, repository, repository scope, and permissions on both GitHub pages before confirming. The one-time private key is piped directly to `gh secret set`; Touchstone never writes it to disk.
@@ -249,6 +248,19 @@ Set `engine.base_url` to send model calls to a self-hosted or third-party endpoi
 
 Unknown configuration keys fail closed. Relative paths resolve from the configuration file. Secrets do not belong in TOML; secret-shaped SSH environment keys are rejected. When `state_dir` is omitted, Touchstone uses an isolated per-repository directory under `$XDG_STATE_HOME/touchstone` or `~/.local/state/touchstone`.
 
+Inspect exactly what Touchstone loaded before a run:
+
+```bash
+touchstone --version
+touchstone config path
+touchstone config check
+touchstone config show
+touchstone config show --effective --json
+touchstone config explain harness.mode
+```
+
+`path`, `check`, `show`, and `explain` are read-only. Effective JSON represents every field as `{ "value": ..., "source": ... }`; environment overrides are named as `environment:TOUCHSTONE_*`. Invalid configuration exits `78`; blocked resolution or drift exits `3`.
+
 Upgrade an unversioned configuration to v1, then explicitly preview and apply v2:
 
 ```bash
@@ -259,6 +271,37 @@ touchstone config migrate-v2 touchstone.toml --timezone UTC --hourly-minute 0 --
 
 Both migrations write a sibling backup before replacing project configuration. V2 migration refuses to overwrite an existing generated file. Stack Profiles, per-Target Validation Gates, and the GitHub Actions backend require v2; local scheduling, `run`, `run-due`, and `resume` do not.
 
+#### Harness selection
+
+Exactly one project Harness is selected for every explicitly configured run. User-level collaboration and machine-safety rules remain a baseline, not a second project Harness. Personal repositories normally embed their generated contract:
+
+```toml
+[harness]
+mode = "embedded"
+entrypoint = "AGENTS.md"
+```
+
+An organisation repository can instead name a canonical external Harness and immutable Git ref without committing a machine path:
+
+```toml
+[harness]
+mode = "external"
+source = "Efficient-Pty-Ltd/efficient-harness"
+ref = "origin/main"
+entrypoint = "harness/00-INDEX.md"
+```
+
+Register the checkout only on the machine that runs Touchstone:
+
+```bash
+touchstone harness register Efficient-Pty-Ltd/efficient-harness --path /local/checkout
+touchstone harness list
+touchstone harness resolve
+touchstone harness unregister Efficient-Pty-Ltd/efficient-harness
+```
+
+Resolution verifies the Git remote identity, fetches the named remote, materializes a read-only snapshot from the resolved commit, and records that revision. It never reads uncommitted external Harness rules. Existing v1/v2 configurations without `[harness]` retain legacy repository-instruction discovery.
+
 ---
 
 ### Projects Across Repositories
@@ -268,9 +311,12 @@ One project can cover many repositories. The project file lives in its own repos
 ```bash
 touchstone sync --project projects/personal.toml --check
 touchstone sync --project projects/personal.toml --pr
+touchstone sync --project projects/personal.toml --checkouts harness.local.toml --check
 ```
 
 `--check` is read-only and exits `3` when a member differs from what the project renders. `--pr` opens one pull request per drifted member. There is no direct-write path: the configuration file is the root of Touchstone's permission model, so something able to edit it unattended could enable a Validation Gate for itself.
+
+A portable member may use `checkout = "misoto22-site"` instead of `path`. `--checkouts harness.local.toml` resolves it from a machine-local file containing only `[checkouts]` and absolute paths. Exactly one of `path` or `checkout` is required; a missing logical checkout reports `checkout-not-installed`.
 
 Each member's `touchstone.toml` names the rendered fragment and overrides anything it disagrees with:
 
@@ -364,7 +410,7 @@ uv build
 uv run twine check dist/*
 ```
 
-The current release is [v0.1.2](https://github.com/Misoto22/touchstone/releases/tag/v0.1.2), published as [`touchstone-agent` on PyPI](https://pypi.org/project/touchstone-agent/). GitHub Releases publish through PyPI trusted publishing; the repository stores no PyPI API token.
+The current published release is [v0.1.2](https://github.com/Misoto22/touchstone/releases/tag/v0.1.2) on [`touchstone-agent` on PyPI](https://pypi.org/project/touchstone-agent/); the release candidate is `v0.1.3`. GitHub Releases publish through PyPI trusted publishing; the repository stores no PyPI API token.
 
 See [CONTRIBUTING.md](https://github.com/Misoto22/touchstone/blob/main/CONTRIBUTING.md) for the TDD and pull-request workflow and [CHANGELOG.md](https://github.com/Misoto22/touchstone/blob/main/CHANGELOG.md) for user-facing changes.
 

@@ -49,7 +49,9 @@ def test_readme_starts_with_the_installable_first_run() -> None:
     getting_started = readme.split("### Getting Started", 1)[1].split("\n---\n", 1)[0]
     commands = [
         "pipx install touchstone-agent",
-        "touchstone init",
+        "touchstone init --backend local",
+        "touchstone config check",
+        "touchstone harness resolve",
         "touchstone doctor",
         "touchstone setup",
         "touchstone run code --dry-run",
@@ -59,6 +61,29 @@ def test_readme_starts_with_the_installable_first_run() -> None:
     assert positions == sorted(positions)
     assert getting_started.count("touchstone doctor") == 2
     assert "touchstone install-scheduler" not in getting_started
+
+
+def test_readme_documents_the_complete_harness_aware_inspection_surface() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    for command in (
+        "touchstone --version",
+        "touchstone config path",
+        "touchstone config check",
+        "touchstone config show",
+        "touchstone config show --effective --json",
+        "touchstone config explain harness.mode",
+        "touchstone harness register",
+        "touchstone harness list",
+        "touchstone harness resolve",
+        "touchstone harness unregister",
+        "touchstone sync --project",
+        "--checkouts harness.local.toml",
+    ):
+        assert command in readme
+    assert '[harness]\nmode = "embedded"' in readme
+    assert 'source = "Efficient-Pty-Ltd/efficient-harness"' in readme
+    assert "Exactly one project Harness" in readme
 
 
 def test_readme_documents_profiles_and_both_execution_backends() -> None:
@@ -120,8 +145,8 @@ def test_readme_links_the_published_release() -> None:
     version = metadata["project"]["version"]
 
     assert "https://pypi.org/project/touchstone-agent/" in readme
-    assert f"https://github.com/Misoto22/touchstone/releases/tag/v{version}" in readme
-    assert "release candidate" not in readme
+    assert "https://github.com/Misoto22/touchstone/releases/tag/v0.1.2" in readme
+    assert f"release candidate is `v{version}`" in readme
     assert "Before the first PyPI release" not in readme
 
 
@@ -172,7 +197,8 @@ def test_readme_states_the_default_action_reference_and_manager_behaviour() -> N
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
-    assert f"`v{metadata['project']['version']}` today" in readme
+    assert f"release candidate is `v{metadata['project']['version']}`" in readme
+    assert "`v0.1.2` is the currently published release" in readme
     assert "rather than a moving branch" in readme
     assert "package name in `package.json` or `pyproject.toml`" in readme
     for command in (

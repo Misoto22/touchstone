@@ -20,6 +20,10 @@ timezone = "Australia/Sydney"
 name = "claude"
 model = "your-model-id"
 
+[defaults.harness]
+mode = "embedded"
+entrypoint = "AGENTS.md"
+
 [defaults.engine.cheap]
 name = "claude"
 model = "your-small-model-id"
@@ -39,10 +43,11 @@ brief = "builtin:naming"
 label = "touchstone:naming"
 schedule = "weekly@SUN,04:00"
 
-# Each member names its checkout, relative to this file, and which of the
-# project's Loops it takes. Omitting `loops` takes all of them.
+# Each member names either a path relative to this file or a portable logical
+# checkout resolved by `--checkouts harness.local.toml`. Omitting `loops` takes
+# all of them.
 [member."acme/widgets"]
-path = "../widgets"
+checkout = "widgets"
 loops = ["hardcode", "naming"]
 
 [member."acme/gadgets"]
