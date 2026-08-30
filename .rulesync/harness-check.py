@@ -496,6 +496,7 @@ def validate_historical_identities() -> None:
         raise CheckError("registry history exceeds object limit")
 
     historical_identities: dict[str, tuple[object, ...]] = {}
+    historical_projection_origins: dict[str, str] = {}
     lifecycle_states: dict[str, dict[str, str]] = {}
     schema_states: dict[str, set[str]] = {}
     projection_states: dict[str, bool] = {}
@@ -596,6 +597,28 @@ def validate_historical_identities() -> None:
                             validate_shared_projections(
                                 payload, registered, source_texts, f"{commit}:{relative}"
                             )
+                            snapshot_origins: dict[str, str] = {}
+                            for source_path, rule_ids in projection_records(
+                                payload, f"{commit}:{relative}"
+                            ).items():
+                                source_name = source_path.rsplit("/", 1)[-1]
+                                for rule_id in rule_ids:
+                                    previous_snapshot_origin = snapshot_origins.get(rule_id)
+                                    if (
+                                        previous_snapshot_origin is not None
+                                        and previous_snapshot_origin != source_name
+                                    ):
+                                        raise CheckError(
+                                            f"historical shared projection is ambiguous: {rule_id}"
+                                        )
+                                    snapshot_origins[rule_id] = source_name
+                            for rule_id, source_name in snapshot_origins.items():
+                                previous_origin = historical_projection_origins.get(rule_id)
+                                if previous_origin is not None and previous_origin != source_name:
+                                    raise CheckError(
+                                        f"historical shared projection origin changed: {rule_id}"
+                                    )
+                                historical_projection_origins[rule_id] = source_name
                             inherited_projections = True
                         elif inherited_projections:
                             raise CheckError("historical shared projection contract regressed")
