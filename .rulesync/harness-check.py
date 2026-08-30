@@ -316,7 +316,7 @@ def rule_records(
 
 def legacy_rule_records(
     payload: dict[str, object], label: str, sources: dict[str, str]
-) -> dict[str, tuple[tuple[object, ...], str]]:
+) -> tuple[dict[str, tuple[tuple[object, ...], str]], dict[str, str]]:
     rules = payload.get("rules")
     if not isinstance(rules, list):
         raise CheckError(f"legacy registry rules must be a list: {label}")
@@ -345,6 +345,7 @@ def legacy_rule_records(
                 raise CheckError(f"legacy stack projection mismatch: {source_path}")
             stack_projections[source_name] = projection
     records: dict[str, tuple[tuple[object, ...], str]] = {}
+    origins: dict[str, str] = {}
     for rule in rules:
         if not isinstance(rule, dict) or not isinstance(rule.get("id"), str):
             raise CheckError(f"invalid legacy registry entry: {label}")
@@ -362,12 +363,13 @@ def legacy_rule_records(
             or declaration_record[0][0] != level
         ):
             raise CheckError(f"invalid legacy rule identity: {rule_id}")
-        declaration, _source_name = declaration_record
+        declaration, source_name = declaration_record
         _, name, statement = declaration
         records[rule_id] = ((name, level, scope, statement), "active")
+        origins[rule_id] = source_name
     if set(declarations) != set(records):
         raise CheckError(f"legacy registry/source rule mismatch: {label}")
-    return records
+    return records, origins
 
 
 def read_git_blob(process: subprocess.Popen[bytes], spec: str) -> bytes | None:
@@ -579,7 +581,17 @@ def validate_historical_identities() -> None:
                     else:
                         source_path = f"{relative.rsplit('/', 1)[0]}/50-project.md"
                         legacy_sources = {source_path: source_texts.get(source_path, "")}
-                    historical = legacy_rule_records(payload, relative, legacy_sources)
+                    historical, legacy_origins = legacy_rule_records(
+                        payload, relative, legacy_sources
+                    )
+                    if relative == ".rulesync/shared-rules.json":
+                        for rule_id, source_name in legacy_origins.items():
+                            previous_origin = historical_projection_origins.get(rule_id)
+                            if previous_origin is not None and previous_origin != source_name:
+                                raise CheckError(
+                                    f"historical shared projection origin changed: {rule_id}"
+                                )
+                            historical_projection_origins[rule_id] = source_name
                 else:
                     inherited_v2.add(relative)
                     if relative == ".rulesync/shared-rules.json":
