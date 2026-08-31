@@ -61,6 +61,9 @@ HTML_BLOCK_TYPE1_START = re.compile(
     r"^ {0,3}<(?:pre|script|style|textarea)(?=[ \t>]|$)", re.IGNORECASE
 )
 HTML_BLOCK_TYPE1_END = re.compile(r"</(?:pre|script|style|textarea)>", re.IGNORECASE)
+DISPLAYED_HTML_BLOCK_TYPE1_START = re.compile(
+    r"^ {0,3}<(?:pre|textarea)(?=[ \t>]|$)", re.IGNORECASE
+)
 HTML_BLOCK_TYPE6_NAMES = (
     "address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|"
     "details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|"
@@ -357,10 +360,15 @@ def link_suffix_end(
                 escaped = True
             elif character == "]":
                 if known_reference_labels is not None:
-                    raw_label = text[start + 1 : index] or fallback_label
+                    explicit_label = text[start + 1 : index]
+                    raw_label = explicit_label or fallback_label
                     label = normalize_reference_label(raw_label) if raw_label is not None else None
                     if label not in known_reference_labels:
-                        return start
+                        return (
+                            index + 1
+                            if not explicit_label and fallback_label is not None
+                            else start
+                        )
                 return index + 1
         return None
     return inline_link_suffix_end(text, start) if text.startswith("(", start) else start
@@ -675,35 +683,73 @@ def without_html_blocks(text: str) -> str:
     return "".join(rendered)
 
 
-def restore_visible_html_content(original: str, block_text: str, masked_text: str) -> str:
-    if len(original) != len(block_text) or len(original) != len(masked_text):
+def restore_visible_html_content(
+    original: str, code_text: str, block_text: str, masked_text: str
+) -> str:
+    if not len(original) == len(code_text) == len(block_text) == len(masked_text):
         raise CheckError("Markdown masking changed source length")
     rendered = list(masked_text)
     offset = 0
     in_visible_block = False
+    in_displayed_type1_block = False
+    in_hidden_type1_block = False
     visible_container_indent = 0
     visible_quote_depth = 0
+    hidden_container_indent = 0
+    hidden_quote_depth = 0
     previous_blank = True
-    for original_line, block_line in zip(
-        original.splitlines(keepends=True), block_text.splitlines(keepends=True), strict=True
+    for original_line, code_line, block_line in zip(
+        original.splitlines(keepends=True),
+        code_text.splitlines(keepends=True),
+        block_text.splitlines(keepends=True),
+        strict=True,
     ):
         original_body = original_line.rstrip(LINE_BREAK_CHARACTERS)
+        code_body = code_line.rstrip(LINE_BREAK_CHARACTERS)
         block_body = block_line.rstrip(LINE_BREAK_CHARACTERS)
         content, line_container_indent, line_quote_depth = container_content_details(block_body)
+        code_content, code_container_indent, code_quote_depth = container_content_details(code_body)
+        if in_hidden_type1_block and not continues_block_container(
+            original_body, hidden_container_indent, hidden_quote_depth
+        ):
+            in_hidden_type1_block = False
         if in_visible_block and not continues_block_container(
             original_body, visible_container_indent, visible_quote_depth
         ):
             in_visible_block = False
+            in_displayed_type1_block = False
         restore_line = False
-        if in_visible_block:
+        if in_hidden_type1_block:
+            if HTML_BLOCK_TYPE1_END.search(container_content(original_body)):
+                in_hidden_type1_block = False
+        elif in_visible_block:
             original_content = container_content(original_body)
-            if original_content.strip():
+            if in_displayed_type1_block:
+                restore_line = True
+                if HTML_BLOCK_TYPE1_END.search(original_content):
+                    in_visible_block = False
+                    in_displayed_type1_block = False
+            elif original_content.strip():
                 restore_line = True
             else:
                 in_visible_block = False
         else:
             stripped = content.lstrip(" ")
-            if HTML_BLOCK_TYPE6_START.match(content) or (
+            if HTML_BLOCK_TYPE1_START.match(
+                code_content
+            ) and not DISPLAYED_HTML_BLOCK_TYPE1_START.match(code_content):
+                if not HTML_BLOCK_TYPE1_END.search(code_content):
+                    in_hidden_type1_block = True
+                    hidden_container_indent = code_container_indent
+                    hidden_quote_depth = code_quote_depth
+            elif DISPLAYED_HTML_BLOCK_TYPE1_START.match(code_content):
+                restore_line = True
+                if not HTML_BLOCK_TYPE1_END.search(code_content):
+                    in_visible_block = True
+                    in_displayed_type1_block = True
+                    visible_container_indent = code_container_indent
+                    visible_quote_depth = code_quote_depth
+            elif HTML_BLOCK_TYPE6_START.match(content) or (
                 previous_blank
                 and (
                     COMMONMARK_OPEN_TAG.fullmatch(stripped)
@@ -717,6 +763,49 @@ def restore_visible_html_content(original: str, block_text: str, masked_text: st
         if restore_line:
             rendered[offset : offset + len(original_line)] = original_line
         offset += len(original_line)
+        previous_blank = bool(
+            not content.strip()
+            or ATX_HEADING_OPEN.match(content)
+            or THEMATIC_BREAK.match(content)
+            or SETEXT_HEADING_UNDERLINE.match(content)
+        )
+    return "".join(rendered)
+
+
+def without_visible_html_blocks(text: str) -> str:
+    rendered: list[str] = []
+    in_visible_block = False
+    visible_container_indent = 0
+    visible_quote_depth = 0
+    previous_blank = True
+    for line in text.splitlines(keepends=True):
+        body = line.rstrip(LINE_BREAK_CHARACTERS)
+        content, line_container_indent, line_quote_depth = container_content_details(body)
+        if in_visible_block and not continues_block_container(
+            body, visible_container_indent, visible_quote_depth
+        ):
+            in_visible_block = False
+        if in_visible_block:
+            if content.strip():
+                rendered.append(mask_code_characters(line))
+            else:
+                rendered.append(line)
+                in_visible_block = False
+        else:
+            stripped = content.lstrip(" ")
+            if HTML_BLOCK_TYPE6_START.match(content) or (
+                previous_blank
+                and (
+                    COMMONMARK_OPEN_TAG.fullmatch(stripped)
+                    or COMMONMARK_CLOSING_TAG.fullmatch(stripped)
+                )
+            ):
+                rendered.append(mask_code_characters(line))
+                in_visible_block = True
+                visible_container_indent = line_container_indent
+                visible_quote_depth = line_quote_depth
+            else:
+                rendered.append(line)
         previous_blank = bool(
             not content.strip()
             or ATX_HEADING_OPEN.match(content)
@@ -1088,6 +1177,20 @@ def registered_left_prose_flags(
     return flags
 
 
+def unresolved_adjacent_label_starts(
+    tokens: list[tuple[str, int, int]], known_reference_labels: frozenset[str]
+) -> frozenset[int]:
+    return frozenset(
+        start
+        for token, start, _ in tokens
+        if token
+        and (
+            (normalized_label := normalize_reference_label(token)) is None
+            or normalized_label not in known_reference_labels
+        )
+    )
+
+
 def declaration_candidates(
     text: str,
     known_reference_labels: frozenset[str] | None = None,
@@ -1102,6 +1205,9 @@ def declaration_candidates(
         left_prose = registered_left_prose_flags(
             line, tokens, known_reference_labels, registered_rule_ids
         )
+        unresolved_adjacent_starts = unresolved_adjacent_label_starts(
+            tokens, known_reference_labels
+        )
         for token, start, end in tokens:
             left_has_prose = left_prose.get(start)
             if (
@@ -1115,6 +1221,8 @@ def declaration_candidates(
                     or left_has_prose is True
                 )
             ):
+                continue
+            if end in unresolved_adjacent_starts:
                 continue
             rule_id = rule_identity(token, known_reference_labels)
             if rule_id is None:
@@ -1133,6 +1241,7 @@ def declaration_candidates(
     left_prose = registered_left_prose_flags(
         rendered, tokens, known_reference_labels, registered_rule_ids
     )
+    unresolved_adjacent_starts = unresolved_adjacent_label_starts(tokens, known_reference_labels)
     for token, start, end in tokens:
         left_has_prose = left_prose.get(start)
         if (
@@ -1146,6 +1255,8 @@ def declaration_candidates(
                 or left_has_prose is True
             )
         ):
+            continue
+        if end in unresolved_adjacent_starts:
             continue
         rule_id = rule_identity(token, known_reference_labels)
         if rule_id is None:
@@ -1174,14 +1285,15 @@ def declaration_candidates(
 def declaration_records(
     text: str, label: str, registered_rule_ids: frozenset[str] = frozenset()
 ) -> list[tuple[str, str, str, str]]:
-    block_text = without_html_blocks(without_block_code(text))
+    code_text = without_block_code(text)
+    block_text = without_html_blocks(code_text)
     masked_candidate_text = without_markdown_code(block_text)
     candidate_text = without_html_comments(
-        restore_visible_html_content(text, block_text, masked_candidate_text)
+        restore_visible_html_content(text, code_text, block_text, masked_candidate_text)
     )
-    candidates = declaration_candidates(
-        candidate_text, reference_labels(candidate_text), registered_rule_ids
-    )
+    reference_text = without_visible_html_blocks(without_html_comments(block_text))
+    known_reference_labels = reference_labels(reference_text)
+    candidates = declaration_candidates(candidate_text, known_reference_labels, registered_rule_ids)
     declarations = DECLARATION.findall(without_html_comments(block_text))
     if len(declarations) != len(candidates):
         raise CheckError(f"invalid rule declaration: {label}")
