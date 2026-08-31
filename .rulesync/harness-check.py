@@ -16,6 +16,7 @@ from pathlib import Path
 ROOT = Path.cwd().resolve()
 RULE_ID = re.compile(r"^(?:HAR|[A-Z][A-Z0-9]{1,11})-[A-Z][A-Z0-9]{1,11}-\d{3}$")
 RULE_LIKE_TOKEN = re.compile(r"(?s)^.*\S.*$")
+MAX_BRACKET_NESTING = 32
 DECLARATION = re.compile(
     r"^- \*\*\[([^\]\n]+)\] (MUST NOT|SHOULD NOT|MUST|SHOULD|MAY) — "
     r"(.+?)\.\*\* (\S.*)$",
@@ -1005,6 +1006,8 @@ def bracket_tokens(line: str) -> list[tuple[str, int, int]]:
                 continue
         if escaped:
             if character == "[":
+                if len(stack) >= MAX_BRACKET_NESTING:
+                    raise CheckError(f"Markdown bracket nesting exceeds {MAX_BRACKET_NESTING}")
                 stack.append(index)
             elif character == "]" and stack:
                 start = stack.pop()
@@ -1013,6 +1016,8 @@ def bracket_tokens(line: str) -> list[tuple[str, int, int]]:
         elif character == "\\":
             escaped = True
         elif character == "[":
+            if len(stack) >= MAX_BRACKET_NESTING:
+                raise CheckError(f"Markdown bracket nesting exceeds {MAX_BRACKET_NESTING}")
             stack.append(index)
         elif character == "]" and stack:
             start = stack.pop()
@@ -1209,6 +1214,7 @@ def declaration_candidates(
             tokens, known_reference_labels
         )
         for token, start, end in tokens:
+            rule_id = rule_identity(token, known_reference_labels)
             left_has_prose = left_prose.get(start)
             if (
                 start
@@ -1218,13 +1224,15 @@ def declaration_candidates(
                         (normalized_label := normalize_reference_label(token)) is not None
                         and normalized_label in known_reference_labels
                     )
-                    or left_has_prose is True
+                    or (
+                        left_has_prose is True
+                        and (rule_id is None or not RULE_ID.fullmatch(rule_id))
+                    )
                 )
             ):
                 continue
             if end in unresolved_adjacent_starts:
                 continue
-            rule_id = rule_identity(token, known_reference_labels)
             if rule_id is None:
                 continue
             suffix = after_link_suffix(
@@ -1243,6 +1251,7 @@ def declaration_candidates(
     )
     unresolved_adjacent_starts = unresolved_adjacent_label_starts(tokens, known_reference_labels)
     for token, start, end in tokens:
+        rule_id = rule_identity(token, known_reference_labels)
         left_has_prose = left_prose.get(start)
         if (
             start
@@ -1252,13 +1261,12 @@ def declaration_candidates(
                     (normalized_label := normalize_reference_label(token)) is not None
                     and normalized_label in known_reference_labels
                 )
-                or left_has_prose is True
+                or (left_has_prose is True and (rule_id is None or not RULE_ID.fullmatch(rule_id)))
             )
         ):
             continue
         if end in unresolved_adjacent_starts:
             continue
-        rule_id = rule_identity(token, known_reference_labels)
         if rule_id is None:
             continue
         link_result = after_link_suffix_with_break(
