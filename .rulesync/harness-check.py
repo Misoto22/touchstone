@@ -17,6 +17,7 @@ ROOT = Path.cwd().resolve()
 RULE_ID = re.compile(r"^(?:HAR|[A-Z][A-Z0-9]{1,11})-[A-Z][A-Z0-9]{1,11}-\d{3}$")
 RULE_LIKE_TOKEN = re.compile(r"(?s)^.*\S.*$")
 MAX_BRACKET_NESTING = 32
+MAX_INLINE_BACKTICK_DELIMITER = 32
 DECLARATION = re.compile(
     r"^- \*\*\[([^\]\n]+)\] (MUST NOT|SHOULD NOT|MUST|SHOULD|MAY) — "
     r"(.+?)\.\*\* (\S.*)$",
@@ -684,6 +685,18 @@ def without_html_blocks(text: str) -> str:
     return "".join(rendered)
 
 
+def opaque_html_terminator(content: str) -> str | None:
+    if re.match(r"^ {0,3}<!--", content):
+        return "-->"
+    if re.match(r"^ {0,3}<\?", content):
+        return "?>"
+    if re.match(r"^ {0,3}<![A-Z]", content):
+        return ">"
+    if re.match(r"^ {0,3}<!\[CDATA\[", content):
+        return "]]>"
+    return None
+
+
 def restore_visible_html_content(
     original: str, code_text: str, block_text: str, masked_text: str
 ) -> str:
@@ -694,10 +707,13 @@ def restore_visible_html_content(
     in_visible_block = False
     in_displayed_type1_block = False
     in_hidden_type1_block = False
+    opaque_terminator: str | None = None
     visible_container_indent = 0
     visible_quote_depth = 0
     hidden_container_indent = 0
     hidden_quote_depth = 0
+    opaque_container_indent = 0
+    opaque_quote_depth = 0
     previous_blank = True
     for original_line, code_line, block_line in zip(
         original.splitlines(keepends=True),
@@ -714,13 +730,28 @@ def restore_visible_html_content(
             original_body, hidden_container_indent, hidden_quote_depth
         ):
             in_hidden_type1_block = False
+        if opaque_terminator is not None and not continues_block_container(
+            original_body, opaque_container_indent, opaque_quote_depth
+        ):
+            opaque_terminator = None
         if in_visible_block and not continues_block_container(
             original_body, visible_container_indent, visible_quote_depth
         ):
             in_visible_block = False
             in_displayed_type1_block = False
         restore_start: int | None = None
-        if in_hidden_type1_block:
+        if opaque_terminator is not None:
+            original_content = container_content(original_body)
+            terminator_start = original_content.find(opaque_terminator)
+            if terminator_start != -1:
+                restore_start = (
+                    len(original_body)
+                    - len(original_content)
+                    + terminator_start
+                    + len(opaque_terminator)
+                )
+                opaque_terminator = None
+        elif in_hidden_type1_block:
             original_content = container_content(original_body)
             if end_match := HTML_BLOCK_TYPE1_END.search(original_content):
                 in_hidden_type1_block = False
@@ -738,7 +769,22 @@ def restore_visible_html_content(
                 in_visible_block = False
         else:
             stripped = content.lstrip(" ")
-            if HTML_BLOCK_TYPE1_START.match(
+            current_opaque_terminator = opaque_html_terminator(code_content)
+            if current_opaque_terminator is not None:
+                original_content = container_content(original_body)
+                terminator_start = original_content.find(current_opaque_terminator)
+                if terminator_start != -1:
+                    restore_start = (
+                        len(original_body)
+                        - len(original_content)
+                        + terminator_start
+                        + len(current_opaque_terminator)
+                    )
+                else:
+                    opaque_terminator = current_opaque_terminator
+                    opaque_container_indent = code_container_indent
+                    opaque_quote_depth = code_quote_depth
+            elif HTML_BLOCK_TYPE1_START.match(
                 code_content
             ) and not DISPLAYED_HTML_BLOCK_TYPE1_START.match(code_content):
                 if end_match := HTML_BLOCK_TYPE1_END.search(code_content):
@@ -926,8 +972,23 @@ def code_protected_positions(text: str) -> bytearray:
     return protected
 
 
+def validate_inline_backtick_delimiters(text: str) -> None:
+    index = 0
+    while True:
+        start = text.find("`", index)
+        if start == -1:
+            return
+        end = start + 1
+        while end < len(text) and text[end] == "`":
+            end += 1
+        if end - start > MAX_INLINE_BACKTICK_DELIMITER:
+            raise CheckError(f"Markdown backtick delimiter exceeds {MAX_INLINE_BACKTICK_DELIMITER}")
+        index = end
+
+
 def without_markdown_code(text: str) -> str:
     text = without_block_code(text)
+    validate_inline_backtick_delimiters(text)
     rendered = list(text)
     protected = code_protected_positions(text)
     index = 0
@@ -1205,13 +1266,41 @@ def unresolved_adjacent_label_starts(
 
 
 def empty_rendered_adjacent_label_ends(
-    tokens: list[tuple[str, int, int]], known_reference_labels: frozenset[str]
+    text: str,
+    tokens: list[tuple[str, int, int]],
+    known_reference_labels: frozenset[str],
 ) -> dict[int, int]:
-    return {
-        start: end
-        for token, start, end in tokens
-        if token and rule_identity(token, known_reference_labels) is None
-    }
+    nodes: dict[int, int] = {}
+    for token, start, end in tokens:
+        if rule_identity(token, known_reference_labels) is not None or transparent_inline_text(
+            token, known_reference_labels
+        ):
+            continue
+        if not token and start and text[start - 1] == "]":
+            continue
+        suffix_length = link_suffix_length(
+            text[end:],
+            known_reference_labels=known_reference_labels,
+            fallback_label=token,
+        )
+        if suffix_length is None:
+            continue
+        node_start = start
+        if start and text[start - 1] == "!":
+            normalized_label = normalize_reference_label(token)
+            resolved_shortcut = (
+                normalized_label is not None and normalized_label in known_reference_labels
+            )
+            if suffix_length == 0 and not resolved_shortcut:
+                continue
+            node_start -= 1
+        node_end = end + suffix_length
+        nodes[node_start] = max(nodes.get(node_start, node_end), node_end)
+    collapsed: dict[int, int] = {}
+    for start in sorted(nodes, reverse=True):
+        node_end = nodes[start]
+        collapsed[start] = collapsed.get(node_end, node_end)
+    return collapsed
 
 
 def unresolved_collapsed_level_may_follow(
@@ -1298,7 +1387,9 @@ def declaration_candidates(
         unresolved_adjacent_starts = unresolved_adjacent_label_starts(
             tokens, known_reference_labels
         )
-        empty_adjacent_ends = empty_rendered_adjacent_label_ends(tokens, known_reference_labels)
+        empty_adjacent_ends = empty_rendered_adjacent_label_ends(
+            line, tokens, known_reference_labels
+        )
         for token, start, end in tokens:
             rule_id = rule_identity(token, known_reference_labels)
             left_has_prose = left_prose.get(start)
@@ -1343,7 +1434,9 @@ def declaration_candidates(
         rendered, tokens, known_reference_labels, registered_rule_ids
     )
     unresolved_adjacent_starts = unresolved_adjacent_label_starts(tokens, known_reference_labels)
-    empty_adjacent_ends = empty_rendered_adjacent_label_ends(tokens, known_reference_labels)
+    empty_adjacent_ends = empty_rendered_adjacent_label_ends(
+        rendered, tokens, known_reference_labels
+    )
     for token, start, end in tokens:
         rule_id = rule_identity(token, known_reference_labels)
         left_has_prose = left_prose.get(start)
