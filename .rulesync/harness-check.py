@@ -1230,7 +1230,40 @@ def unresolved_collapsed_level_may_follow(
     suffix_start = end + 2
     formatting_end, _ = transparent_prefix(text[suffix_start:], allow_line_break=allow_line_break)
     level_start = suffix_start + formatting_end
-    return level_start < len(text) and ascii_uppercase_letter(text[level_start])
+    if level_start >= len(text):
+        return False
+    if ascii_uppercase_letter(text[level_start]):
+        return True
+    label_start = level_start + 1 if text.startswith("![", level_start) else level_start
+    if text[label_start : label_start + 1] != "[":
+        return False
+    label_end = closing_bracket_end(text, label_start)
+    if label_end is None:
+        return False
+    label = text[label_start + 1 : label_end - 1]
+    normalized_label = normalize_reference_label(label)
+    shortcut_reference = (
+        label_start == level_start
+        and normalized_label is not None
+        and normalized_label in known_reference_labels
+    )
+    inline_link = text.startswith("(", label_end) and inline_link_suffix_length(
+        text[label_end:]
+    ) not in {None, 0}
+    explicit_reference = False
+    if text.startswith("[", label_end):
+        reference_end = closing_bracket_end(text, label_end)
+        if reference_end is not None:
+            explicit_label = text[label_end + 1 : reference_end - 1]
+            raw_label = explicit_label or label
+            reference_label = normalize_reference_label(raw_label)
+            explicit_reference = (
+                reference_label is not None and reference_label in known_reference_labels
+            )
+    if not (shortcut_reference or inline_link or explicit_reference):
+        return False
+    rendered_label = transparent_inline_text(label, known_reference_labels)
+    return bool(rendered_label and ascii_uppercase_letter(rendered_label[0]))
 
 
 def declaration_candidates(
