@@ -991,16 +991,44 @@ def rule_identity(token: str, known_reference_labels: frozenset[str]) -> str | N
     return nested[0] if len(nested) == 1 else None
 
 
+def registered_left_label_ends(
+    tokens: list[tuple[str, int, int]],
+    known_reference_labels: frozenset[str],
+    registered_rule_ids: frozenset[str],
+) -> set[int]:
+    return {
+        end
+        for token, _, end in tokens
+        if rule_identity(token, known_reference_labels) in registered_rule_ids
+    }
+
+
 def declaration_candidates(
-    text: str, known_reference_labels: frozenset[str] | None = None
+    text: str,
+    known_reference_labels: frozenset[str] | None = None,
+    registered_rule_ids: frozenset[str] = frozenset(),
 ) -> list[str]:
     candidates: list[str] = []
     rendered = rendered_text(text)
     if known_reference_labels is None:
         known_reference_labels = reference_labels(rendered)
     for line in rendered.splitlines():
-        for token, start, end in bracket_tokens(line):
-            if start and line[start - 1] == "]":
+        tokens = bracket_tokens(line)
+        registered_left_ends = registered_left_label_ends(
+            tokens, known_reference_labels, registered_rule_ids
+        )
+        for token, start, end in tokens:
+            if (
+                start
+                and line[start - 1] == "]"
+                and (
+                    (
+                        (normalized_label := normalize_reference_label(token)) is not None
+                        and normalized_label in known_reference_labels
+                    )
+                    or start in registered_left_ends
+                )
+            ):
                 continue
             rule_id = rule_identity(token, known_reference_labels)
             if rule_id is None:
@@ -1015,8 +1043,22 @@ def declaration_candidates(
                 transparent_inline_text(suffix[formatting_end:], known_reference_labels)
             ):
                 candidates.append(rule_id)
-    for token, start, end in bracket_tokens(rendered):
-        if start and rendered[start - 1] == "]":
+    tokens = bracket_tokens(rendered)
+    registered_left_ends = registered_left_label_ends(
+        tokens, known_reference_labels, registered_rule_ids
+    )
+    for token, start, end in tokens:
+        if (
+            start
+            and rendered[start - 1] == "]"
+            and (
+                (
+                    (normalized_label := normalize_reference_label(token)) is not None
+                    and normalized_label in known_reference_labels
+                )
+                or start in registered_left_ends
+            )
+        ):
             continue
         rule_id = rule_identity(token, known_reference_labels)
         if rule_id is None:
@@ -1042,20 +1084,48 @@ def declaration_candidates(
     return candidates
 
 
-def declaration_records(text: str, label: str) -> list[tuple[str, str, str, str]]:
+def declaration_records(
+    text: str, label: str, registered_rule_ids: frozenset[str] = frozenset()
+) -> list[tuple[str, str, str, str]]:
     block_text = without_html_blocks(without_block_code(text))
     masked_candidate_text = without_markdown_code(block_text)
     candidate_text = without_html_comments(
         restore_visible_html_content(text, block_text, masked_candidate_text)
     )
-    candidates = declaration_candidates(candidate_text, reference_labels(candidate_text))
+    candidates = declaration_candidates(
+        candidate_text, reference_labels(candidate_text), registered_rule_ids
+    )
     declarations = DECLARATION.findall(without_html_comments(block_text))
     if len(declarations) != len(candidates):
         raise CheckError(f"invalid rule declaration: {label}")
     return declarations
 
 
-def validate_contract(registry_path: Path, source_path: Path, expected_scope: str) -> None:
+def registry_rule_ids(payload: dict[str, object]) -> frozenset[str]:
+    rules = payload.get("rules")
+    if not isinstance(rules, list):
+        return frozenset()
+    return frozenset(
+        rule["id"] for rule in rules if isinstance(rule, dict) and isinstance(rule.get("id"), str)
+    )
+
+
+def current_visible_rule_ids() -> frozenset[str]:
+    registry_paths = [ROOT / ".rulesync" / "shared-rules.json", ROOT / ".rulesync" / "rules.json"]
+    registry_paths += sorted((ROOT / ".rulesync" / "nested").glob("**/rules.json"))
+    visible: set[str] = set()
+    for registry_path in registry_paths:
+        if registry_path.is_file():
+            visible.update(registry_rule_ids(load_json(registry_path)))
+    return frozenset(visible)
+
+
+def validate_contract(
+    registry_path: Path,
+    source_path: Path,
+    expected_scope: str,
+    visible_rule_ids: frozenset[str],
+) -> None:
     payload = load_json(registry_path)
     if payload.get("schemaVersion") != 2:
         raise CheckError(f"registry must use schema version 2: {registry_path}")
@@ -1106,7 +1176,7 @@ def validate_contract(registry_path: Path, source_path: Path, expected_scope: st
     text = source_path.read_text(encoding="utf-8")
     if source_scope(text, source_path) != expected_scope:
         raise CheckError(f"source scope mismatch: {source_path}")
-    declarations = declaration_records(text, str(source_path))
+    declarations = declaration_records(text, str(source_path), visible_rule_ids)
     seen: dict[str, tuple[str, str, str]] = {}
     for rule_id, level, name, statement in declarations:
         if not RULE_ID.fullmatch(rule_id) or rule_id in seen:
@@ -1124,7 +1194,7 @@ def validate_contract(registry_path: Path, source_path: Path, expected_scope: st
             raise CheckError(f"rule declaration mismatch: {rule_id}")
 
 
-def validate_shared_contract() -> None:
+def validate_shared_contract(visible_rule_ids: frozenset[str]) -> None:
     registry_path = ROOT / ".rulesync" / "shared-rules.json"
     payload = load_json(registry_path)
     if payload.get("schemaVersion") != 2:
@@ -1190,6 +1260,7 @@ def validate_shared_contract() -> None:
         source_texts,
         str(registry_path),
         registered_project_source_paths(current_registry_paths),
+        visible_rule_ids,
     )
 
 
@@ -1319,6 +1390,7 @@ def validate_shared_projections(
     source_texts: dict[str, str],
     label: str,
     registered_project_sources: set[str],
+    visible_rule_ids: frozenset[str],
 ) -> None:
     source_texts = canonical_shared_source_texts(source_texts, label, registered_project_sources)
     projections = projection_records(payload, label)
@@ -1334,7 +1406,9 @@ def validate_shared_projections(
         if source_scope(text, Path(relative)) != expected_scope:
             raise CheckError(f"shared source scope mismatch: {relative}")
         declarations: dict[str, tuple[str, str, str]] = {}
-        for rule_id, level, name, statement in declaration_records(text, relative):
+        for rule_id, level, name, statement in declaration_records(
+            text, relative, visible_rule_ids
+        ):
             if not RULE_ID.fullmatch(rule_id) or rule_id in declarations:
                 raise CheckError(f"invalid or duplicate shared source rule id: {rule_id}")
             declarations[rule_id] = (level, name, statement)
@@ -1393,17 +1467,25 @@ def rule_records(
 
 
 def legacy_rule_records(
-    payload: dict[str, object], label: str, sources: dict[str, str]
+    payload: dict[str, object],
+    label: str,
+    sources: dict[str, str],
+    visible_rule_ids: frozenset[str],
 ) -> tuple[dict[str, tuple[tuple[object, ...], str]], dict[str, frozenset[str]]]:
     rules = payload.get("rules")
     if not isinstance(rules, list):
         raise CheckError(f"legacy registry rules must be a list: {label}")
+    registered_rule_ids = visible_rule_ids | frozenset(
+        rule["id"] for rule in rules if isinstance(rule, dict) and isinstance(rule.get("id"), str)
+    )
     declarations: dict[str, tuple[tuple[str, str, str], set[str]]] = {}
     stack_projections: dict[str, frozenset[str]] = {}
     for source_path, text in sources.items():
         source_name = source_path.rsplit("/", 1)[-1]
         local_seen: set[str] = set()
-        for rule_id, level, name, statement in declaration_records(text, source_path):
+        for rule_id, level, name, statement in declaration_records(
+            text, source_path, registered_rule_ids
+        ):
             if rule_id in local_seen:
                 raise CheckError(f"duplicate legacy rule declaration: {rule_id}")
             local_seen.add(rule_id)
@@ -1622,8 +1704,16 @@ def validate_historical_identities() -> None:
                 except UnicodeDecodeError as error:
                     raise CheckError(f"historical registry is not UTF-8: {relative}") from error
             snapshot_project_sources = registered_project_source_paths(set(snapshot_registry_texts))
-            for relative, text in snapshot_registry_texts.items():
-                payload = parse_json(text, f"{commit}:{relative}")
+            snapshot_registry_payloads = {
+                relative: parse_json(text, f"{commit}:{relative}")
+                for relative, text in snapshot_registry_texts.items()
+            }
+            snapshot_visible_rule_ids = frozenset(
+                rule_id
+                for payload in snapshot_registry_payloads.values()
+                for rule_id in registry_rule_ids(payload)
+            )
+            for relative, payload in snapshot_registry_payloads.items():
                 schema_version = payload.get("schemaVersion")
                 if schema_version != 2:
                     if schema_version not in {None, 1} or not isinstance(
@@ -1646,7 +1736,7 @@ def validate_historical_identities() -> None:
                         source_path = f"{relative.rsplit('/', 1)[0]}/50-project.md"
                         legacy_sources = {source_path: source_texts.get(source_path, "")}
                     historical, legacy_origins = legacy_rule_records(
-                        payload, relative, legacy_sources
+                        payload, relative, legacy_sources, snapshot_visible_rule_ids
                     )
                     if relative == ".rulesync/shared-rules.json":
                         preserve_projection_origins(legacy_origins, historical_projection_origins)
@@ -1670,6 +1760,7 @@ def validate_historical_identities() -> None:
                                 source_texts,
                                 f"{commit}:{relative}",
                                 snapshot_project_sources,
+                                snapshot_visible_rule_ids,
                             )
                             snapshot_origins = projection_origins(
                                 projection_records(payload, f"{commit}:{relative}")
@@ -1694,6 +1785,7 @@ def validate_historical_identities() -> None:
                                     f"{commit}:{relative}",
                                     snapshot_project_sources,
                                 ),
+                                snapshot_visible_rule_ids,
                             )
                             preserve_projection_origins(
                                 snapshot_origins, historical_projection_origins
@@ -1788,7 +1880,7 @@ def validate_manifest() -> None:
         raise CheckError("required managed files are missing from the manifest")
 
 
-def validate_adapters() -> None:
+def validate_adapters(visible_rule_ids: frozenset[str]) -> None:
     if "@AGENTS.md" not in (ROOT / "CLAUDE.md").read_text(encoding="utf-8"):
         raise CheckError("Claude adapter does not import AGENTS.md")
     if "@./AGENTS.md" not in (ROOT / "GEMINI.md").read_text(encoding="utf-8"):
@@ -1798,7 +1890,9 @@ def validate_adapters() -> None:
         for registry in sorted(nested_root.glob("**/rules.json")):
             relative = registry.parent.relative_to(nested_root)
             target = ROOT / relative
-            validate_contract(registry, registry.parent / "50-project.md", "nested")
+            validate_contract(
+                registry, registry.parent / "50-project.md", "nested", visible_rule_ids
+            )
             if "@AGENTS.md" not in (target / "CLAUDE.md").read_text(encoding="utf-8"):
                 raise CheckError(f"nested Claude adapter mismatch: {relative}")
             if "@./AGENTS.md" not in (target / "GEMINI.md").read_text(encoding="utf-8"):
@@ -1807,15 +1901,17 @@ def validate_adapters() -> None:
 
 def main() -> int:
     try:
+        visible_rule_ids = current_visible_rule_ids()
         validate_contract(
             ROOT / ".rulesync" / "rules.json",
             ROOT / ".rulesync" / "rules" / "50-project.md",
             "project",
+            visible_rule_ids,
         )
-        validate_shared_contract()
+        validate_shared_contract(visible_rule_ids)
         validate_historical_identities()
         validate_manifest()
-        validate_adapters()
+        validate_adapters(visible_rule_ids)
     except (CheckError, OSError, json.JSONDecodeError) as error:
         print(f"harness-check: {error}", file=sys.stderr)
         return 1
