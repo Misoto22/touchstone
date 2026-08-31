@@ -719,19 +719,21 @@ def restore_visible_html_content(
         ):
             in_visible_block = False
             in_displayed_type1_block = False
-        restore_line = False
+        restore_start: int | None = None
         if in_hidden_type1_block:
-            if HTML_BLOCK_TYPE1_END.search(container_content(original_body)):
+            original_content = container_content(original_body)
+            if end_match := HTML_BLOCK_TYPE1_END.search(original_content):
                 in_hidden_type1_block = False
+                restore_start = len(original_body) - len(original_content) + end_match.end()
         elif in_visible_block:
             original_content = container_content(original_body)
             if in_displayed_type1_block:
-                restore_line = True
+                restore_start = 0
                 if HTML_BLOCK_TYPE1_END.search(original_content):
                     in_visible_block = False
                     in_displayed_type1_block = False
             elif original_content.strip():
-                restore_line = True
+                restore_start = 0
             else:
                 in_visible_block = False
         else:
@@ -739,12 +741,15 @@ def restore_visible_html_content(
             if HTML_BLOCK_TYPE1_START.match(
                 code_content
             ) and not DISPLAYED_HTML_BLOCK_TYPE1_START.match(code_content):
-                if not HTML_BLOCK_TYPE1_END.search(code_content):
+                if end_match := HTML_BLOCK_TYPE1_END.search(code_content):
+                    original_content = container_content(original_body)
+                    restore_start = len(original_body) - len(original_content) + end_match.end()
+                else:
                     in_hidden_type1_block = True
                     hidden_container_indent = code_container_indent
                     hidden_quote_depth = code_quote_depth
             elif DISPLAYED_HTML_BLOCK_TYPE1_START.match(code_content):
-                restore_line = True
+                restore_start = 0
                 if not HTML_BLOCK_TYPE1_END.search(code_content):
                     in_visible_block = True
                     in_displayed_type1_block = True
@@ -757,12 +762,14 @@ def restore_visible_html_content(
                     or COMMONMARK_CLOSING_TAG.fullmatch(stripped)
                 )
             ):
-                restore_line = True
+                restore_start = 0
                 in_visible_block = True
                 visible_container_indent = line_container_indent
                 visible_quote_depth = line_quote_depth
-        if restore_line:
-            rendered[offset : offset + len(original_line)] = original_line
+        if restore_start is not None:
+            rendered[offset + restore_start : offset + len(original_line)] = original_line[
+                restore_start:
+            ]
         offset += len(original_line)
         previous_blank = bool(
             not content.strip()
@@ -1189,11 +1196,41 @@ def unresolved_adjacent_label_starts(
         start
         for token, start, _ in tokens
         if token
+        and rule_identity(token, known_reference_labels) is not None
         and (
             (normalized_label := normalize_reference_label(token)) is None
             or normalized_label not in known_reference_labels
         )
     )
+
+
+def empty_rendered_adjacent_label_ends(
+    tokens: list[tuple[str, int, int]], known_reference_labels: frozenset[str]
+) -> dict[int, int]:
+    return {
+        start: end
+        for token, start, end in tokens
+        if token and rule_identity(token, known_reference_labels) is None
+    }
+
+
+def unresolved_collapsed_level_may_follow(
+    text: str,
+    end: int,
+    token: str,
+    known_reference_labels: frozenset[str],
+    *,
+    allow_line_break: bool,
+) -> bool:
+    if not text.startswith("[]", end):
+        return True
+    normalized_label = normalize_reference_label(token)
+    if normalized_label is not None and normalized_label in known_reference_labels:
+        return True
+    suffix_start = end + 2
+    formatting_end, _ = transparent_prefix(text[suffix_start:], allow_line_break=allow_line_break)
+    level_start = suffix_start + formatting_end
+    return level_start < len(text) and ascii_uppercase_letter(text[level_start])
 
 
 def declaration_candidates(
@@ -1213,6 +1250,7 @@ def declaration_candidates(
         unresolved_adjacent_starts = unresolved_adjacent_label_starts(
             tokens, known_reference_labels
         )
+        empty_adjacent_ends = empty_rendered_adjacent_label_ends(tokens, known_reference_labels)
         for token, start, end in tokens:
             rule_id = rule_identity(token, known_reference_labels)
             left_has_prose = left_prose.get(start)
@@ -1235,8 +1273,15 @@ def declaration_candidates(
                 continue
             if rule_id is None:
                 continue
+            if not unresolved_collapsed_level_may_follow(
+                line, end, token, known_reference_labels, allow_line_break=False
+            ):
+                continue
+            candidate_end = empty_adjacent_ends.get(end, end)
             suffix = after_link_suffix(
-                line[end:], known_reference_labels=known_reference_labels, fallback_label=token
+                line[candidate_end:],
+                known_reference_labels=known_reference_labels,
+                fallback_label=token,
             )
             if suffix is None:
                 continue
@@ -1250,6 +1295,7 @@ def declaration_candidates(
         rendered, tokens, known_reference_labels, registered_rule_ids
     )
     unresolved_adjacent_starts = unresolved_adjacent_label_starts(tokens, known_reference_labels)
+    empty_adjacent_ends = empty_rendered_adjacent_label_ends(tokens, known_reference_labels)
     for token, start, end in tokens:
         rule_id = rule_identity(token, known_reference_labels)
         left_has_prose = left_prose.get(start)
@@ -1269,8 +1315,15 @@ def declaration_candidates(
             continue
         if rule_id is None:
             continue
+        if not unresolved_collapsed_level_may_follow(
+            rendered, end, token, known_reference_labels, allow_line_break=True
+        ):
+            continue
+        candidate_end = empty_adjacent_ends.get(end, end)
         link_result = after_link_suffix_with_break(
-            rendered[end:], known_reference_labels=known_reference_labels, fallback_label=token
+            rendered[candidate_end:],
+            known_reference_labels=known_reference_labels,
+            fallback_label=token,
         )
         if link_result is None:
             continue
