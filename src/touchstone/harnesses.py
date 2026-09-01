@@ -283,8 +283,13 @@ def _resolve_external(
             "harness-identity-mismatch",
             "external Harness remote could not be fetched",
         )
+    # `origin/main` is a legal local branch name. Given one, `git rev-parse --verify origin/main`
+    # warns about the ambiguity, exits zero, and can hand back the local ref — so a successful
+    # fetch would no longer prove the archived revision came from the declared remote. Ask for the
+    # remote-tracking ref by its full path, which nothing local can shadow.
+    tracking = f"refs/remotes/{remote}/{declaration.ref.partition('/')[2]}"
     resolved = local.run(
-        ["git", "rev-parse", "--verify", f"{declaration.ref}^{{commit}}"],
+        ["git", "rev-parse", "--verify", "--end-of-options", f"{tracking}^{{commit}}"],
         cwd=str(checkout),
         timeout=30,
     )

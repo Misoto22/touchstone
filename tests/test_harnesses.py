@@ -414,3 +414,49 @@ def test_external_harness_rejects_a_local_path_remote(tmp_path: Path) -> None:
         resolve_harness(config, registry={"acme/harness": checkout})
 
     assert blocked.value.reason_code == "harness-identity-mismatch"
+
+
+def test_external_harness_ignores_a_local_branch_shadowing_the_remote_ref(tmp_path: Path) -> None:
+    """`origin/main` is a legal local branch name, and `git rev-parse` would prefer it."""
+    bare = tmp_path / "acme/efficient-harness.git"
+    bare.parent.mkdir()
+    _run("git", "init", "--bare", "--initial-branch=main", str(bare), cwd=tmp_path)
+    checkout = tmp_path / "efficient-harness"
+    _git_repository(checkout, remote="git@github.com:acme/efficient-harness.git")
+    _offline_ssh(checkout, bare)
+    entrypoint = checkout / "harness/00-INDEX.md"
+    entrypoint.parent.mkdir(parents=True)
+    entrypoint.write_text("published rules\n", encoding="utf-8")
+    _run("git", "add", ".", cwd=checkout)
+    _run("git", "commit", "-m", "published", cwd=checkout)
+    _run("git", "push", "-u", "origin", "main", cwd=checkout)
+    published = _run("git", "rev-parse", "HEAD", cwd=checkout)
+
+    # A local branch by that exact name, carrying different rules and never pushed.
+    entrypoint.write_text("unpublished local rules\n", encoding="utf-8")
+    _run("git", "add", ".", cwd=checkout)
+    _run("git", "commit", "-m", "local only", cwd=checkout)
+    _run("git", "branch", "origin/main", cwd=checkout)
+    _run("git", "reset", "--hard", published, cwd=checkout)
+
+    config = _config(
+        tmp_path,
+        HarnessConfig(
+            mode="external",
+            source="acme/efficient-harness",
+            ref="origin/main",
+            entrypoint="harness/00-INDEX.md",
+        ),
+    )
+    (config.repo_path / "AGENTS.md").write_text(
+        "Shared Harness: canonical repo `acme/efficient-harness`.\n", encoding="utf-8"
+    )
+
+    context = resolve_harness(
+        config,
+        registry={"acme/efficient-harness": checkout},
+        snapshot_root=tmp_path / "snapshots",
+    )
+
+    assert context.revision == published
+    assert context.entrypoint.read_text(encoding="utf-8") == "published rules\n"
