@@ -10,9 +10,10 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 from touchstone import __version__, visualise
-from touchstone.config import ConfigError, load
+from touchstone.config import Config, ConfigError, load
 
 
 def _config_path(args: argparse.Namespace) -> int:
@@ -27,6 +28,18 @@ def _config_path(args: argparse.Namespace) -> int:
     return 0
 
 
+def _harness_target(config: Config) -> dict[str, Any]:
+    """Where the audit would read its Harness from, and what can read it.
+
+    Validating the orchestrator's copy while the session runs elsewhere reported `clean` for a
+    remote checkout that has no entrypoint — the one thing these commands exist to catch.
+    """
+
+    from touchstone.execution import build
+
+    return {"target_checkout": Path(config.execution_repo), "executor": build(config)}
+
+
 def _config_check(args: argparse.Namespace) -> int:
     from touchstone.harnesses import HarnessResolutionError, cleanup_harness, resolve_harness
 
@@ -39,7 +52,7 @@ def _config_check(args: argparse.Namespace) -> int:
         }
     else:
         try:
-            context = resolve_harness(config)
+            context = resolve_harness(config, **_harness_target(config))
         except HarnessResolutionError as exc:
             payload = {"status": "blocked", "reason": exc.reason_code, "detail": exc.detail}
             _print_payload(payload, json_output=args.json)
@@ -109,8 +122,9 @@ def _harness_list(args: argparse.Namespace) -> int:
 def _harness_resolve(args: argparse.Namespace) -> int:
     from touchstone.harnesses import HarnessResolutionError, cleanup_harness, resolve_harness
 
+    config = load(args.config)
     try:
-        context = resolve_harness(load(args.config))
+        context = resolve_harness(config, **_harness_target(config))
     except HarnessResolutionError as exc:
         _print_payload(
             {"status": "blocked", "reason": exc.reason_code, "detail": exc.detail},

@@ -180,10 +180,20 @@ def _safe_entrypoint(root: str, reference: str, executor: Executor) -> Path:
     walked = base
     for part in PurePosixPath(reference).parts:
         walked = walked / part
-        if executor.run(["test", "-L", walked.as_posix()], timeout=30).ok:
+        probe = executor.run(["test", "-L", walked.as_posix()], timeout=30)
+        if probe.ok:
             raise HarnessResolutionError(
                 "harness-identity-mismatch",
                 f"Harness entrypoint is reached through a symbolic link: {reference}",
+            )
+        # `test` answers false with exit 1. Anything else — a usage error, a dropped ssh
+        # connection, a timeout — means the question was never answered, and an unanswered
+        # containment check must not read like a passed one.
+        if probe.timed_out or probe.code != 1:
+            raise HarnessResolutionError(
+                "harness-unreachable",
+                f"could not determine whether {reference} is reached through a symbolic link: "
+                f"{probe.tail()}",
             )
     if not executor.exists(candidate.as_posix()):
         raise HarnessResolutionError(
