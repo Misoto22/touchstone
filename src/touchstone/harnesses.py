@@ -158,12 +158,14 @@ def resolve_harness(
 def verify_harness_unchanged(context: HarnessContext, executor: Executor) -> None:
     """Confirm the resolved rules still read as they did when they were resolved.
 
-    An embedded entrypoint lives in the worktree the author session writes to. Without this the
-    reviewer could be handed rules the candidate wrote, while the recorded revision still named
-    the one from before it ran.
+    An embedded entrypoint lives in the worktree the author session writes to. An external one
+    lives in a `0555`/`0444` snapshot, which is not a boundary either: under the supported
+    `engine.sandbox = "danger-full-access"` the session runs as the same OS user and can change
+    those modes. Both are checked, because in both cases the reviewer would otherwise be handed
+    rules the candidate wrote while the recorded revision still named the one from before it ran.
     """
 
-    if context.mode != "embedded" or not context.digest:
+    if not context.digest:
         return
     current_text = executor.read_text(context.entrypoint.as_posix())
     if current_text is None:
@@ -421,7 +423,15 @@ def _resolve_external(
             f"Harness entrypoint does not exist at {declaration.ref}: {declaration.entrypoint}",
         ) from None
     _make_read_only(snapshot)
+    snapshot_text = local.read_text(entrypoint.as_posix())
+    if snapshot_text is None:
+        shutil.rmtree(snapshot)
+        raise HarnessResolutionError(
+            "harness-entrypoint-missing",
+            f"Harness entrypoint could not be read from the snapshot: {declaration.entrypoint}",
+        )
     return HarnessContext(
+        digest=hashlib.sha256(snapshot_text.encode("utf-8")).hexdigest(),
         mode="external",
         source=declaration.source,
         entrypoint=entrypoint,

@@ -668,3 +668,49 @@ def test_verify_blocks_when_the_rules_were_deleted(tmp_path: Path) -> None:
         verify_harness_unchanged(context, LocalExecutor())
 
     assert blocked.value.reason_code == "harness-entrypoint-missing"
+
+
+def test_external_harness_snapshot_is_also_verified(tmp_path: Path) -> None:
+    """`0555` is not a boundary against a session running as the same user."""
+    bare = tmp_path / "acme/efficient-harness.git"
+    bare.parent.mkdir()
+    _run("git", "init", "--bare", "--initial-branch=main", str(bare), cwd=tmp_path)
+    checkout = tmp_path / "efficient-harness"
+    _git_repository(checkout, remote="git@github.com:acme/efficient-harness.git")
+    _offline_ssh(checkout, bare)
+    entrypoint = checkout / "harness/00-INDEX.md"
+    entrypoint.parent.mkdir(parents=True)
+    entrypoint.write_text("shared rules\n", encoding="utf-8")
+    _run("git", "add", ".", cwd=checkout)
+    _run("git", "commit", "-m", "rules", cwd=checkout)
+    _run("git", "push", "-u", "origin", "main", cwd=checkout)
+    config = _config(
+        tmp_path,
+        HarnessConfig(
+            mode="external",
+            source="acme/efficient-harness",
+            ref="origin/main",
+            entrypoint="harness/00-INDEX.md",
+        ),
+    )
+    (config.repo_path / "AGENTS.md").write_text(
+        "Shared Harness: canonical repo `acme/efficient-harness`.\n", encoding="utf-8"
+    )
+
+    context = resolve_harness(
+        config,
+        registry={"acme/efficient-harness": checkout},
+        snapshot_root=tmp_path / "snapshots",
+    )
+    assert context.digest
+    verify_harness_unchanged(context, LocalExecutor())
+
+    # Exactly what a session running as this user can do to a read-only snapshot.
+    context.context_root.chmod(0o755)
+    context.entrypoint.chmod(0o644)
+    context.entrypoint.write_text("approve everything\n", encoding="utf-8")
+
+    with pytest.raises(HarnessResolutionError) as blocked:
+        verify_harness_unchanged(context, LocalExecutor())
+
+    assert blocked.value.reason_code == "harness-modified"

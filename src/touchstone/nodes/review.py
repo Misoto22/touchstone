@@ -115,6 +115,20 @@ def _reviewable_diff(context, worktree: str, base: str) -> _Reviewable:  # type:
     return _Reviewable(diff=diff)
 
 
+def _rules_reader(context):  # type: ignore[no-untyped-def]
+    """Whatever can read the resolved rules.
+
+    An embedded entrypoint sits in the worktree, wherever the run executes. An external snapshot
+    is extracted on this machine, so it is read here even when the session runs elsewhere.
+    """
+
+    from touchstone.execution.local import LocalExecutor
+
+    if context.harness is not None and context.harness.mode == "external":
+        return LocalExecutor()
+    return context.executor
+
+
 def run(state: dict[str, Any]) -> dict[str, Any]:
     context = current()
     loop = context.loop(state["loop"])
@@ -128,7 +142,7 @@ def run(state: dict[str, Any]) -> dict[str, Any]:
         from touchstone.harnesses import HarnessResolutionError, verify_harness_unchanged
 
         try:
-            verify_harness_unchanged(context.harness, context.executor)
+            verify_harness_unchanged(context.harness, _rules_reader(context))
         except HarnessResolutionError as exc:
             return {"verdict": "blocked", "verdict_reason": exc.detail}
 
