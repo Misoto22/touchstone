@@ -28,6 +28,14 @@ model = "gpt-test"
 [loop.code]
 brief = "builtin:code-audit"
 label = "touchstone:audit"
+[loop.code.context]
+OPENAI_API_KEY = "sk-live-must-not-appear"
+ANTHROPIC_API_KEY = "sk-ant-must-not-appear"
+API_KEY = "bare-must-not-appear"
+CREDENTIAL = "cred-must-not-appear"
+PASSPHRASE = "phrase-must-not-appear"
+GITHUB_TOKEN = "tok-must-not-appear"
+region = "au"
 """,
         encoding="utf-8",
     )
@@ -192,3 +200,62 @@ def test_config_explain_reports_one_effective_field(tmp_path: Path, capsys) -> N
         "value": "embedded",
         "source": "touchstone.toml",
     }
+
+
+def test_effective_configuration_redacts_secret_shaped_context(tmp_path: Path) -> None:
+    effective = effective_configuration(_configured_repository(tmp_path))
+
+    for field in (
+        "loop.code.context.OPENAI_API_KEY",
+        "loop.code.context.ANTHROPIC_API_KEY",
+        "loop.code.context.API_KEY",
+        "loop.code.context.CREDENTIAL",
+        "loop.code.context.PASSPHRASE",
+        "loop.code.context.GITHUB_TOKEN",
+    ):
+        assert effective[field]["value"] == "<redacted>", field
+    assert effective["loop.code.context.region"]["value"] == "au"
+
+
+def test_config_show_never_prints_a_secret_shaped_value(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
+    config = _configured_repository(tmp_path)
+
+    assert main(["--config", str(config), "config", "show", "--json"]) == 0
+
+    printed = capsys.readouterr().out
+    for secret in (
+        "sk-live-must-not-appear",
+        "sk-ant-must-not-appear",
+        "bare-must-not-appear",
+        "cred-must-not-appear",
+        "phrase-must-not-appear",
+        "tok-must-not-appear",
+    ):
+        assert secret not in printed, secret
+    assert "<redacted>" in printed
+
+
+def test_effective_configuration_includes_runtime_defaults(tmp_path: Path) -> None:
+    """A field no file sets still has a value at run time, and must be shown as one."""
+    config = _configured_repository(tmp_path)
+    raw = tomllib.loads((tmp_path / "touchstone.toml").read_text(encoding="utf-8"))
+    assert "sandbox" not in raw.get("engine", {})
+    assert "execution" not in raw
+
+    effective = effective_configuration(config)
+
+    for field in ("engine.sandbox", "engine.timeout_seconds", "execution.target"):
+        assert field in effective, field
+        assert effective[field]["source"] == "default"
+    # a value a file does set keeps its owner
+    assert effective["engine.model"]["source"] == ".touchstone/fleet.toml"
+
+
+def test_config_explain_reports_a_defaulted_field(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
+    config = _configured_repository(tmp_path)
+
+    assert main(["--config", str(config), "config", "explain", "engine.sandbox", "--json"]) == 0
+
+    explained = json.loads(capsys.readouterr().out)
+    assert explained["field"] == "engine.sandbox"
+    assert explained["source"] == "default"

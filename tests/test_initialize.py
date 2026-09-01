@@ -7,7 +7,7 @@ import pytest
 
 from tests.test_discovery import make_repo
 from touchstone.cli import main
-from touchstone.config import ConfigError, load_config
+from touchstone.config import ConfigError, load, load_config
 from touchstone.discovery import discover_project
 from touchstone.execution.local import LocalExecutor
 from touchstone.initialize import InitOptions, initialize
@@ -39,6 +39,7 @@ def test_non_interactive_init_writes_a_loadable_generic_config(tmp_path: Path) -
 
 def test_local_init_writes_embedded_harness_without_actions_policy(tmp_path: Path) -> None:
     repo = make_repo(tmp_path, remote="https://github.com/acme/widgets.git")
+    (repo / "AGENTS.md").write_text("repository rules\n", encoding="utf-8")
 
     report = initialize(
         InitOptions(
@@ -211,3 +212,26 @@ def test_non_interactive_init_requires_an_explicit_schedule(tmp_path: Path) -> N
 
     assert code == 78
     assert not (repo / "touchstone.toml").exists()
+
+
+def test_init_omits_the_harness_block_when_there_is_no_entrypoint(tmp_path: Path) -> None:
+    """Declaring an absent entrypoint made every following command block."""
+    repo = make_repo(tmp_path, remote="https://github.com/acme/widgets.git")
+    assert not (repo / "AGENTS.md").exists()
+
+    report = initialize(
+        InitOptions(
+            start=repo,
+            engine="codex",
+            model="gpt-test",
+            backend="local",
+            schedule="weekly@SUN,03:00",
+            timezone="Australia/Sydney",
+        ),
+        LocalExecutor(),
+    )
+    raw = tomllib.loads(report.root.read_text(encoding="utf-8"))
+
+    assert "harness" not in raw
+    # and the configuration it wrote is one the next command can actually load
+    assert load(report.root).harness is None

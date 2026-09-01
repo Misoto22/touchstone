@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import os
 import tomllib
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from touchstone.config import Config, ConfigError, load
+from touchstone.config import SECRET_KEY_MARKERS, Config, ConfigError, load
 from touchstone.config_v2 import merge_generated
 from touchstone.harnesses import registry_path
 
@@ -56,7 +56,10 @@ def effective_configuration(config: Config | Path) -> dict[str, dict[str, Any]]:
         merged = merge_generated(merged, layer.values)
         for field in _flatten(layer.values):
             provenance[field] = _display_path(layer.path, layers[-1].path.parent)
-    values = _flatten(_redact(merged))
+    # A field left out of every file still has a value at run time. Building `values` from the
+    # files alone dropped exactly those, so `config show --effective` omitted settings the run
+    # uses and `config explain` reported them as having no effective field.
+    values = _effective_defaults(loaded) | _flatten(_redact(merged))
     overrides = {
         "TOUCHSTONE_ENGINE": ("engine.name", loaded.engine.name),
         "TOUCHSTONE_MODEL": ("engine.model", loaded.engine.model),
@@ -124,15 +127,45 @@ def _flatten(value: dict[str, Any], prefix: str = "") -> dict[str, Any]:
 
 def _redact(value: Any, key: str = "") -> Any:
     marker = key.upper()
-    if key != "api_key_ref" and any(
-        sensitive in marker
-        for sensitive in ("TOKEN", "SECRET", "PASSWORD", "PASSWD", "PRIVATE_KEY")
-    ):
+    if key != "api_key_ref" and any(sensitive in marker for sensitive in SECRET_KEY_MARKERS):
         return "<redacted>"
     if isinstance(value, dict):
         return {child_key: _redact(child, child_key) for child_key, child in value.items()}
     if isinstance(value, list):
         return [_redact(child, key) for child in value]
+    return value
+
+
+def _effective_defaults(loaded: Config) -> dict[str, Any]:
+    """The values a run uses before any file is read.
+
+    Only sections whose TOML names match their dataclass fields are seeded generically; the three
+    that are spelled differently are named here rather than guessed at.
+    """
+
+    sections: dict[str, Any] = {
+        "actions": asdict(loaded.actions),
+        "engine": asdict(loaded.engine),
+        "execution": asdict(loaded.execution),
+        "forge": asdict(loaded.forge),
+        "git": asdict(loaded.git),
+    }
+    seeded = {
+        field: _display_value(value)
+        for field, value in _flatten(_redact(sections)).items()
+        if value is not None
+    }
+    seeded["timezone"] = loaded.timezone
+    seeded["project.path"] = str(loaded.repo_path)
+    seeded["state_dir"] = str(loaded.state_dir)
+    return seeded
+
+
+def _display_value(value: Any) -> Any:
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, tuple):
+        return list(value)
     return value
 
 

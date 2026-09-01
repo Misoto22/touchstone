@@ -243,3 +243,54 @@ def test_the_wake_unit_outlives_every_engine_call_it_can_make(tmp_path: Path) ->
         "ceilings, and a systemd kill records nothing"
     )
     assert "After=network-online.target" in service
+
+
+def _legacy_plist(destination: Path, name: str, config_path: Path) -> Path:
+    """A job written by a pre-hash install, naming this configuration."""
+    path = destination / name
+    path.write_bytes(
+        plistlib.dumps(
+            {
+                "Label": path.stem,
+                "ProgramArguments": [
+                    "/absolute/bin/touchstone",
+                    "--config",
+                    str(config_path.resolve()),
+                    "wake",
+                ],
+            }
+        )
+    )
+    return path
+
+
+def test_launchd_uninstall_removes_a_legacy_wake_job(tmp_path: Path) -> None:
+    """An upgraded installation kept firing from the pre-hash job after uninstall."""
+    config = _config(tmp_path)
+    target = tmp_path / "launchd-units"
+    target.mkdir()
+    scheduler = LaunchdScheduler(LocalExecutor(), executable=Path("/absolute/bin/touchstone"))
+    scheduler.install(config, target=target)
+    legacy = _legacy_plist(target, "io.touchstone.agent.wake.plist", config.source.path)
+
+    report = scheduler.uninstall(config, target=target)
+
+    assert legacy in report.changed
+    assert not legacy.exists()
+    assert sorted(path.name for path in target.iterdir()) == []
+
+
+def test_launchd_uninstall_leaves_another_configurations_legacy_job(tmp_path: Path) -> None:
+    """Only jobs this configuration owns are removed."""
+    config = _config(tmp_path)
+    target = tmp_path / "launchd-units"
+    target.mkdir()
+    scheduler = LaunchdScheduler(LocalExecutor(), executable=Path("/absolute/bin/touchstone"))
+    scheduler.install(config, target=target)
+    foreign = _legacy_plist(
+        target, "io.touchstone.agent.wake.plist", tmp_path / "somewhere-else/touchstone.toml"
+    )
+
+    scheduler.uninstall(config, target=target)
+
+    assert foreign.exists()

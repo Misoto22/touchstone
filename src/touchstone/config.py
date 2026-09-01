@@ -21,6 +21,20 @@ EngineName = Literal["codex", "claude"]
 Target = Literal["local", "ssh"]
 
 
+# Substrings that make a key name secret-shaped. One definition: three copies of this list had
+# already drifted apart, and the shortest of them leaked API keys through `config show`.
+SECRET_KEY_MARKERS = (
+    "TOKEN",
+    "SECRET",
+    "PASSWORD",
+    "PASSWD",
+    "PASSPHRASE",
+    "API_KEY",
+    "PRIVATE_KEY",
+    "CREDENTIAL",
+)
+
+
 class ConfigError(ValueError):
     """The configuration is unusable, and the run should not start."""
 
@@ -126,10 +140,9 @@ class SshConfig:
             raise ConfigError("execution.ssh.workdir must be an absolute remote path")
         if not PurePosixPath(self.state_dir).is_absolute():
             raise ConfigError("execution.ssh.state_dir must be an absolute remote path")
-        secret_markers = ("TOKEN", "SECRET", "PASSWORD", "PASSWD", "API_KEY", "PRIVATE_KEY")
         for key, _value in self.env:
             normalized = key.upper()
-            if any(marker in normalized for marker in secret_markers):
+            if any(marker in normalized for marker in SECRET_KEY_MARKERS):
                 raise ConfigError(
                     f"execution.ssh.env contains secret-like key {key!r}; "
                     "provide credentials through the remote runtime instead"

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from touchstone.config import Config
+from touchstone.config import SECRET_KEY_MARKERS, Config
 from touchstone.execution import Executor
 from touchstone.profiles.targets import (
     ProjectTarget,
@@ -21,15 +21,6 @@ from touchstone.profiles.targets import (
 
 ValidationOutcome = Literal["completed", "blocked"]
 _YARN_MODERN_MARKER = ".yarnrc.yml"
-_SECRET_MARKERS = (
-    "TOKEN",
-    "SECRET",
-    "PASSWORD",
-    "PASSWD",
-    "API_KEY",
-    "PRIVATE_KEY",
-    "CREDENTIAL",
-)
 _ALLOWED_ENVIRONMENT = {
     "HOME",
     "LANG",
@@ -83,7 +74,7 @@ class ValidationCommand:
             not isinstance(name, str)
             or not name
             or not isinstance(value, str)
-            or any(marker in name.upper() for marker in _SECRET_MARKERS)
+            or any(marker in name.upper() for marker in SECRET_KEY_MARKERS)
             for name, value in self.extra_env
         ):
             raise ValueError("Validation Gate extra_env must hold non-secret string pairs")
@@ -576,11 +567,11 @@ def _sanitized_environment(
         key: value
         for key, value in source.items()
         if key in _ALLOWED_ENVIRONMENT
-        and not any(marker in key.upper() for marker in _SECRET_MARKERS)
+        and not any(marker in key.upper() for marker in SECRET_KEY_MARKERS)
     }
     result["HOME"] = str(Path(tempfile.gettempdir()) / "touchstone-validation-home")
     for name, value in extra:
-        if any(marker in name.upper() for marker in _SECRET_MARKERS):
+        if any(marker in name.upper() for marker in SECRET_KEY_MARKERS):
             continue
         result[name] = value
     return result

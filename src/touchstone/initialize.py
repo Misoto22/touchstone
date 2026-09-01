@@ -110,6 +110,9 @@ def initialize(options: InitOptions, executor: Executor) -> InitReport:
     return InitReport(target, generated_path, generated)
 
 
+_EMBEDDED_ENTRYPOINT = "AGENTS.md"
+
+
 def render_config(
     options: InitOptions,
     discovery: ProjectDiscovery,
@@ -139,7 +142,7 @@ def render_config(
             "timeout_seconds": 2700,
         },
         "execution": {"target": "local"},
-        "harness": {"mode": "embedded", "entrypoint": "AGENTS.md"},
+        "harness": {"mode": "embedded", "entrypoint": _EMBEDDED_ENTRYPOINT},
         "loop": {
             "code": {
                 "brief": "builtin:code-audit",
@@ -149,6 +152,11 @@ def render_config(
             }
         },
     }
+    # Declaring an entrypoint that is not there produced a configuration whose very next command
+    # blocks with `harness-entrypoint-missing`. With no embedded Harness to point at, leave the
+    # declaration out and let discovery behave as it did before.
+    if not (discovery.root / _EMBEDDED_ENTRYPOINT).is_file():
+        root.pop("harness")
     if options.backend == "actions":
         root["actions"] = {
             "visibility": options.visibility,

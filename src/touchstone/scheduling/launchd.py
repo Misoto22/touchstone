@@ -84,7 +84,16 @@ class LaunchdScheduler:
         self, config: Any, *, target: Path | None = None, dry_run: bool = False
     ) -> InstallReport:
         destination = (target or self._home / "Library" / "LaunchAgents").resolve()
-        files = self._wake_files(config, destination)
+        owned = self._wake_files(config, destination)
+        # Install already boots out and deletes the pre-hash job names. Uninstall did not, so an
+        # upgraded installation kept firing from `io.touchstone.agent.wake.plist` after a
+        # successful uninstall. Only files this configuration owns are touched.
+        legacy = tuple(
+            path
+            for path in self._legacy_files(config, destination)
+            if path.exists() and path not in owned
+        )
+        files = owned + legacy
         if target is None and not dry_run:
             domain = f"gui/{os.getuid()}"
             for path in files:

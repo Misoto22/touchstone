@@ -252,7 +252,9 @@ def execute(config: Config, *, loop: str, dry_run: bool = False) -> int:
         path, branch = _worktree(config)
         if config.harness is not None:
             try:
-                harness_context = resolve_harness(config, target_checkout=Path(path))
+                harness_context = resolve_harness(
+                    config, target_checkout=Path(path), executor=current().executor
+                )
             except HarnessResolutionError as exc:
                 raise Held(exc.detail, reason_code=exc.reason_code) from None
             bind_harness(harness_context)
