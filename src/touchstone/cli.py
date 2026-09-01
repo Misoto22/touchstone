@@ -37,7 +37,16 @@ def _harness_target(config: Config) -> dict[str, Any]:
 
     from touchstone.execution import build
 
-    return {"target_checkout": Path(config.execution_repo), "executor": build(config)}
+    target: dict[str, Any] = {
+        "target_checkout": Path(config.execution_repo),
+        "executor": build(config),
+    }
+    if config.harness is not None and config.harness.mode == "embedded":
+        # A run builds its worktree from the fetched default branch, never from whatever the
+        # clone has checked out. Checking the working tree passed on a feature branch and then
+        # blocked at run time.
+        target["revision"] = f"origin/{config.forge.default_branch}"
+    return target
 
 
 def _config_check(args: argparse.Namespace) -> int:

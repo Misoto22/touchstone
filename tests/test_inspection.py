@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import tomllib
 from pathlib import Path
 
@@ -58,7 +59,21 @@ entrypoint = "AGENTS.md"
     )
     if entrypoint:
         (tmp_path / "AGENTS.md").write_text("repository rules\n", encoding="utf-8")
+    # `config check` reads the revision a run would build from, so the fixture needs one.
+    _commit_as_origin_main(tmp_path)
     return config
+
+
+def _commit_as_origin_main(root: Path) -> None:
+    def run(*argv: str) -> None:
+        subprocess.run(argv, cwd=root, check=True, capture_output=True, text=True)
+
+    run("git", "init", "-b", "main")
+    run("git", "config", "user.name", "Test")
+    run("git", "config", "user.email", "test@example.invalid")
+    run("git", "add", "-A")
+    run("git", "commit", "-m", "fixture")
+    run("git", "update-ref", "refs/remotes/origin/main", "HEAD")
 
 
 def test_configuration_paths_names_each_owner(tmp_path: Path) -> None:
@@ -119,7 +134,7 @@ def test_config_check_returns_typed_blocked_result_for_missing_harness_entrypoin
     assert payload == {
         "status": "blocked",
         "reason": "harness-entrypoint-missing",
-        "detail": "Harness entrypoint does not exist: AGENTS.md",
+        "detail": "Harness entrypoint is not a regular file at origin/main: AGENTS.md",
     }
 
 
@@ -259,3 +274,17 @@ def test_config_explain_reports_a_defaulted_field(tmp_path: Path, capsys) -> Non
     explained = json.loads(capsys.readouterr().out)
     assert explained["field"] == "engine.sandbox"
     assert explained["source"] == "default"
+
+
+def test_config_check_reads_the_revision_a_run_would_build_from(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
+    """A feature branch carrying the entrypoint used to mask a base branch without it."""
+    config = _configured_repository(tmp_path, entrypoint=False)
+    # The working tree gains the entrypoint, but `origin/main` never does.
+    (tmp_path / "AGENTS.md").write_text("only on this branch\n", encoding="utf-8")
+
+    assert main(["--config", str(config), "config", "check", "--json"]) == 3
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "blocked"
+    assert payload["reason"] == "harness-entrypoint-missing"
+    assert "origin/main" in payload["detail"]

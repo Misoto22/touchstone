@@ -268,6 +268,10 @@ class _RemoteExecutor:
         self.commands.append((list(argv), cwd))
         if argv[:3] == ["git", "rev-parse", "HEAD"]:
             return Result(code=0, stdout=f"{self.revision}\n", stderr="")
+        if argv[:2] == ["test", "-L"]:
+            return Result(code=1, stdout="", stderr="")
+        if argv[:2] == ["test", "-f"]:
+            return Result(code=0 if argv[2] in self.files else 1, stdout="", stderr="")
         return Result(code=1, stdout="", stderr="unexpected command")
 
     def read_text(self, path: str) -> str | None:
@@ -573,3 +577,49 @@ def test_embedded_harness_blocks_when_the_symlink_probe_times_out(tmp_path: Path
         resolve_harness(config, target_checkout=Path(remote_root), executor=executor)
 
     assert blocked.value.reason_code == "harness-unreachable"
+
+
+def test_embedded_harness_refuses_a_directory_entrypoint(tmp_path: Path) -> None:
+    """A directory names no rules document."""
+    config = _config(tmp_path, HarnessConfig(mode="embedded", entrypoint="harness"))
+    (config.repo_path / "harness").mkdir()
+
+    with pytest.raises(HarnessResolutionError) as blocked:
+        resolve_harness(config)
+
+    assert blocked.value.reason_code == "harness-entrypoint-missing"
+
+
+def test_external_harness_refuses_a_directory_entrypoint(tmp_path: Path) -> None:
+    bare = tmp_path / "acme/efficient-harness.git"
+    bare.parent.mkdir()
+    _run("git", "init", "--bare", "--initial-branch=main", str(bare), cwd=tmp_path)
+    checkout = tmp_path / "efficient-harness"
+    _git_repository(checkout, remote="git@github.com:acme/efficient-harness.git")
+    _offline_ssh(checkout, bare)
+    (checkout / "harness").mkdir()
+    (checkout / "harness/00-INDEX.md").write_text("rules\n", encoding="utf-8")
+    _run("git", "add", ".", cwd=checkout)
+    _run("git", "commit", "-m", "rules", cwd=checkout)
+    _run("git", "push", "-u", "origin", "main", cwd=checkout)
+    config = _config(
+        tmp_path,
+        HarnessConfig(
+            mode="external",
+            source="acme/efficient-harness",
+            ref="origin/main",
+            entrypoint="harness",
+        ),
+    )
+    (config.repo_path / "AGENTS.md").write_text(
+        "Shared Harness: canonical repo `acme/efficient-harness`.\n", encoding="utf-8"
+    )
+
+    with pytest.raises(HarnessResolutionError) as blocked:
+        resolve_harness(
+            config,
+            registry={"acme/efficient-harness": checkout},
+            snapshot_root=tmp_path / "snapshots",
+        )
+
+    assert blocked.value.reason_code == "harness-entrypoint-missing"
