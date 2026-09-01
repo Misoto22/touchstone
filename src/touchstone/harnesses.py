@@ -155,6 +155,25 @@ def resolve_harness(
     )
 
 
+def _tree_digest(root: Path) -> str:
+    """One digest over every file the context exposes, names included.
+
+    A rename is a change even when no content moves, so the relative path is hashed alongside the
+    bytes, and a symlink contributes its target rather than what it currently points at.
+    """
+
+    digest = hashlib.sha256()
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root).as_posix().encode("utf-8")
+        if path.is_symlink():
+            digest.update(b"L\0" + relative + b"\0" + os.readlink(path).encode("utf-8") + b"\0")
+        elif path.is_file():
+            digest.update(b"F\0" + relative + b"\0" + path.read_bytes() + b"\0")
+        elif path.is_dir():
+            digest.update(b"D\0" + relative + b"\0")
+    return digest.hexdigest()
+
+
 def verify_harness_unchanged(context: HarnessContext, executor: Executor) -> None:
     """Confirm the resolved rules still read as they did when they were resolved.
 
@@ -167,16 +186,29 @@ def verify_harness_unchanged(context: HarnessContext, executor: Executor) -> Non
 
     if not context.digest:
         return
-    current_text = executor.read_text(context.entrypoint.as_posix())
-    if current_text is None:
-        raise HarnessResolutionError(
-            "harness-entrypoint-missing",
-            f"the resolved Harness entrypoint has gone: {context.entrypoint}",
-        )
-    if hashlib.sha256(current_text.encode("utf-8")).hexdigest() != context.digest:
+    if context.mode == "external":
+        # The whole snapshot is exposed as the context root, and an entrypoint that delegates to
+        # sibling files makes those files rules too. Digest the tree, not one document.
+        if not context.context_root.is_dir():
+            raise HarnessResolutionError(
+                "harness-entrypoint-missing",
+                f"the resolved Harness context has gone: {context.context_root}",
+            )
+        current = _tree_digest(context.context_root)
+        subject = context.context_root
+    else:
+        current_text = executor.read_text(context.entrypoint.as_posix())
+        if current_text is None:
+            raise HarnessResolutionError(
+                "harness-entrypoint-missing",
+                f"the resolved Harness entrypoint has gone: {context.entrypoint}",
+            )
+        current = hashlib.sha256(current_text.encode("utf-8")).hexdigest()
+        subject = context.entrypoint
+    if current != context.digest:
         raise HarnessResolutionError(
             "harness-modified",
-            f"the Harness entrypoint changed during the run: {context.entrypoint}",
+            f"the Harness rules changed during the run: {subject}",
         )
 
 
@@ -423,15 +455,8 @@ def _resolve_external(
             f"Harness entrypoint does not exist at {declaration.ref}: {declaration.entrypoint}",
         ) from None
     _make_read_only(snapshot)
-    snapshot_text = local.read_text(entrypoint.as_posix())
-    if snapshot_text is None:
-        shutil.rmtree(snapshot)
-        raise HarnessResolutionError(
-            "harness-entrypoint-missing",
-            f"Harness entrypoint could not be read from the snapshot: {declaration.entrypoint}",
-        )
     return HarnessContext(
-        digest=hashlib.sha256(snapshot_text.encode("utf-8")).hexdigest(),
+        digest=_tree_digest(snapshot),
         mode="external",
         source=declaration.source,
         entrypoint=entrypoint,
