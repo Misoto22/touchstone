@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import shutil
@@ -29,6 +30,9 @@ class HarnessContext:
     revision: str
     context_root: Path
     evidence: tuple[str, ...]
+    #: What the entrypoint said when it was resolved. An embedded one lives in the worktree the
+    #: author session writes to, so the reviewer has to be able to tell that it still says it.
+    digest: str = ""
 
 
 class HarnessResolutionError(RuntimeError):
@@ -149,6 +153,29 @@ def resolve_harness(
         target_checkout=target_checkout,
         executor=target,
     )
+
+
+def verify_harness_unchanged(context: HarnessContext, executor: Executor) -> None:
+    """Confirm the resolved rules still read as they did when they were resolved.
+
+    An embedded entrypoint lives in the worktree the author session writes to. Without this the
+    reviewer could be handed rules the candidate wrote, while the recorded revision still named
+    the one from before it ran.
+    """
+
+    if context.mode != "embedded" or not context.digest:
+        return
+    current_text = executor.read_text(context.entrypoint.as_posix())
+    if current_text is None:
+        raise HarnessResolutionError(
+            "harness-entrypoint-missing",
+            f"the resolved Harness entrypoint has gone: {context.entrypoint}",
+        )
+    if hashlib.sha256(current_text.encode("utf-8")).hexdigest() != context.digest:
+        raise HarnessResolutionError(
+            "harness-modified",
+            f"the Harness entrypoint changed during the run: {context.entrypoint}",
+        )
 
 
 def _target_root(config: Config, target_checkout: Path | None) -> str:
@@ -285,6 +312,7 @@ def _resolve_embedded(
         revision = revision or _git_revision(root, executor) or "repository"
         evidence = ("repository-entrypoint",)
     return HarnessContext(
+        digest=hashlib.sha256(text.encode("utf-8")).hexdigest(),
         mode="embedded",
         source="repository",
         entrypoint=Path(entrypoint.as_posix()),
@@ -468,5 +496,6 @@ __all__ = [
     "registry_path",
     "resolve_harness",
     "unregister_harness",
+    "verify_harness_unchanged",
     "write_registry",
 ]

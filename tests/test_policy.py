@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from touchstone.nodes import classify
 
 
@@ -7,13 +9,40 @@ class LoopWithoutProjectProtection:
     protected_paths: tuple[str, ...] = ()
 
 
+class ConfigWithoutHarness:
+    harness = None
+
+
+class ConfigWithHarness:
+    def __init__(self, mode: str, entrypoint: str) -> None:
+        self.harness = SimpleNamespace(mode=mode, entrypoint=entrypoint)
+
+
 def test_builtin_control_paths_cannot_be_removed_by_project_config() -> None:
-    protected = classify._protected_paths(LoopWithoutProjectProtection())
+    protected = classify._protected_paths(LoopWithoutProjectProtection(), ConfigWithoutHarness())
 
     assert ".github/" in protected
     assert "touchstone.toml" in protected
     assert "**/migrations/" in protected
     assert "**/schema.*" in protected
+
+
+def test_a_declared_harness_entrypoint_is_protected() -> None:
+    """Only the root `AGENTS.md` was built in; a custom entrypoint was editable and unescalated."""
+    protected = classify._protected_paths(
+        LoopWithoutProjectProtection(), ConfigWithHarness("embedded", "docs/rules.md")
+    )
+
+    assert "docs/rules.md" in protected
+
+
+def test_an_external_harness_entrypoint_is_not_a_repository_path() -> None:
+    """An external entrypoint names a file in the snapshot, not in the repository under audit."""
+    protected = classify._protected_paths(
+        LoopWithoutProjectProtection(), ConfigWithHarness("external", "harness/00-INDEX.md")
+    )
+
+    assert "harness/00-INDEX.md" not in protected
 
 
 def test_protected_path_globs_match_environment_files() -> None:

@@ -121,8 +121,17 @@ def _under(path: str, prefix: str) -> bool:
     return path == root or path.startswith(f"{root}/")
 
 
-def _protected_paths(loop: Any) -> tuple[str, ...]:
-    return tuple(dict.fromkeys((*BUILTIN_PROTECTED_PATHS, *loop.protected_paths)))
+def _protected_paths(loop: Any, config: Any) -> tuple[str, ...]:
+    """The builtin set, the loop's own, and the document stating the rules for this run.
+
+    Only the root `AGENTS.md` was built in, so a harness declaring `docs/rules.md` left the very
+    file governing the session editable by it, and editable without escalating.
+    """
+
+    declared: tuple[str, ...] = ()
+    if config.harness is not None and config.harness.mode == "embedded":
+        declared = (config.harness.entrypoint,)
+    return tuple(dict.fromkeys((*BUILTIN_PROTECTED_PATHS, *loop.protected_paths, *declared)))
 
 
 def run(state: dict[str, Any]) -> dict[str, Any]:
@@ -147,7 +156,7 @@ def run(state: dict[str, Any]) -> dict[str, Any]:
     ):
         return _clean(context, state, "nothing changed under the paths this loop maintains")
 
-    for protected in _protected_paths(loop):
+    for protected in _protected_paths(loop, context.config):
         hit = [path for path in paths if _matches_path(path, protected)]
         if hit:
             return {

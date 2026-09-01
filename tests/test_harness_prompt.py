@@ -61,6 +61,7 @@ def test_reviewer_receives_the_same_resolved_harness_header(monkeypatch) -> None
         executor=_Executor(),
         engine_for=lambda _name: engine,
         config=SimpleNamespace(forge=SimpleNamespace(default_branch="main")),
+        harness=None,
     )
     monkeypatch.setattr(review, "current", lambda: context)
 
