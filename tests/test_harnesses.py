@@ -460,3 +460,56 @@ def test_external_harness_ignores_a_local_branch_shadowing_the_remote_ref(tmp_pa
 
     assert context.revision == published
     assert context.entrypoint.read_text(encoding="utf-8") == "published rules\n"
+
+
+def test_embedded_harness_refuses_a_symlinked_entrypoint(tmp_path: Path) -> None:
+    """A link is how host content becomes the project's rules."""
+    config = _config(tmp_path, HarnessConfig(mode="embedded", entrypoint="AGENTS.md"))
+    outside = tmp_path / "host-rules.md"
+    outside.write_text("host content\n", encoding="utf-8")
+    (config.repo_path / "AGENTS.md").symlink_to(outside)
+
+    with pytest.raises(HarnessResolutionError) as blocked:
+        resolve_harness(config)
+
+    assert blocked.value.reason_code == "harness-identity-mismatch"
+
+
+def test_embedded_harness_refuses_an_entrypoint_under_a_symlinked_directory(
+    tmp_path: Path,
+) -> None:
+    """The escaping link need not be the last component."""
+    config = _config(tmp_path, HarnessConfig(mode="embedded", entrypoint="rules/AGENTS.md"))
+    outside = tmp_path / "host-rules"
+    outside.mkdir()
+    (outside / "AGENTS.md").write_text("host content\n", encoding="utf-8")
+    (config.repo_path / "rules").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(HarnessResolutionError) as blocked:
+        resolve_harness(config)
+
+    assert blocked.value.reason_code == "harness-identity-mismatch"
+
+
+def test_embedded_harness_refuses_a_symlinked_entrypoint_on_a_remote_checkout() -> None:
+    """The orchestrator cannot see the link, so the machine holding the checkout is asked."""
+
+    class _LinkedRemote(_RemoteExecutor):
+        def run(self, argv, *, cwd=None, timeout=None, stdin_null=True, env=None):  # type: ignore[no-untyped-def]
+            from touchstone.execution import Result
+
+            if argv[:2] == ["test", "-L"]:
+                return Result(code=0, stdout="", stderr="")
+            return super().run(argv, cwd=cwd, timeout=timeout, stdin_null=stdin_null, env=env)
+
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as scratch:
+        config = _config(Path(scratch), HarnessConfig(mode="embedded", entrypoint="AGENTS.md"))
+        remote_root = "/srv/touchstone/run-worktree"
+        executor = _LinkedRemote({f"{remote_root}/AGENTS.md": "host content\n"})
+
+        with pytest.raises(HarnessResolutionError) as blocked:
+            resolve_harness(config, target_checkout=Path(remote_root), executor=executor)
+
+    assert blocked.value.reason_code == "harness-identity-mismatch"

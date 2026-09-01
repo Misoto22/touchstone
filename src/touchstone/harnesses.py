@@ -173,17 +173,18 @@ def _safe_entrypoint(root: str, reference: str, executor: Executor) -> Path:
             "harness-identity-mismatch",
             "Harness entrypoint escapes its declared root",
         )
-    # A symlink can still leave the root, and only this machine can follow one. Where the root
-    # is local that stronger check still applies; where it is remote, the pure-path bound is all
-    # there is.
-    local_root = Path(root)
-    if local_root.is_dir() and not (local_root / reference).resolve().is_relative_to(
-        local_root.resolve()
-    ):
-        raise HarnessResolutionError(
-            "harness-identity-mismatch",
-            "Harness entrypoint escapes its declared root",
-        )
+    # A lexical bound says nothing about symlinks, and the machine that can follow one is the
+    # machine the checkout is on. Asking it about every component below the root is portable and
+    # gives local and remote the same answer: an entrypoint reached through a link is refused,
+    # because a link is exactly how host content becomes the project's rules.
+    walked = base
+    for part in PurePosixPath(reference).parts:
+        walked = walked / part
+        if executor.run(["test", "-L", walked.as_posix()], timeout=30).ok:
+            raise HarnessResolutionError(
+                "harness-identity-mismatch",
+                f"Harness entrypoint is reached through a symbolic link: {reference}",
+            )
     if not executor.exists(candidate.as_posix()):
         raise HarnessResolutionError(
             "harness-entrypoint-missing",
