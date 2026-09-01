@@ -14,7 +14,7 @@ def _run(*argv: str, cwd: Path) -> str:
     return completed.stdout.strip()
 
 
-def _config(tmp_path: Path, harness: HarnessConfig) -> Config:
+def _config(tmp_path: Path, harness: HarnessConfig, *, target: str = "local") -> Config:
     root = tmp_path / "target"
     (root / ".touchstone").mkdir(parents=True)
     (root / ".touchstone/generated.toml").write_text(
@@ -30,6 +30,15 @@ source_digest = "sha256:test"
         f'source = "{harness.source}"\nref = "{harness.ref}"\n'
         if harness.mode == "external"
         else ""
+    )
+    execution = (
+        ""
+        if target == "local"
+        else (
+            '[execution]\ntarget = "ssh"\n'
+            '[execution.ssh]\nhost = "remote-host"\n'
+            'workdir = "/srv/touchstone/work"\nstate_dir = "/srv/touchstone/state"\n'
+        )
     )
     (root / "touchstone.toml").write_text(
         f'''\
@@ -49,7 +58,7 @@ entrypoint = "{harness.entrypoint}"
 [loop.code]
 brief = "builtin:code-audit"
 label = "touchstone:audit"
-''',
+{execution}''',
         encoding="utf-8",
     )
     return load(root / "touchstone.toml")
@@ -300,3 +309,26 @@ def test_external_harness_checks_target_identity_through_its_executor(tmp_path: 
         )
 
     assert blocked.value.reason_code == "harness-identity-mismatch"
+
+
+def test_external_harness_refuses_a_session_that_cannot_read_the_snapshot(tmp_path: Path) -> None:
+    """The snapshot is local; a session on another machine would run without its rules."""
+    checkout = Path(_git_repository(tmp_path / "harness", remote="git@github.com:acme/harness.git"))
+    config = _config(
+        tmp_path,
+        HarnessConfig(
+            mode="external",
+            entrypoint="AGENTS.md",
+            source="acme/harness",
+            ref="origin/main",
+        ),
+        target="ssh",
+    )
+    (config.repo_path / "AGENTS.md").write_text(
+        "Shared Harness: canonical repo `acme/harness`.\n", encoding="utf-8"
+    )
+
+    with pytest.raises(HarnessResolutionError) as blocked:
+        resolve_harness(config, registry={"acme/harness": checkout})
+
+    assert blocked.value.reason_code == "harness-unreachable"

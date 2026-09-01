@@ -240,6 +240,16 @@ def _resolve_external(
 ) -> HarnessContext:
     assert config.harness is not None
     declaration = config.harness
+    # The snapshot is extracted here, and `context_root` is handed to the model session as an
+    # absolute path. When that session runs on another machine it cannot read this directory, and
+    # the audit would proceed without the external Harness rules rather than stop. Until the
+    # snapshot can be delivered to the session's machine, refuse the pairing instead.
+    if config.execution.target != "local":
+        raise HarnessResolutionError(
+            "harness-unreachable",
+            "an external Harness snapshot is materialized on this machine and cannot be read by "
+            f"a session running on {config.execution.target}; use harness.mode = 'embedded'",
+        )
     checkout = registry.get(declaration.source)
     if checkout is None or not checkout.is_dir():
         raise HarnessResolutionError(
