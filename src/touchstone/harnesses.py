@@ -271,13 +271,11 @@ def _resolve_external(
             "external Harness ref must name a remote and revision, for example origin/main",
         )
     remote_result = local.run(["git", "remote", "get-url", remote], cwd=str(checkout), timeout=30)
-    if (
-        not remote_result.ok
-        or _canonical_source(remote_result.stdout.strip()) != declaration.source
-    ):
+    host, slug = _remote_identity(remote_result.stdout.strip())
+    if not remote_result.ok or host not in GITHUB_HOSTS or slug != declaration.source:
         raise HarnessResolutionError(
             "harness-identity-mismatch",
-            f"registered checkout remote does not match {declaration.source}",
+            f"registered checkout remote does not match {declaration.source} on github.com",
         )
     fetched = local.run(["git", "fetch", "--quiet", remote], cwd=str(checkout), timeout=300)
     if not fetched.ok:
@@ -351,17 +349,33 @@ def cleanup_harness(context: HarnessContext | None) -> None:
     shutil.rmtree(root)
 
 
-def _canonical_source(remote_url: str) -> str:
+#: `forge.provider` admits only GitHub, so an external Harness can only live there.
+GITHUB_HOSTS = frozenset({"github.com", "www.github.com"})
+
+
+def _remote_identity(remote_url: str) -> tuple[str, str]:
+    """The host and owner/repository a remote actually points at.
+
+    The host is half the identity. Matching only the last two path segments accepted
+    `https://evil.example/acme/harness.git` as `acme/harness`, and those rules then steer
+    unattended author and reviewer sessions.
+    """
+
     value = remote_url.removesuffix(".git").rstrip("/")
+    host = ""
     if "://" in value:
         parsed = urlsplit(value)
+        host = parsed.hostname or ""
         path = parsed.path.strip("/")
     elif ":" in value and not value.startswith("/"):
-        path = value.split(":", 1)[1].strip("/")
+        location, _, remainder = value.partition(":")
+        host = location.rpartition("@")[2]
+        path = remainder.strip("/")
     else:
         path = Path(value).as_posix().strip("/")
     parts = path.split("/")
-    return "/".join(parts[-2:]) if len(parts) >= 2 else path
+    slug = "/".join(parts[-2:]) if len(parts) >= 2 else path
+    return host.lower(), slug
 
 
 def _git_revision(root: str, executor: Executor) -> str:

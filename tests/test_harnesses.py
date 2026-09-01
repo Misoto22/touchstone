@@ -135,12 +135,38 @@ def test_local_registry_rejects_noncanonical_source_identity(tmp_path: Path) -> 
         load_registry(path)
 
 
+def _offline_ssh(checkout: Path, bare: Path) -> None:
+    """Serve a GitHub-shaped ssh remote from a local repository.
+
+    `git remote get-url` reports where git will really go, `insteadOf` included, so a checkout
+    cannot merely claim a GitHub URL. This answers as that host would, without a network.
+    """
+
+    script = checkout.parent / "offline-ssh.py"
+    script.write_text(
+        "#!/usr/bin/env python3\n"
+        "import shlex\n"
+        "import subprocess\n"
+        "import sys\n"
+        "argv = shlex.split(sys.argv[-1])\n"
+        f"argv[-1] = {str(bare)!r}\n"
+        "sys.exit(subprocess.run(argv).returncode)\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    _run("git", "config", "core.sshCommand", str(script), cwd=checkout)
+
+
 def test_external_harness_resolves_a_clean_snapshot_from_named_revision(tmp_path: Path) -> None:
     bare = tmp_path / "acme/efficient-harness.git"
     bare.parent.mkdir()
     _run("git", "init", "--bare", "--initial-branch=main", str(bare), cwd=tmp_path)
     checkout = tmp_path / "efficient-harness"
-    _git_repository(checkout, remote=str(bare))
+    # The remote has to read as the GitHub repository it claims to be, because that is what the
+    # resolver verifies — and `git remote get-url` applies `insteadOf`, so rewriting cannot fake
+    # it. A stand-in ssh keeps the fetch local while the URL stays genuine.
+    _git_repository(checkout, remote="git@github.com:acme/efficient-harness.git")
+    _offline_ssh(checkout, bare)
     entrypoint = checkout / "harness/00-INDEX.md"
     entrypoint.parent.mkdir(parents=True)
     entrypoint.write_text("committed rules\n", encoding="utf-8")
@@ -332,3 +358,59 @@ def test_external_harness_refuses_a_session_that_cannot_read_the_snapshot(tmp_pa
         resolve_harness(config, registry={"acme/harness": checkout})
 
     assert blocked.value.reason_code == "harness-unreachable"
+
+
+@pytest.mark.parametrize(
+    "remote",
+    [
+        "https://evil.example/acme/harness.git",
+        "git@evil.example:acme/harness.git",
+        "ssh://git@evil.example/acme/harness.git",
+        "https://github.example.com/acme/harness.git",
+    ],
+)
+def test_external_harness_rejects_the_right_slug_on_the_wrong_host(
+    tmp_path: Path, remote: str
+) -> None:
+    """The last two path segments are not an identity; the host is half of it."""
+    checkout = Path(_git_repository(tmp_path / "harness", remote=remote))
+    config = _config(
+        tmp_path,
+        HarnessConfig(
+            mode="external",
+            entrypoint="AGENTS.md",
+            source="acme/harness",
+            ref="origin/main",
+        ),
+    )
+    (config.repo_path / "AGENTS.md").write_text(
+        "Shared Harness: canonical repo `acme/harness`.\n", encoding="utf-8"
+    )
+
+    with pytest.raises(HarnessResolutionError) as blocked:
+        resolve_harness(config, registry={"acme/harness": checkout})
+
+    assert blocked.value.reason_code == "harness-identity-mismatch"
+
+
+def test_external_harness_rejects_a_local_path_remote(tmp_path: Path) -> None:
+    """A local mirror cannot prove it is the GitHub repository it is registered as."""
+    mirror = tmp_path / "acme/harness"
+    checkout = Path(_git_repository(tmp_path / "checkout", remote=str(mirror)))
+    config = _config(
+        tmp_path,
+        HarnessConfig(
+            mode="external",
+            entrypoint="AGENTS.md",
+            source="acme/harness",
+            ref="origin/main",
+        ),
+    )
+    (config.repo_path / "AGENTS.md").write_text(
+        "Shared Harness: canonical repo `acme/harness`.\n", encoding="utf-8"
+    )
+
+    with pytest.raises(HarnessResolutionError) as blocked:
+        resolve_harness(config, registry={"acme/harness": checkout})
+
+    assert blocked.value.reason_code == "harness-identity-mismatch"
