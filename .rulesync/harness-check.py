@@ -12,6 +12,7 @@ import subprocess
 import sys
 from dataclasses import dataclass, replace
 from html import unescape
+from itertools import pairwise
 from pathlib import Path
 from unicodedata import category
 
@@ -1859,7 +1860,7 @@ def inline_code_splice_projection(text: str) -> str:
     # adjacency has to be judged on the decoded neighbours rather than on the raw source.
     separators = [
         rendered_text(transparent_inline_text(text[left[3] : right[0]]))
-        for left, right in zip(spans[:-1], spans[1:], strict=True)
+        for left, right in pairwise(spans)
     ]
     prefix = rendered_text(transparent_inline_text(text[: spans[0][0]]))
     suffix = rendered_text(transparent_inline_text(text[spans[-1][3] :]))
