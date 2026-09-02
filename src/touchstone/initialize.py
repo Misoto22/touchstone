@@ -25,6 +25,7 @@ class InitOptions:
     start: Path
     engine: EngineName
     model: str
+    backend: Literal["local", "actions"] = "actions"
     workflows: tuple[str, ...] = ()
     schedule: str = "hourly@00"
     timezone: str = "UTC"
@@ -49,10 +50,12 @@ def initialize(options: InitOptions, executor: Executor) -> InitReport:
         raise ConfigError("init requires an explicit model")
     if not options.timezone.strip():
         raise ConfigError("init requires a non-empty IANA timezone")
-    if options.visibility not in {"public", "private"}:
+    if options.backend not in {"local", "actions"}:
+        raise ConfigError("init backend must be 'local' or 'actions'")
+    if options.backend == "actions" and options.visibility not in {"public", "private"}:
         raise ConfigError("repository visibility must be 'public' or 'private'")
     wake_minutes = options.wake_minutes or (15 if options.visibility == "public" else 60)
-    if wake_minutes not in {5, 10, 15, 20, 30, 60}:
+    if options.backend == "actions" and wake_minutes not in {5, 10, 15, 20, 30, 60}:
         raise ConfigError("hosted wake cadence must be one of 5, 10, 15, 20, 30, or 60 minutes")
     found = options.discovered or discover_project(options.start, executor)
     target = (options.output or found.root / "touchstone.toml").expanduser().resolve()
@@ -107,6 +110,9 @@ def initialize(options: InitOptions, executor: Executor) -> InitReport:
     return InitReport(target, generated_path, generated)
 
 
+_EMBEDDED_ENTRYPOINT = "AGENTS.md"
+
+
 def render_config(
     options: InitOptions,
     discovery: ProjectDiscovery,
@@ -136,13 +142,7 @@ def render_config(
             "timeout_seconds": 2700,
         },
         "execution": {"target": "local"},
-        "actions": {
-            "visibility": options.visibility,
-            "wake_minutes": wake_minutes or (15 if options.visibility == "public" else 60),
-            "artifact_retention_days": 90,
-            "node_version": "24",
-            "auto_merge": False,
-        },
+        "harness": {"mode": "embedded", "entrypoint": _EMBEDDED_ENTRYPOINT},
         "loop": {
             "code": {
                 "brief": "builtin:code-audit",
@@ -152,6 +152,19 @@ def render_config(
             }
         },
     }
+    # Declaring an entrypoint that is not there produced a configuration whose very next command
+    # blocks with `harness-entrypoint-missing`. With no embedded Harness to point at, leave the
+    # declaration out and let discovery behave as it did before.
+    if not (discovery.root / _EMBEDDED_ENTRYPOINT).is_file():
+        root.pop("harness")
+    if options.backend == "actions":
+        root["actions"] = {
+            "visibility": options.visibility,
+            "wake_minutes": wake_minutes or (15 if options.visibility == "public" else 60),
+            "artifact_retention_days": 90,
+            "node_version": "24",
+            "auto_merge": False,
+        }
     selected = explicit_profiles_by_target or {}
     if any(selected.values()):
         root["target"] = {

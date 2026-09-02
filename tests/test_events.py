@@ -5,7 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from touchstone.engines.base import Session
-from touchstone.events import EventLog, run_event
+from touchstone.events import EventLog, config_fingerprint, run_event
 from touchstone.nodes import audit
 
 
@@ -19,6 +19,7 @@ def _config(secret: str = "do-not-log"):  # type: ignore[no-untyped-def]
             ssh=SimpleNamespace(host="worker.example", env=(("SECRET_TOKEN", secret),)),
         ),
         loops={"code": SimpleNamespace(name="code", schedule="hourly")},
+        harness=None,
     )
 
 
@@ -69,6 +70,18 @@ def test_runner_records_started_and_finished_events() -> None:
     assert "EventLog" in source
     assert 'kind="started"' in source
     assert 'kind="finished"' in source
+
+
+def test_harness_selection_is_part_of_the_configuration_fingerprint() -> None:
+    legacy = _config()
+    embedded = SimpleNamespace(
+        **{
+            **vars(legacy),
+            "harness": SimpleNamespace(mode="embedded", source="", ref="", entrypoint="AGENTS.md"),
+        }
+    )
+
+    assert config_fingerprint(legacy) != config_fingerprint(embedded)
 
 
 def test_engine_failure_transcript_does_not_enter_graph_notes() -> None:

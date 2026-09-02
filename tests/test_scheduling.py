@@ -20,6 +20,7 @@ def _config(tmp_path: Path):  # type: ignore[no-untyped-def]
         # The wake unit's start timeout is derived from this: systemd must not
         # win a race against the timeout that produces a diagnosis.
         engine=SimpleNamespace(timeout_seconds=2700),
+        forge=SimpleNamespace(slug="acme/widgets"),
         loops={
             "code": SimpleNamespace(name="code", schedule="hourly"),
             "weekly": SimpleNamespace(name="weekly", schedule="weekly@MON,09:30"),
@@ -44,6 +45,19 @@ def test_launchd_file_has_absolute_paths_and_no_environment_secrets(tmp_path: Pa
     text = report.files[0].read_text(encoding="utf-8")
     assert "GH_TOKEN" not in text
     assert "SECRET" not in text
+
+
+def test_two_repositories_render_distinct_launchd_labels(tmp_path: Path) -> None:
+    scheduler = LaunchdScheduler(LocalExecutor(), executable=Path("/absolute/bin/touchstone"))
+    first = _config(tmp_path / "first")
+    second = _config(tmp_path / "second")
+    second.forge.slug = "acme/gadgets"
+
+    first_files = scheduler._render(first, tmp_path / "rendered")
+    second_files = scheduler._render(second, tmp_path / "rendered")
+
+    assert set(first_files).isdisjoint(second_files)
+    assert next(iter(first_files)).name.startswith("io.touchstone.agent.acme-widgets-")
 
 
 def test_systemd_install_is_idempotent_and_skips_unscheduled_loops(tmp_path: Path) -> None:
@@ -229,3 +243,54 @@ def test_the_wake_unit_outlives_every_engine_call_it_can_make(tmp_path: Path) ->
         "ceilings, and a systemd kill records nothing"
     )
     assert "After=network-online.target" in service
+
+
+def _legacy_plist(destination: Path, name: str, config_path: Path) -> Path:
+    """A job written by a pre-hash install, naming this configuration."""
+    path = destination / name
+    path.write_bytes(
+        plistlib.dumps(
+            {
+                "Label": path.stem,
+                "ProgramArguments": [
+                    "/absolute/bin/touchstone",
+                    "--config",
+                    str(config_path.resolve()),
+                    "wake",
+                ],
+            }
+        )
+    )
+    return path
+
+
+def test_launchd_uninstall_removes_a_legacy_wake_job(tmp_path: Path) -> None:
+    """An upgraded installation kept firing from the pre-hash job after uninstall."""
+    config = _config(tmp_path)
+    target = tmp_path / "launchd-units"
+    target.mkdir()
+    scheduler = LaunchdScheduler(LocalExecutor(), executable=Path("/absolute/bin/touchstone"))
+    scheduler.install(config, target=target)
+    legacy = _legacy_plist(target, "io.touchstone.agent.wake.plist", config.source.path)
+
+    report = scheduler.uninstall(config, target=target)
+
+    assert legacy in report.changed
+    assert not legacy.exists()
+    assert sorted(path.name for path in target.iterdir()) == []
+
+
+def test_launchd_uninstall_leaves_another_configurations_legacy_job(tmp_path: Path) -> None:
+    """Only jobs this configuration owns are removed."""
+    config = _config(tmp_path)
+    target = tmp_path / "launchd-units"
+    target.mkdir()
+    scheduler = LaunchdScheduler(LocalExecutor(), executable=Path("/absolute/bin/touchstone"))
+    scheduler.install(config, target=target)
+    foreign = _legacy_plist(
+        target, "io.touchstone.agent.wake.plist", tmp_path / "somewhere-else/touchstone.toml"
+    )
+
+    scheduler.uninstall(config, target=target)
+
+    assert foreign.exists()

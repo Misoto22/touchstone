@@ -166,7 +166,7 @@ def run(state: dict[str, Any]) -> dict[str, Any]:
     loop = context.loop(state["loop"])
     worktree = state["worktree"]
 
-    brief = loop.prompt()
+    brief = context.harness_prompt() + loop.prompt()
     handled = context.ledger.handled_titles()
     if handled:
         brief += "\n\n## Already handled — do not raise any of these again\n\n"

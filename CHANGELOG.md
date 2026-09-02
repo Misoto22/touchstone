@@ -4,7 +4,12 @@ All notable user-facing changes are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-09-02
+
 ### Added
+
+- Explicit embedded or external project Harness selection, verified external Git identity and revision snapshots, a machine-local Harness registry, and read-only `config path/check/show/explain` inspection with effective-value provenance.
+- Local-first initialization through `touchstone init --backend local`, portable fleet checkout keys, and repository-specific launchd identities so multiple scheduled audits coexist on one Mac.
 
 - A project covers many repositories. A project file holds the Loops, engines, and schedules that are the same everywhere; `touchstone sync --check` reports which members differ from what it renders, and `touchstone sync --pr` proposes each drifted member's fragment as a pull request. Members name that fragment with `extends` and override any key they disagree with, so precedence runs from machine-owned evidence, through the fleet's decisions, to the repository's own word. There is no direct-write path, a project may not set `target`, `generated`, `project`, `state_dir`, or `version`, and a credential-shaped key that is not an `op://` reference is refused.
 - A container backend, one repository per container. `touchstone sync --compose` renders one service per member, each with its own checkout, state volume, and credential set. The image carries Touchstone, `git`, `gh`, and the Agent CLI from its committed lockfile and nothing a project owns; a repository needing a toolchain derives from it. The supervisor is a fixed-interval wake signal over the existing `run-due`, not a second clock, and a failed wake is a failed run rather than a failed supervisor.
@@ -115,6 +120,7 @@ All notable user-facing changes are documented here. The format follows [Keep a 
 - Dry runs no longer reconcile or close live pull requests, and persisted failure notes exclude model output.
 - GitHub API payloads and native scheduler command results are validated before state advances.
 
+[0.1.3]: https://github.com/Misoto22/touchstone/releases/tag/v0.1.3
 [0.1.2]: https://github.com/Misoto22/touchstone/releases/tag/v0.1.2
 [0.1.1]: https://github.com/Misoto22/touchstone/releases/tag/v0.1.1
 [0.1.0]: https://github.com/Misoto22/touchstone/releases/tag/v0.1.0

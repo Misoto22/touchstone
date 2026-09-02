@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
 
 import pytest
 
 from tests.test_discovery import make_repo
 from touchstone.cli import main
-from touchstone.config import ConfigError, load_config
+from touchstone.config import ConfigError, load, load_config
 from touchstone.discovery import discover_project
 from touchstone.execution.local import LocalExecutor
 from touchstone.initialize import InitOptions, initialize
@@ -34,6 +35,48 @@ def test_non_interactive_init_writes_a_loadable_generic_config(tmp_path: Path) -
     text = report.root.read_text(encoding="utf-8")
     assert "/Users/" not in text
     assert "api_key" not in text.lower()
+
+
+def test_local_init_writes_embedded_harness_without_actions_policy(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path, remote="https://github.com/acme/widgets.git")
+    (repo / "AGENTS.md").write_text("repository rules\n", encoding="utf-8")
+
+    report = initialize(
+        InitOptions(
+            start=repo,
+            engine="codex",
+            model="gpt-test",
+            backend="local",
+            schedule="weekly@SUN,03:00",
+            timezone="Australia/Sydney",
+        ),
+        LocalExecutor(),
+    )
+    raw = tomllib.loads(report.root.read_text(encoding="utf-8"))
+
+    assert raw["harness"] == {"mode": "embedded", "entrypoint": "AGENTS.md"}
+    assert raw["execution"] == {"target": "local"}
+    assert "actions" not in raw
+
+
+def test_actions_init_retains_hosted_policy(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path, remote="https://github.com/acme/widgets.git")
+
+    report = initialize(
+        InitOptions(
+            start=repo,
+            engine="codex",
+            model="gpt-test",
+            backend="actions",
+            visibility="private",
+            wake_minutes=30,
+        ),
+        LocalExecutor(),
+    )
+    raw = tomllib.loads(report.root.read_text(encoding="utf-8"))
+
+    assert raw["actions"]["visibility"] == "private"
+    assert raw["actions"]["wake_minutes"] == 30
 
 
 def test_init_refuses_to_overwrite_without_force(tmp_path: Path) -> None:
@@ -104,6 +147,31 @@ def test_non_interactive_init_is_available_from_the_cli(tmp_path: Path) -> None:
     assert load_config(repo / "touchstone.toml").forge.slug == "acme/widgets"
 
 
+def test_non_interactive_local_init_does_not_require_a_workflow(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path, remote="git@github.com:acme/widgets.git")
+
+    code = main(
+        [
+            "init",
+            "--path",
+            str(repo),
+            "--backend",
+            "local",
+            "--non-interactive",
+            "--engine",
+            "codex",
+            "--model",
+            "gpt-test",
+            "--schedule",
+            "weekly@SUN,03:00",
+        ]
+    )
+
+    assert code == 0
+    raw = tomllib.loads((repo / "touchstone.toml").read_text(encoding="utf-8"))
+    assert "actions" not in raw
+
+
 def test_non_interactive_init_requires_an_explicit_workflow(tmp_path: Path) -> None:
     repo = make_repo(tmp_path, remote="git@github.com:acme/widgets.git")
 
@@ -144,3 +212,26 @@ def test_non_interactive_init_requires_an_explicit_schedule(tmp_path: Path) -> N
 
     assert code == 78
     assert not (repo / "touchstone.toml").exists()
+
+
+def test_init_omits_the_harness_block_when_there_is_no_entrypoint(tmp_path: Path) -> None:
+    """Declaring an absent entrypoint made every following command block."""
+    repo = make_repo(tmp_path, remote="https://github.com/acme/widgets.git")
+    assert not (repo / "AGENTS.md").exists()
+
+    report = initialize(
+        InitOptions(
+            start=repo,
+            engine="codex",
+            model="gpt-test",
+            backend="local",
+            schedule="weekly@SUN,03:00",
+            timezone="Australia/Sydney",
+        ),
+        LocalExecutor(),
+    )
+    raw = tomllib.loads(report.root.read_text(encoding="utf-8"))
+
+    assert "harness" not in raw
+    # and the configuration it wrote is one the next command can actually load
+    assert load(report.root).harness is None

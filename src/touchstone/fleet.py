@@ -30,6 +30,10 @@ from touchstone.config_v2 import merge_generated
 class FleetError(ValueError):
     """The project configuration is unusable, and no member may be rendered."""
 
+    def __init__(self, detail: str, *, reason_code: str = "invalid-configuration") -> None:
+        super().__init__(detail)
+        self.reason_code = reason_code
+
 
 #: Keys the fleet may never own, and why.
 #:
@@ -46,7 +50,7 @@ _FLEET_FORBIDDEN = {
     "version": "the rendered file is a fragment, not a configuration in itself",
 }
 
-_MEMBER_KEYS = {"path", "loops", "overrides"}
+_MEMBER_KEYS = {"path", "checkout", "loops", "overrides"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,7 +82,31 @@ class SyncReport:
         return 3 if self.drifted else 0
 
 
-def load_project(path: Path) -> ProjectConfig:
+def load_checkout_map(path: Path) -> dict[str, Path]:
+    chosen = path.expanduser().resolve()
+    try:
+        raw = tomllib.loads(chosen.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise FleetError(
+            f"no checkout map at {chosen}", reason_code="checkout-not-installed"
+        ) from None
+    except tomllib.TOMLDecodeError as exc:
+        raise FleetError(f"{chosen} is not valid TOML: {exc}") from None
+    if set(raw) != {"checkouts"} or not isinstance(raw["checkouts"], dict):
+        raise FleetError("checkout map must contain only a [checkouts] table")
+    result: dict[str, Path] = {}
+    for name, value in raw["checkouts"].items():
+        if not isinstance(name, str) or not name.strip():
+            raise FleetError("checkout names must be non-empty strings")
+        if not isinstance(value, str) or not Path(value).expanduser().is_absolute():
+            raise FleetError(f"checkouts.{name} must be an absolute local path")
+        result[name] = Path(value).expanduser().resolve()
+    return result
+
+
+def load_project(
+    path: Path, *, checkout_map: Path | dict[str, Path] | None = None
+) -> ProjectConfig:
     chosen = path.expanduser().resolve()
     try:
         raw = tomllib.loads(chosen.read_text(encoding="utf-8"))
@@ -103,6 +131,11 @@ def load_project(path: Path) -> ProjectConfig:
     _refuse_credential_values(defaults, "defaults")
 
     declared = set(defaults.get("loop", {}))
+    checkouts = (
+        load_checkout_map(checkout_map)
+        if isinstance(checkout_map, Path)
+        else dict(checkout_map or {})
+    )
     members: dict[str, Member] = {}
     raw_members = raw.get("member", {})
     if not isinstance(raw_members, dict):
@@ -116,8 +149,20 @@ def load_project(path: Path) -> ProjectConfig:
         if "/" not in slug:
             raise FleetError(f"member {slug!r} must be an owner/repository slug")
         member_path = value.get("path")
-        if not isinstance(member_path, str) or not member_path.strip():
-            raise FleetError(f"member {slug!r} requires a path to its checkout")
+        checkout = value.get("checkout")
+        if (member_path is None) == (checkout is None):
+            raise FleetError(f"member {slug!r} requires exactly one of path or checkout")
+        if member_path is not None and (
+            not isinstance(member_path, str) or not member_path.strip()
+        ):
+            raise FleetError(f"member {slug!r} path must be a non-empty string")
+        if checkout is not None and (not isinstance(checkout, str) or not checkout.strip()):
+            raise FleetError(f"member {slug!r} checkout must be a non-empty logical name")
+        if checkout is not None and checkout not in checkouts:
+            raise FleetError(
+                f"member {slug!r} checkout {checkout!r} is not installed",
+                reason_code="checkout-not-installed",
+            )
         loops = value.get("loops", sorted(declared))
         if not isinstance(loops, list) or any(not isinstance(item, str) for item in loops):
             raise FleetError(f"member.{slug!r}.loops must be a list of Loop names")
@@ -135,7 +180,11 @@ def load_project(path: Path) -> ProjectConfig:
         _refuse_credential_values(overrides, f"member.{slug!r}.overrides")
         members[slug] = Member(
             slug=slug,
-            path=(chosen.parent / member_path).resolve(),
+            path=(
+                checkouts[str(checkout)]
+                if checkout is not None
+                else (chosen.parent / str(member_path)).resolve()
+            ),
             loops=tuple(loops),
             overrides=overrides,
         )

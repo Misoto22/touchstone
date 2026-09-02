@@ -121,6 +121,17 @@ def run(state: dict[str, Any]) -> dict[str, Any]:
     worktree = state["worktree"]
     base = f"origin/{context.config.forge.default_branch}"
 
+    # The author session writes to the same worktree an embedded Harness is read from. Reviewing
+    # against rules the candidate just wrote is not an independent review, so check that the rules
+    # this stage is about to quote are still the ones the run resolved.
+    if context.harness is not None:
+        from touchstone.harnesses import HarnessResolutionError, verify_harness_unchanged
+
+        try:
+            verify_harness_unchanged(context.harness, context.executor)
+        except HarnessResolutionError as exc:
+            return {"verdict": "blocked", "verdict_reason": exc.detail}
+
     from string import Template
 
     brief = Template(loop.review_prompt()).safe_substitute(dict(loop.context))
@@ -129,7 +140,7 @@ def run(state: dict[str, Any]) -> dict[str, Any]:
     if reviewable.refusal:
         return {"verdict": "skipped", "verdict_reason": reviewable.refusal}
     finding = state.get("finding", {})
-    prompt = (
+    prompt = context.harness_prompt() + (
         f"{brief}\n\n## The change under review\n\n### Stated intent\n\n"
         f"{finding.get('title', '')} — {finding.get('summary', '')}\n\n"
         f"### Diff\n\n```diff\n{reviewable.diff}\n```"

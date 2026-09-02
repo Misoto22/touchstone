@@ -15,6 +15,18 @@ required_workflows = ["ci.yml"]
 escalation_label = "touchstone:needs-review"
 reap_after_hours = 6
 
+# Exactly one project Harness. Embedded keeps a fresh clone self-contained.
+[harness]
+mode = "embedded"
+entrypoint = "AGENTS.md"
+
+# External alternative; keep the checkout path in the user-level registry:
+# [harness]
+# mode = "external"
+# source = "Efficient-Pty-Ltd/efficient-harness"
+# ref = "origin/main"
+# entrypoint = "harness/00-INDEX.md"
+
 [engine]
 name = "codex" # codex | claude
 model = "your-model-id"

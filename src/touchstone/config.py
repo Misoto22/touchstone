@@ -21,6 +21,20 @@ EngineName = Literal["codex", "claude"]
 Target = Literal["local", "ssh"]
 
 
+# Substrings that make a key name secret-shaped. One definition: three copies of this list had
+# already drifted apart, and the shortest of them leaked API keys through `config show`.
+SECRET_KEY_MARKERS = (
+    "TOKEN",
+    "SECRET",
+    "PASSWORD",
+    "PASSWD",
+    "PASSPHRASE",
+    "API_KEY",
+    "PRIVATE_KEY",
+    "CREDENTIAL",
+)
+
+
 class ConfigError(ValueError):
     """The configuration is unusable, and the run should not start."""
 
@@ -30,6 +44,16 @@ class ConfigSource:
     path: Path
     schema_version: int
     generated_path: Path | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class HarnessConfig:
+    """The one project Harness explicitly selected for a run."""
+
+    mode: Literal["embedded", "external"] = "embedded"
+    entrypoint: str = "AGENTS.md"
+    source: str = ""
+    ref: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,10 +140,9 @@ class SshConfig:
             raise ConfigError("execution.ssh.workdir must be an absolute remote path")
         if not PurePosixPath(self.state_dir).is_absolute():
             raise ConfigError("execution.ssh.state_dir must be an absolute remote path")
-        secret_markers = ("TOKEN", "SECRET", "PASSWORD", "PASSWD", "API_KEY", "PRIVATE_KEY")
         for key, _value in self.env:
             normalized = key.upper()
-            if any(marker in normalized for marker in secret_markers):
+            if any(marker in normalized for marker in SECRET_KEY_MARKERS):
                 raise ConfigError(
                     f"execution.ssh.env contains secret-like key {key!r}; "
                     "provide credentials through the remote runtime instead"
@@ -350,6 +373,8 @@ class Config:
     actions: ActionsConfig = field(default_factory=ActionsConfig)
     #: Every engine a Loop may name, including the unnamed one as `default`.
     engines: dict[str, EngineConfig] = field(default_factory=dict)
+    #: None preserves legacy repository instruction discovery.
+    harness: HarnessConfig | None = None
 
     def engine_for(self, loop: str | None = None) -> EngineConfig:
         """The engine a Loop actually runs on.
@@ -433,6 +458,7 @@ _TOP_LEVEL = {
     "git",
     "loop",
     "actions",
+    "harness",
 }
 _PROJECT = {"path"}
 _FORGE = {
@@ -499,6 +525,7 @@ _ACTIONS = {
     "approval_environment",
     "auto_merge",
 }
+_HARNESS = {"mode", "entrypoint", "source", "ref"}
 
 
 _RETIRED_ACTIONS = ("codex_cli_version", "claude_code_version")
@@ -773,6 +800,7 @@ def _validate(raw: dict[str, Any]) -> None:
     git = _table(raw, "git")
     loops = _table(raw, "loop")
     actions = _table(raw, "actions")
+    harness = _table(raw, "harness")
     _unknown(project, _PROJECT, "project")
     _unknown(forge, _FORGE, "forge")
     members = _engine_members(engine)
@@ -787,6 +815,7 @@ def _validate(raw: dict[str, Any]) -> None:
     _unknown(git, _GIT, "git")
     _retired_actions_keys(actions)
     _unknown(actions, _ACTIONS, "actions")
+    _unknown(harness, _HARNESS, "harness")
     _string(project, "path", "project", required=True)
     if "state_dir" in raw and not isinstance(raw["state_dir"], str):
         raise ConfigError("state_dir must be a string")
@@ -827,6 +856,26 @@ def _validate(raw: dict[str, Any]) -> None:
         raise ConfigError("actions.auto_merge must be a boolean")
     if actions.get("visibility", "public") not in {"public", "private"}:
         raise ConfigError("actions.visibility must be 'public' or 'private'")
+    if harness:
+        for key in ("mode", "entrypoint", "source", "ref"):
+            _string(harness, key, "harness", required=key in {"mode", "entrypoint"})
+        mode = harness.get("mode")
+        if mode not in {"embedded", "external"}:
+            raise ConfigError("harness.mode must be 'embedded' or 'external'")
+        entrypoint = Path(str(harness.get("entrypoint", "")))
+        if entrypoint.is_absolute() or ".." in entrypoint.parts:
+            raise ConfigError("harness.entrypoint must stay inside its Harness root")
+        if mode == "embedded" and "source" in harness:
+            raise ConfigError("embedded Harness must not set source")
+        if mode == "embedded" and "ref" in harness:
+            raise ConfigError("embedded Harness must not set ref")
+        if mode == "external":
+            if "source" not in harness:
+                raise ConfigError("external Harness requires source")
+            if "ref" not in harness:
+                raise ConfigError("external Harness requires ref")
+            if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", str(harness["source"])):
+                raise ConfigError("harness.source must be a canonical owner/repository identity")
     node_version = actions.get("node_version", "24")
     if not re.fullmatch(r"[0-9]+(?:\.[0-9]+(?:\.[0-9]+)?)?", node_version):
         raise ConfigError("actions.node_version must be a numeric Node.js release")
@@ -965,6 +1014,7 @@ def _build_config(
     ssh_raw = _table(execution_raw, "ssh")
     git_raw = _table(raw, "git")
     actions_raw = _table(raw, "actions")
+    harness_raw = _table(raw, "harness")
 
     engine = _build_engine(engine_raw, where="engine", environment=True)
     engines = {"default": engine}
@@ -1050,6 +1100,16 @@ def _build_config(
             approval_environment=str(actions_raw.get("approval_environment", "")),
             auto_merge=bool(actions_raw.get("auto_merge", False)),
         ),
+        harness=(
+            HarnessConfig(
+                mode=harness_raw.get("mode", "embedded"),
+                entrypoint=str(harness_raw.get("entrypoint", "AGENTS.md")),
+                source=str(harness_raw.get("source", "")),
+                ref=str(harness_raw.get("ref", "")),
+            )
+            if harness_raw
+            else None
+        ),
     )
 
 
@@ -1110,6 +1170,7 @@ __all__ = [
     "ExecutionConfig",
     "ForgeConfig",
     "GitConfig",
+    "HarnessConfig",
     "LoopConfig",
     "SshConfig",
     "discover_config_path",

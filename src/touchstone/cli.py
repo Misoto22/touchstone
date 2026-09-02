@@ -7,11 +7,165 @@ human decisions, and graph documentation.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
+from typing import Any
 
-from touchstone import visualise
-from touchstone.config import ConfigError, load
+from touchstone import __version__, visualise
+from touchstone.config import Config, ConfigError, load
+
+
+def _config_path(args: argparse.Namespace) -> int:
+    from touchstone.inspection import configuration_paths
+
+    paths = {key: str(value) for key, value in configuration_paths(load(args.config)).items()}
+    if args.json:
+        print(json.dumps(paths, sort_keys=True))
+    else:
+        for owner, path in paths.items():
+            print(f"{owner}: {path}")
+    return 0
+
+
+def _harness_target(config: Config) -> dict[str, Any]:
+    """Where the audit would read its Harness from, and what can read it.
+
+    Validating the orchestrator's copy while the session runs elsewhere reported `clean` for a
+    remote checkout that has no entrypoint — the one thing these commands exist to catch.
+    """
+
+    from touchstone.execution import build
+
+    target: dict[str, Any] = {
+        "target_checkout": Path(config.execution_repo),
+        "executor": build(config),
+    }
+    if config.harness is not None and config.harness.mode == "embedded":
+        # A run builds its worktree from the fetched default branch, never from whatever the
+        # clone has checked out. Checking the working tree passed on a feature branch and then
+        # blocked at run time.
+        target["revision"] = f"origin/{config.forge.default_branch}"
+    return target
+
+
+def _config_check(args: argparse.Namespace) -> int:
+    from touchstone.harnesses import HarnessResolutionError, cleanup_harness, resolve_harness
+
+    config = load(args.config)
+    if config.harness is None:
+        payload = {
+            "status": "clean",
+            "reason": "legacy-instruction-discovery",
+            "detail": "no explicit [harness]; repository instruction discovery is unchanged",
+        }
+    else:
+        try:
+            context = resolve_harness(config, **_harness_target(config))
+        except HarnessResolutionError as exc:
+            payload = {"status": "blocked", "reason": exc.reason_code, "detail": exc.detail}
+            _print_payload(payload, json_output=args.json)
+            return 3
+        payload = {
+            "status": "clean",
+            "reason": "harness-resolved",
+            "detail": f"{context.mode}:{context.source}@{context.revision}",
+        }
+        cleanup_harness(context)
+    _print_payload(payload, json_output=args.json)
+    return 0
+
+
+def _config_show(args: argparse.Namespace) -> int:
+    import tomli_w
+
+    from touchstone.inspection import effective_configuration, redacted_configuration
+
+    payload = (
+        effective_configuration(load(args.config))
+        if args.effective
+        else redacted_configuration(load(args.config))
+    )
+    if args.json:
+        print(json.dumps(payload, sort_keys=True))
+    elif args.effective:
+        for field, record in payload.items():
+            print(f"{field} = {record['value']!r} ({record['source']})")
+    else:
+        print(tomli_w.dumps(payload), end="")
+    return 0
+
+
+def _config_explain(args: argparse.Namespace) -> int:
+    from touchstone.inspection import explain_configuration_field
+
+    payload = explain_configuration_field(load(args.config), args.field)
+    if args.json:
+        print(json.dumps(payload, sort_keys=True))
+    else:
+        print(f"{payload['field']} = {payload['value']!r}")
+        print(f"source: {payload['source']}")
+    return 0
+
+
+def _harness_register(args: argparse.Namespace) -> int:
+    from touchstone.harnesses import register_harness
+
+    path = register_harness(args.source, args.path)
+    print(f"registered {args.source} in {path}")
+    return 0
+
+
+def _harness_list(args: argparse.Namespace) -> int:
+    from touchstone.harnesses import load_registry
+
+    entries = {source: str(path) for source, path in load_registry().items()}
+    if args.json:
+        print(json.dumps(entries, sort_keys=True))
+    else:
+        for source, path in entries.items():
+            print(f"{source}: {path}")
+    return 0
+
+
+def _harness_resolve(args: argparse.Namespace) -> int:
+    from touchstone.harnesses import HarnessResolutionError, cleanup_harness, resolve_harness
+
+    config = load(args.config)
+    try:
+        context = resolve_harness(config, **_harness_target(config))
+    except HarnessResolutionError as exc:
+        _print_payload(
+            {"status": "blocked", "reason": exc.reason_code, "detail": exc.detail},
+            json_output=args.json,
+        )
+        return 3
+    payload = {
+        "status": "clean",
+        "mode": context.mode,
+        "source": context.source,
+        "entrypoint": context.entrypoint.relative_to(context.context_root).as_posix(),
+        "revision": context.revision,
+        "evidence": list(context.evidence),
+    }
+    cleanup_harness(context)
+    _print_payload(payload, json_output=args.json)
+    return 0
+
+
+def _harness_unregister(args: argparse.Namespace) -> int:
+    from touchstone.harnesses import unregister_harness
+
+    path = unregister_harness(args.source)
+    print(f"unregistered {args.source} from {path}")
+    return 0
+
+
+def _print_payload(payload: dict[str, object], *, json_output: bool) -> None:
+    if json_output:
+        print(json.dumps(payload, sort_keys=True))
+    else:
+        print(" · ".join(f"{key}={value}" for key, value in payload.items()))
 
 
 def _init(args: argparse.Namespace) -> int:
@@ -34,31 +188,34 @@ def _init(args: argparse.Namespace) -> int:
     visibility = args.visibility
     wake_minutes = args.wake_minutes
     if args.non_interactive:
-        if not engine or not model or not workflows or not schedule:
+        missing_workflow = args.backend == "actions" and not workflows
+        if not engine or not model or not schedule or missing_workflow:
             raise ConfigError(
-                "non-interactive init requires --engine, --model, --schedule, "
-                "and at least one --workflow"
+                "non-interactive init requires --engine, --model, and --schedule; "
+                "the actions backend also requires at least one --workflow"
             )
-        visibility = visibility or "public"
+        if args.backend == "actions":
+            visibility = visibility or "public"
     else:
         engine = engine or input("Engine (codex or claude) [codex]: ").strip() or "codex"
         model = model or input("Model: ").strip()
-        if not workflows:
+        if args.backend == "actions" and not workflows:
             workflow = input("Required workflow [ci.yml]: ").strip() or "ci.yml"
             workflows = (workflow,)
         schedule = schedule or input("Schedule [hourly@00]: ").strip() or "hourly@00"
-        visibility = (
-            visibility
-            or input("Repository visibility (public or private) [public]: ").strip()
-            or "public"
-        )
-        default_wake = 15 if visibility == "public" else 60
-        if wake_minutes is None:
-            wake_raw = input(f"GitHub Actions wake minutes [{default_wake}]: ").strip()
-            try:
-                wake_minutes = int(wake_raw) if wake_raw else default_wake
-            except ValueError:
-                raise ConfigError("GitHub Actions wake minutes must be an integer") from None
+        if args.backend == "actions":
+            visibility = (
+                visibility
+                or input("Repository visibility (public or private) [public]: ").strip()
+                or "public"
+            )
+            default_wake = 15 if visibility == "public" else 60
+            if wake_minutes is None:
+                wake_raw = input(f"GitHub Actions wake minutes [{default_wake}]: ").strip()
+                try:
+                    wake_minutes = int(wake_raw) if wake_raw else default_wake
+                except ValueError:
+                    raise ConfigError("GitHub Actions wake minutes must be an integer") from None
         managers = detect_package_managers(discovered.root)
         ambiguous = ambiguous_package_managers(managers)
         if package_manager is None and ambiguous:
@@ -71,6 +228,7 @@ def _init(args: argparse.Namespace) -> int:
             start=args.path,
             engine=engine,
             model=model or "",
+            backend=args.backend,
             workflows=workflows,
             schedule=schedule or "hourly@00",
             timezone=args.timezone,
@@ -218,7 +376,9 @@ def _sync(args: argparse.Namespace) -> int:
     )
 
     try:
-        project = load_project(Path(args.project))
+        project = load_project(
+            Path(args.project), checkout_map=Path(args.checkouts) if args.checkouts else None
+        )
     except FleetError as exc:
         print(f"touchstone: {exc}", file=sys.stderr)
         return 78
@@ -585,6 +745,7 @@ def _graph(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="touchstone", description=__doc__)
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--config", type=Path, help="a TOML file; discovered when omitted")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -592,6 +753,12 @@ def main(argv: list[str] | None = None) -> int:
     init.add_argument("--path", type=Path, default=Path.cwd(), help="repository or child path")
     init.add_argument("--output", type=Path, help="configuration destination")
     init.add_argument("--non-interactive", action="store_true")
+    init.add_argument(
+        "--backend",
+        choices=("local", "actions"),
+        default="actions",
+        help="local native scheduler or GitHub Actions (default: actions for compatibility)",
+    )
     init.add_argument("--engine", choices=("codex", "claude"))
     init.add_argument("--model")
     init.add_argument("--workflow", action="append", help="required default-branch workflow")
@@ -712,6 +879,20 @@ def main(argv: list[str] | None = None) -> int:
 
     config = sub.add_parser("config", help="inspect or migrate configuration")
     config_sub = config.add_subparsers(dest="config_command", required=True)
+    config_path = config_sub.add_parser("path", help="show every configuration source path")
+    config_path.add_argument("--json", action="store_true")
+    config_path.set_defaults(handler=_config_path)
+    config_check = config_sub.add_parser("check", help="validate config and resolve its Harness")
+    config_check.add_argument("--json", action="store_true")
+    config_check.set_defaults(handler=_config_check)
+    config_show = config_sub.add_parser("show", help="show redacted configuration")
+    config_show.add_argument("--effective", action="store_true", help="include value ownership")
+    config_show.add_argument("--json", action="store_true")
+    config_show.set_defaults(handler=_config_show)
+    config_explain = config_sub.add_parser("explain", help="explain one effective field")
+    config_explain.add_argument("field")
+    config_explain.add_argument("--json", action="store_true")
+    config_explain.set_defaults(handler=_config_explain)
     migrate = config_sub.add_parser("migrate", help="migrate an unversioned config")
     migrate.add_argument("path", type=Path)
     migrate.set_defaults(handler=_migrate_config)
@@ -727,6 +908,28 @@ def main(argv: list[str] | None = None) -> int:
     migrate_mode.add_argument("--check", action="store_true", help="preview without writing")
     migrate_mode.add_argument("--write", action="store_true", help="back up and migrate")
     migrate_v2.set_defaults(handler=_migrate_config_v2)
+
+    harness = sub.add_parser("harness", help="manage and resolve project Harness sources")
+    harness_sub = harness.add_subparsers(dest="harness_command", required=True)
+    harness_register = harness_sub.add_parser(
+        "register", help="map a canonical Harness source to a local checkout"
+    )
+    harness_register.add_argument("source")
+    harness_register.add_argument("--path", type=Path, required=True)
+    harness_register.set_defaults(handler=_harness_register)
+    harness_list = harness_sub.add_parser("list", help="list machine-local Harness mappings")
+    harness_list.add_argument("--json", action="store_true")
+    harness_list.set_defaults(handler=_harness_list)
+    harness_resolve = harness_sub.add_parser(
+        "resolve", help="resolve the configured Harness exactly as a run would"
+    )
+    harness_resolve.add_argument("--json", action="store_true")
+    harness_resolve.set_defaults(handler=_harness_resolve)
+    harness_unregister = harness_sub.add_parser(
+        "unregister", help="remove one machine-local Harness mapping"
+    )
+    harness_unregister.add_argument("source")
+    harness_unregister.set_defaults(handler=_harness_unregister)
 
     run = sub.add_parser("run", help="one iteration of a loop")
     run.add_argument("loop", help="which loop, by its [loop.*] name")
@@ -751,6 +954,10 @@ def main(argv: list[str] | None = None) -> int:
         "sync", help="render a project's shared configuration for its member repositories"
     )
     sync.add_argument("--project", required=True, help="path to the project configuration")
+    sync.add_argument(
+        "--checkouts",
+        help="machine-local [checkouts] map for members using logical checkout names",
+    )
     sync.add_argument(
         "--check",
         action="store_true",

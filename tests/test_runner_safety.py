@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import inspect
+from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from touchstone import runner
+from touchstone.config import load_config
+from touchstone.events import EventLog
 from touchstone.execution.base import Result
+from touchstone.harnesses import HarnessResolutionError
 from touchstone.ledger import Ledger, LifecycleEvent
 
 
@@ -20,6 +25,40 @@ class FetchFailingExecutor:
 class CleanupFailingExecutor:
     def run(self, argv, **_kwargs):  # type: ignore[no-untyped-def]
         return Result(1, "", f"failed: {' '.join(argv[3:5])}")
+
+
+def test_harness_failure_stops_before_graph_and_persists_reason_code(
+    monkeypatch, tmp_path: Path
+) -> None:  # type: ignore[no-untyped-def]
+    from tests.test_config import _valid_config, _write
+
+    source = _write(
+        tmp_path / "touchstone.toml",
+        _valid_config() + '\n[harness]\nmode = "embedded"\nentrypoint = "AGENTS.md"\n',
+    )
+    config = replace(load_config(source), state_dir=tmp_path / "state")
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    graph_calls: list[str] = []
+    monkeypatch.setattr(runner, "configure", lambda _config: None)
+    monkeypatch.setattr(runner, "_gates", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(runner, "_worktree", lambda _config: (str(worktree), "audit/test"))
+    monkeypatch.setattr(runner, "_teardown", lambda *_args, **_kwargs: ())
+    monkeypatch.setattr(
+        runner,
+        "resolve_harness",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            HarnessResolutionError("harness-entrypoint-missing", "missing AGENTS.md")
+        ),
+    )
+    monkeypatch.setattr(runner, "build", lambda: graph_calls.append("built"))
+
+    assert runner.execute(config, loop="code", dry_run=True) == 3
+
+    assert graph_calls == []
+    finished = EventLog(config.state_dir / "events.jsonl").rows()[-1]
+    assert finished["reason_code"] == "harness-entrypoint-missing"
+    assert finished["detail"] == "missing AGENTS.md"
 
 
 def test_worktree_creation_refuses_to_use_a_stale_base_after_fetch_failure(
