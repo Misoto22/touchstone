@@ -874,8 +874,29 @@ def _age_hours(created_at: str, now: dt.datetime) -> float:
     return max(0.0, (now - created.astimezone(dt.UTC)).total_seconds() / 3600)
 
 
+def _review_line(request: PublicationRequest) -> str:
+    """What the review said, or why there is nothing for it to have said.
+
+    A change above `low` never reaches the reviewer — nothing it could answer
+    would let the change merge unattended, so paying for the session would buy
+    nothing. That produced an empty verdict, which the body rendered as
+    `**skipped** —` with no reason: identical to a review that ran and failed.
+    Two pull requests were read that way, including by me.
+    """
+    if request.verdict in {"approve", "reject"}:
+        return f"**{request.verdict}** — {request.review_reason}"
+    if request.risk != "low":
+        return (
+            f"**not reviewed** — a `{request.risk}` change waits for a person "
+            "whatever a reviewer would say, so none was asked."
+        )
+    reason = request.review_reason or "no reason was recorded, which is itself a defect"
+    return f"**inconclusive** — {reason}"
+
+
 def _pull_body(request: PublicationRequest) -> str:
     escalation = f"\n\nEscalated by the loop: {request.escalation}" if request.escalation else ""
+    review_line = _review_line(request)
     return f"""## What this changes
 
 {request.summary}
@@ -890,7 +911,7 @@ def _pull_body(request: PublicationRequest) -> str:
 
 ## Independent review
 
-**{request.verdict}** — {request.review_reason}
+{review_line}
 
 ---
 
