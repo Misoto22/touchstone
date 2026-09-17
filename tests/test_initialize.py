@@ -79,6 +79,42 @@ def test_actions_init_retains_hosted_policy(tmp_path: Path) -> None:
     assert raw["actions"]["wake_minutes"] == 30
 
 
+def test_actions_init_accepts_a_six_hour_wake_cadence(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path, remote="https://github.com/acme/widgets.git")
+
+    report = initialize(
+        InitOptions(
+            start=repo,
+            engine="codex",
+            model="gpt-test",
+            backend="actions",
+            visibility="public",
+            wake_minutes=360,
+        ),
+        LocalExecutor(),
+    )
+    raw = tomllib.loads(report.root.read_text(encoding="utf-8"))
+
+    assert raw["actions"]["wake_minutes"] == 360
+
+
+def test_actions_init_refuses_an_unsupported_wake_cadence(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path, remote="https://github.com/acme/widgets.git")
+
+    with pytest.raises(ConfigError, match="hosted wake cadence must be one of"):
+        initialize(
+            InitOptions(
+                start=repo,
+                engine="codex",
+                model="gpt-test",
+                backend="actions",
+                visibility="public",
+                wake_minutes=90,
+            ),
+            LocalExecutor(),
+        )
+
+
 def test_init_refuses_to_overwrite_without_force(tmp_path: Path) -> None:
     repo = make_repo(tmp_path, remote="git@github.com:acme/widgets.git")
     target = repo / "touchstone.toml"
