@@ -2,6 +2,13 @@
 
 All notable user-facing changes are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Entries above `0.1.3` are written by the `misoto22-release-bot` release pull request from the Conventional Commits merged into `main`; the entries below it were written by hand.
 
+## [0.2.0](https://github.com/Misoto22/touchstone/compare/v0.1.3...v0.2.0) (2026-09-17)
+
+
+### Features
+
+* **hosted:** allow wake cadences up to six hours ([#47](https://github.com/Misoto22/touchstone/issues/47)) ([7a8a805](https://github.com/Misoto22/touchstone/commit/7a8a805c4d5f030c1ec91b43b0f7ba877af9779f))
+
 ## [0.1.3] - 2026-09-02
 
 ### Added
