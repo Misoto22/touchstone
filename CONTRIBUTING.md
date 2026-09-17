@@ -34,6 +34,10 @@ uv build
 
 Distribution changes must also install the built wheel into an isolated environment and run `touchstone --help` and `touchstone graph` outside the source checkout.
 
+## Releases
+
+Releases are cut by the `misoto22-release-bot` release pull request, not by hand. A Conventional Commit merged into `main` makes the bot open or update `chore(main): release X.Y.Z`; merging that pull request bumps `pyproject.toml`, writes the `CHANGELOG.md` entry, tags `vX.Y.Z`, and publishes the GitHub Release that starts the PyPI job in `.github/workflows/release.yml`. Do not bump the version, move a tag, or draft a release by hand.
+
 ## Pull requests
 
 Keep pull requests incremental and explain:
