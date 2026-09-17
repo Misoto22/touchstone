@@ -16,6 +16,14 @@
     ".rulesync/rules/10-core-code-review.md": [
       "HAR-REV-001"
     ],
+    ".rulesync/rules/10-core-delivery-ci.md": [
+      "HAR-CI-001",
+      "HAR-CI-002",
+      "HAR-CI-003",
+      "HAR-CI-004",
+      "HAR-REL-001",
+      "HAR-REL-002"
+    ],
     ".rulesync/rules/10-core-git.md": [
       "HAR-GIT-001",
       "HAR-GIT-002"
@@ -27,10 +35,10 @@
     ],
     ".rulesync/rules/10-core-naming.md": [
       "HAR-NAME-001",
-      "HAR-NAME-002",
       "HAR-NAME-003",
       "HAR-NAME-004",
-      "HAR-NAME-005"
+      "HAR-NAME-005",
+      "HAR-NAME-006"
     ],
     ".rulesync/rules/10-core-security.md": [
       "HAR-SEC-001",
@@ -363,7 +371,7 @@
       "level": "MUST",
       "scope": "core",
       "owner": "harness",
-      "status": "active",
+      "status": "deprecated",
       "since": "0.2.0",
       "statement": "Use `codex/<short-kebab-topic>` branches by default, Conventional Commit subjects in imperative English, and imperative English pull-request titles.",
       "rationale": "Consistent delivery names make history and automation predictable.",
@@ -383,7 +391,8 @@
           "check": "Delivery metadata review",
           "blocking": true
         }
-      ]
+      ],
+      "replacement": "HAR-NAME-006"
     },
     {
       "id": "HAR-NAME-003",
@@ -462,6 +471,38 @@
       ]
     },
     {
+      "id": "HAR-NAME-006",
+      "name": "Scoped delivery names",
+      "level": "MUST",
+      "scope": "core",
+      "owner": "harness",
+      "status": "active",
+      "since": "0.3.0",
+      "statement": "Use `<type>(<scope>)/<short-kebab-topic>` branches by default, where `<type>` is a Conventional Commits type (`feat`, `fix`, `chore`, `docs`, `refactor`, `perf`, `test`, `ci`, `build`, `revert`, or `style`) and `<scope>` is a short kebab-case area as in `feat(app)/device-auth` or `fix(api)/rate-limit`; keep Conventional Commit subjects in imperative English and imperative English pull-request titles.",
+      "rationale": "Scoped branch names keep history and automation predictable while recording the change type and area.",
+      "sources": [
+        {
+          "type": "url",
+          "ref": "https://www.conventionalcommits.org/en/v1.0.0/"
+        },
+        {
+          "type": "url",
+          "ref": "https://git-scm.com/docs/git-check-ref-format"
+        },
+        {
+          "type": "policy",
+          "ref": "owner-decision-2026-09-16"
+        }
+      ],
+      "enforcement": [
+        {
+          "kind": "review",
+          "check": "Delivery metadata review",
+          "blocking": true
+        }
+      ]
+    },
+    {
       "id": "HAR-REV-001",
       "name": "Evidence-backed findings",
       "level": "MUST",
@@ -482,6 +523,174 @@
           "kind": "review",
           "check": "Codex review guidance",
           "blocking": true
+        }
+      ]
+    },
+    {
+      "id": "HAR-REL-001",
+      "name": "Automated releases",
+      "level": "MUST",
+      "scope": "core",
+      "owner": "harness",
+      "status": "active",
+      "since": "0.4.0",
+      "statement": "Cut every actively developed repository's releases through the fleet release bot: the reusable `Misoto22/ci` release workflow running release-please in manifest mode as the `misoto22-release-bot` GitHub App. Derive the version, `CHANGELOG.md`, and GitHub Release from Conventional Commits; never hand-edit a version field and never move a tag. Configure a multi-package npm workspace with the `node-workspace` plugin and linked versions so the repository still tags one `vMAJOR.MINOR.PATCH`.",
+      "rationale": "One automated release path keeps versions, changelogs, and tags derived from the same reviewed history instead of from hand edits.",
+      "sources": [
+        {
+          "type": "url",
+          "ref": "https://github.com/googleapis/release-please"
+        },
+        {
+          "type": "url",
+          "ref": "https://www.conventionalcommits.org/en/v1.0.0/"
+        },
+        {
+          "type": "policy",
+          "ref": "owner-decision-2026-09-17"
+        }
+      ],
+      "enforcement": [
+        {
+          "kind": "ci",
+          "check": "Misoto22/ci release.yml release-please job",
+          "blocking": true
+        }
+      ]
+    },
+    {
+      "id": "HAR-REL-002",
+      "name": "Changelog vocabulary",
+      "level": "SHOULD",
+      "scope": "core",
+      "owner": "harness",
+      "status": "active",
+      "since": "0.4.0",
+      "statement": "List only `feat`, `fix`, `perf`, `revert`, `docs`, and `refactor` in `changelog-sections`. Never list `chore`, `ci`, `build`, `test`, or `style`, not even hidden, because release-please then considers those commits for a bump and cuts a patch release for a lone housekeeping commit.",
+      "rationale": "A housekeeping type listed in the changelog sections becomes a release trigger.",
+      "sources": [
+        {
+          "type": "url",
+          "ref": "https://github.com/googleapis/release-please/issues/2638"
+        }
+      ],
+      "enforcement": [
+        {
+          "kind": "review",
+          "check": "Release configuration review",
+          "blocking": false
+        }
+      ]
+    },
+    {
+      "id": "HAR-CI-001",
+      "name": "Linux pull-request gate",
+      "level": "MUST",
+      "scope": "core",
+      "owner": "harness",
+      "status": "active",
+      "since": "0.4.0",
+      "statement": "Run pull-request checks on Linux runners, declare a `concurrency` group keyed on the ref with `cancel-in-progress` for pull requests, and apply path filters wherever a change cannot alter a check's result.",
+      "rationale": "Linux is the cheapest hosted tier, and superseding stale runs stops a pull-request gate from spending the account's quota on results nobody reads.",
+      "sources": [
+        {
+          "type": "url",
+          "ref": "https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/control-concurrency"
+        },
+        {
+          "type": "url",
+          "ref": "https://docs.github.com/en/billing/concepts/product-billing/github-actions"
+        }
+      ],
+      "enforcement": [
+        {
+          "kind": "review",
+          "check": "Workflow configuration review",
+          "blocking": true
+        }
+      ]
+    },
+    {
+      "id": "HAR-CI-002",
+      "name": "macOS off the pull-request path",
+      "level": "MUST",
+      "scope": "core",
+      "owner": "harness",
+      "status": "active",
+      "since": "0.4.0",
+      "statement": "Run GitHub-hosted macOS only for tag pushes, scheduled runs, or path-gated platform changes; gate an Apple-platform pull request on a self-hosted runner or a Linux SwiftPM package test instead.",
+      "rationale": "Hosted macOS minutes bill at ten times the Linux rate, so a macOS leg on every pull request is the largest avoidable cost in the fleet.",
+      "sources": [
+        {
+          "type": "url",
+          "ref": "https://docs.github.com/en/billing/concepts/product-billing/github-actions"
+        },
+        {
+          "type": "policy",
+          "ref": "owner-decision-2026-09-17"
+        }
+      ],
+      "enforcement": [
+        {
+          "kind": "review",
+          "check": "Workflow configuration review",
+          "blocking": true
+        }
+      ]
+    },
+    {
+      "id": "HAR-CI-003",
+      "name": "Pinned actions",
+      "level": "MUST",
+      "scope": "core",
+      "owner": "harness",
+      "status": "active",
+      "since": "0.4.0",
+      "statement": "Reference every third-party action and reusable workflow by full commit SHA with a trailing version comment, and keep those references current through Dependabot's `github-actions` ecosystem.",
+      "rationale": "A mutable tag lets an upstream repository change what runs inside a release-capable job; a pinned SHA plus an update bot keeps the supply chain both fixed and current.",
+      "sources": [
+        {
+          "type": "url",
+          "ref": "https://docs.github.com/en/actions/reference/security/secure-use"
+        },
+        {
+          "type": "url",
+          "ref": "https://docs.github.com/en/code-security/dependabot/working-with-dependabot/keeping-your-actions-up-to-date-with-dependabot"
+        }
+      ],
+      "enforcement": [
+        {
+          "kind": "test",
+          "check": "Pinned action contract test",
+          "blocking": true
+        }
+      ]
+    },
+    {
+      "id": "HAR-CI-004",
+      "name": "Required checks by name",
+      "level": "SHOULD",
+      "scope": "core",
+      "owner": "harness",
+      "status": "active",
+      "since": "0.4.0",
+      "statement": "Require the repository's own CI job or jobs and `pr-title / pr-title` in the branch ruleset, and write a reusable-workflow job's check context as `<caller job id> / <called job name>`.",
+      "rationale": "A required check is matched by its rendered context string, so a bare job name protects nothing while appearing to.",
+      "sources": [
+        {
+          "type": "url",
+          "ref": "https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets"
+        },
+        {
+          "type": "policy",
+          "ref": "owner-decision-2026-09-17"
+        }
+      ],
+      "enforcement": [
+        {
+          "kind": "manual",
+          "check": "Branch protection review",
+          "blocking": false
         }
       ]
     },
