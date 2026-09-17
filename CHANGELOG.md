@@ -1,8 +1,6 @@
 # Changelog
 
-All notable user-facing changes are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-
-## [Unreleased]
+All notable user-facing changes are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Entries above `0.1.3` are written by the `misoto22-release-bot` release pull request from the Conventional Commits merged into `main`; the entries below it were written by hand.
 
 ## [0.1.3] - 2026-09-02
 

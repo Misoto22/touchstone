@@ -410,7 +410,10 @@ uv build
 uv run twine check dist/*
 ```
 
-The current published release is [v0.1.2](https://github.com/Misoto22/touchstone/releases/tag/v0.1.2) on [`touchstone-agent` on PyPI](https://pypi.org/project/touchstone-agent/); the release candidate is `v0.1.3`. GitHub Releases publish through PyPI trusted publishing; the repository stores no PyPI API token.
+The current published release is [v0.1.2](https://github.com/Misoto22/touchstone/releases/tag/v0.1.2) on [`touchstone-agent` on PyPI](https://pypi.org/project/touchstone-agent/);
+the release candidate is `v0.1.3`. <!-- x-release-please-version -->
+GitHub Releases publish through PyPI trusted publishing; the repository stores no PyPI API token.
+Versions are bumped by the `misoto22-release-bot` release pull request rather than by hand: merging it writes `pyproject.toml`, this paragraph and `touchstone.generated.example.toml`, tags `vX.Y.Z`, and publishes the GitHub Release that starts the PyPI job.
 
 See [CONTRIBUTING.md](https://github.com/Misoto22/touchstone/blob/main/CONTRIBUTING.md) for the TDD and pull-request workflow and [CHANGELOG.md](https://github.com/Misoto22/touchstone/blob/main/CHANGELOG.md) for user-facing changes.
 

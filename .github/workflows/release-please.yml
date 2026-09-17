@@ -1,0 +1,32 @@
+# Open and maintain the release pull request with the fleet release bot.
+#
+# The file is not called release.yml because that name is already taken by the
+# PyPI publish workflow, which fires on `release: published` and is asserted by
+# name in tests/test_distribution.py. Renaming it would also break PyPI trusted
+# publishing, whose publisher record names a workflow file.
+#
+# The chain: a Conventional Commit lands on main -> this job opens or updates
+# "chore(main): release X.Y.Z" -> merging that pull request tags vX.Y.Z and
+# publishes the GitHub Release -> release.yml builds from the tag and uploads to
+# PyPI. The release must be created by the misoto22-release-bot App token rather
+# than GITHUB_TOKEN, because a release created with GITHUB_TOKEN triggers no
+# further workflow runs and the publish job would never start.
+
+name: Release Please
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  release:
+    uses: Misoto22/ci/.github/workflows/release.yml@5d6c8cbc88a8b4f8f8c1623f4ef26d767844d92b # main 2026-09-17
+    with:
+      app-client-id: ${{ vars.APP_CLIENT_ID }}
+    secrets:
+      APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}

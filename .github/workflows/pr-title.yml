@@ -1,0 +1,22 @@
+# Lint the pull-request title against Conventional Commits.
+#
+# This repository squash-merges, so the pull-request title becomes the commit
+# subject on main, and that subject is what release-please parses to decide the
+# next version. A sloppy title is a missed release or a wrong bump.
+#
+# The trigger is pull_request_target because a pull_request run from a fork gets
+# a read-only token. The caller job id is `pr-title` and the called job is also
+# named `pr-title`, so the status-check context is `pr-title / pr-title`.
+
+name: PR title
+
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  pr-title:
+    uses: Misoto22/ci/.github/workflows/pr-title.yml@5d6c8cbc88a8b4f8f8c1623f4ef26d767844d92b # main 2026-09-17
