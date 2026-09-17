@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import os
+import re
 import subprocess
 import sys
 import tomllib
@@ -50,6 +52,35 @@ def test_release_uses_pypi_trusted_publishing_only() -> None:
     assert "id-token: write" in workflow
     assert "environment:" in workflow and "name: pypi" in workflow
     assert "password:" not in workflow and "PYPI_API_TOKEN" not in workflow
+
+
+def test_the_release_bot_bumps_this_project_s_own_uv_lock_entry() -> None:
+    """A release that moves `pyproject.toml` and leaves `uv.lock` behind breaks
+    `uv sync --locked` for everyone on the next commit, so the release
+    configuration bumps the lock's own entry too.
+
+    release-please reads that entry through a TOML parser that wraps every
+    scalar as `{start, end, value}`, so the selector has to compare
+    `@.name.value` — a plain `@.name` filter matches nothing and the bot leaves
+    the lock behind silently. This test pins the selector to the distribution
+    this repository actually publishes, and the lock entry to the version
+    `pyproject.toml` declares.
+    """
+
+    config = json.loads((ROOT / "release-please-config.json").read_text(encoding="utf-8"))
+    entry = next(item for item in config["extra-files"] if item.get("path") == "uv.lock")
+    match = re.fullmatch(
+        r'\$\.package\[\?\(@\.name\.value=="([^"]+)"\)\]\.version', entry["jsonpath"]
+    )
+    assert match, f"the uv.lock extra file must select one package by name: {entry['jsonpath']}"
+    lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    selected = [package for package in lock["package"] if package["name"] == match.group(1)]
+
+    assert entry["type"] == "toml"
+    assert match.group(1) == project["name"]
+    assert len(selected) == 1
+    assert selected[0]["version"] == project["version"]
 
 
 def test_built_wheel_runs_without_the_source_checkout(tmp_path: Path) -> None:
