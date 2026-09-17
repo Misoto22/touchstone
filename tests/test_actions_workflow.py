@@ -186,6 +186,38 @@ def test_supported_custom_wake_cadence_is_rendered_without_visibility_coupling(
     assert "cron: '7,22,37,52 * * * *'" in private
 
 
+@pytest.mark.parametrize(
+    ("wake_minutes", "cron"),
+    [
+        (60, "17 * * * *"),
+        (120, "17 */2 * * *"),
+        (180, "17 */3 * * *"),
+        (240, "17 */4 * * *"),
+        (360, "17 */6 * * *"),
+    ],
+)
+def test_an_hour_or_longer_wakes_on_an_hour_step_at_the_same_minute(
+    tmp_path: Path, wake_minutes: int, cron: str
+) -> None:
+    workflow = render_workflow(
+        _config(tmp_path, wake_minutes=wake_minutes), ActionPins(), action_sha="a" * 40
+    )
+
+    assert f"cron: '{cron}'" in workflow
+
+
+@pytest.mark.parametrize("wake_minutes", [90, 720])
+def test_a_cadence_cron_cannot_state_exactly_is_refused(tmp_path: Path, wake_minutes: int) -> None:
+    """90 minutes and 12 hours both leave a short last wake in the day, and a
+    cron expression that says so does not exist. Refusing beats rendering a
+    schedule whose gaps nobody asked for."""
+
+    with pytest.raises(ConfigError, match="hosted wake cadence must be one of"):
+        render_workflow(
+            _config(tmp_path, wake_minutes=wake_minutes), ActionPins(), action_sha="a" * 40
+        )
+
+
 def test_default_branch_is_escaped_as_a_github_expression_literal(tmp_path: Path) -> None:
     config = _config(tmp_path)
     config.forge.default_branch = "release'candidate"

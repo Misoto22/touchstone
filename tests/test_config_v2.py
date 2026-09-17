@@ -207,6 +207,8 @@ def test_v2_metadata_and_target_unknown_keys_are_rejected(
     ("field", "value", "message"),
     [
         ("wake_minutes", 17, "wake_minutes"),
+        ("wake_minutes", 90, "wake_minutes"),
+        ("wake_minutes", 720, "wake_minutes"),
         ("artifact_retention_days", 91, "artifact_retention_days"),
     ],
 )
@@ -220,6 +222,19 @@ def test_hosted_policy_ranges_fail_during_config_load(
 
     with pytest.raises(ConfigError, match=message):
         load(root)
+
+
+@pytest.mark.parametrize("wake_minutes", [120, 180, 240, 360])
+def test_a_multi_hour_wake_cadence_loads(tmp_path: Path, wake_minutes: int) -> None:
+    """A repository whose Loops are daily pays hosted minutes for every wake,
+    so the cadence has to be able to say less often than hourly."""
+
+    _write(tmp_path / ".touchstone/generated.toml", _generated_config())
+    root_data = _root_config()
+    root_data["actions"]["wake_minutes"] = wake_minutes  # type: ignore[index]
+    root = _write(tmp_path / "touchstone.toml", root_data)
+
+    assert load(root).actions.wake_minutes == wake_minutes
 
 
 def test_a_retired_agent_cli_version_key_names_itself(tmp_path: Path) -> None:

@@ -98,7 +98,7 @@ env = { PATH = "/usr/local/bin:/usr/bin:/bin" }
 
 [actions]
 visibility = "public" # must match the live repository for doctor checks
-wake_minutes = 15
+wake_minutes = 15 # 5, 10, 15, 20, 30, 60, 120, 180, 240, or 360
 artifact_retention_days = 90
 node_version = "24"
 auto_merge = false

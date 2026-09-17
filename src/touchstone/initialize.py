@@ -9,7 +9,7 @@ from typing import Literal
 
 import tomli_w
 
-from touchstone.config import ConfigError, EngineName
+from touchstone.config import WAKE_MINUTES, ConfigError, EngineName
 from touchstone.discovery import ProjectDiscovery, discover_project
 from touchstone.execution import Executor
 from touchstone.profiles.materialize import (
@@ -55,8 +55,9 @@ def initialize(options: InitOptions, executor: Executor) -> InitReport:
     if options.backend == "actions" and options.visibility not in {"public", "private"}:
         raise ConfigError("repository visibility must be 'public' or 'private'")
     wake_minutes = options.wake_minutes or (15 if options.visibility == "public" else 60)
-    if options.backend == "actions" and wake_minutes not in {5, 10, 15, 20, 30, 60}:
-        raise ConfigError("hosted wake cadence must be one of 5, 10, 15, 20, 30, or 60 minutes")
+    if options.backend == "actions" and wake_minutes not in WAKE_MINUTES:
+        allowed = ", ".join(str(value) for value in WAKE_MINUTES)
+        raise ConfigError(f"hosted wake cadence must be one of {allowed} minutes")
     found = options.discovered or discover_project(options.start, executor)
     target = (options.output or found.root / "touchstone.toml").expanduser().resolve()
     if target.parent != found.root.resolve():

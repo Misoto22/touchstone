@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from touchstone import __version__, visualise
-from touchstone.config import Config, ConfigError, load
+from touchstone.config import WAKE_MINUTES, Config, ConfigError, load
 
 
 def _config_path(args: argparse.Namespace) -> int:
@@ -772,8 +772,8 @@ def main(argv: list[str] | None = None) -> int:
     init.add_argument(
         "--wake-minutes",
         type=int,
-        choices=(5, 10, 15, 20, 30, 60),
-        help="GitHub Actions wake cadence (default: public 15, private 60)",
+        choices=WAKE_MINUTES,
+        help="GitHub Actions wake cadence in minutes (default: public 15, private 60)",
     )
     init.add_argument("--profile", action="append", help="explicit Profile selection")
     init.add_argument("--package-manager", help="resolve ambiguous lockfile evidence")

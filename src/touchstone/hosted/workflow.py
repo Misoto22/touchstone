@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
-from touchstone.config import Config, ConfigError
+from touchstone.config import WAKE_MINUTES, Config, ConfigError
 from touchstone.hosted.snapshot import config_digest
 
 _SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -80,13 +80,23 @@ def _require_sha(value: str, label: str) -> str:
 
 
 def _cron(config: Config) -> str:
+    """State the wake cadence as one cron expression, off the hour.
+
+    Below an hour the minutes are listed; at an hour and above the same minute
+    fires on an hour step, so a six-hour cadence keeps the off-hour offset that
+    keeps Touchstone out of the runner queue every scheduler builds at :00.
+    """
+
     minutes = config.actions.wake_minutes
-    if minutes == 60:
-        return "17 * * * *"
-    if minutes not in {5, 10, 15, 20, 30}:
-        raise ConfigError("hosted wake cadence must be one of 5, 10, 15, 20, 30, or 60 minutes")
-    minute_field = ",".join(str(minute) for minute in range(7, 60, minutes))
-    return f"{minute_field} * * * *"
+    if minutes not in WAKE_MINUTES:
+        allowed = ", ".join(str(value) for value in WAKE_MINUTES)
+        raise ConfigError(f"hosted wake cadence must be one of {allowed} minutes")
+    if minutes < 60:
+        minute_field = ",".join(str(minute) for minute in range(7, 60, minutes))
+        return f"{minute_field} * * * *"
+    hours = minutes // 60
+    hour_field = "*" if hours == 1 else f"*/{hours}"
+    return f"17 {hour_field} * * *"
 
 
 def render_workflow(config: Config, pins: ActionPins, *, action_sha: str) -> str:

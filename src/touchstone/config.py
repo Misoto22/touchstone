@@ -516,6 +516,12 @@ _MERGE_POLICY = (
     "auto_merge_max_files",
 )
 MERGE_STRATEGIES = ("squash", "merge", "rebase")
+
+#: Hosted wake cadences a single cron expression can state exactly: minute
+#: steps that divide an hour evenly, then whole-hour steps up to six hours. A
+#: cadence that is neither leaves the last wake of the day short, so the set is
+#: closed rather than a range.
+WAKE_MINUTES = (5, 10, 15, 20, 30, 60, 120, 180, 240, 360)
 _ACTIONS = {
     "visibility",
     "wake_minutes",
@@ -848,8 +854,9 @@ def _validate(raw: dict[str, Any]) -> None:
         _string(actions, key, "actions")
     for key in ("wake_minutes", "artifact_retention_days"):
         _positive_int(actions, key, "actions")
-    if actions.get("wake_minutes", 15) not in {5, 10, 15, 20, 30, 60}:
-        raise ConfigError("actions.wake_minutes must be one of 5, 10, 15, 20, 30, or 60")
+    if actions.get("wake_minutes", 15) not in WAKE_MINUTES:
+        allowed = ", ".join(str(value) for value in WAKE_MINUTES)
+        raise ConfigError(f"actions.wake_minutes must be one of {allowed}")
     if actions.get("artifact_retention_days", 90) > 90:
         raise ConfigError("actions.artifact_retention_days must be at most 90")
     if "auto_merge" in actions and not isinstance(actions["auto_merge"], bool):
