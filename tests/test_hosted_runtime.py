@@ -13,6 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.support.hosted_gates import open_gates, with_engine
 from touchstone.config import ConfigError
 from touchstone.execution.base import Result
 from touchstone.hosted.crypto import BundleManifest, encrypt_bundle
@@ -565,7 +566,8 @@ def test_hosted_due_slot_is_finalized_only_by_durable_snapshot(
     )
     config.loops = {"code": loop}
     config.loop = lambda name: config.loops[name]
-    config.engine = SimpleNamespace(name="codex")
+    with_engine(config)
+    open_gates(config)
     encoded = base64.urlsafe_b64encode(_key()).decode()
     now = dt.datetime(2026, 8, 24, 12, tzinfo=dt.UTC)
     env = {
@@ -608,7 +610,8 @@ def test_proposed_due_slot_finalizes_from_candidate_artifact_input(
     )
     config.loops = {"code": loop}
     config.loop = lambda name: config.loops[name]
-    config.engine = SimpleNamespace(name="codex")
+    with_engine(config)
+    open_gates(config)
     encoded = base64.urlsafe_b64encode(_key()).decode()
     now = dt.datetime(2026, 8, 24, 12, tzinfo=dt.UTC)
     env = {

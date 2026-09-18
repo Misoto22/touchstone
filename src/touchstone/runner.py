@@ -25,6 +25,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from touchstone import cooldown
 from touchstone.config import Config, LoopConfig
 from touchstone.events import EventLog, run_event
+from touchstone.forge import Forge
 from touchstone.graph import build
 from touchstone.harnesses import (
     HarnessContext,
@@ -143,11 +144,11 @@ def _cooldown_gate(config: Config, loop_name: str, *, now: dt.datetime) -> None:
         )
 
 
-def _health_gate(config: Config) -> None:
+def _health_gate(config: Config, forge: Forge | None = None) -> None:
     """Require explicit success from every project-configured workflow."""
     if not config.forge.required_workflows:
         raise Held("no required workflows are configured for unattended publication")
-    forge = current().forge
+    forge = forge if forge is not None else current().forge
     unhealthy: list[str] = []
     for workflow in config.forge.required_workflows:
         conclusion = forge.latest_run(workflow, branch=config.forge.default_branch)
