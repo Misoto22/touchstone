@@ -11,6 +11,10 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # The Harness workflow is hash-locked in .rulesync/managed-files.json; its
+    # pins reach this repository through a Harness release and re-render.
+    exclude-paths:
+      - ".github/workflows/misoto-harness.yml"
     groups:
       actions-non-major:
         update-types: [minor, patch]
