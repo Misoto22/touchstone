@@ -13,6 +13,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from touchstone import cooldown
 from touchstone.nodes.context import current
 
 SCHEMA = {
@@ -149,9 +150,13 @@ def run(state: dict[str, Any]) -> dict[str, Any]:
     engine = context.engine_for(loop.name)
     session = engine.review(prompt, worktree=worktree, schema=SCHEMA, model=loop.model)
     if not session.ok:
+        failure = f"the {engine.name} review session failed"
+        if session.limited is not None:
+            cooldown.pause(context.config, loop.name, session.limited)
+            failure += f": {session.limited.reason}"
         return {
             "verdict": "skipped",
-            "verdict_reason": f"the {engine.name} review session failed",
+            "verdict_reason": failure,
             "outcome": "inconclusive",
             "cost": [session.cost],
         }

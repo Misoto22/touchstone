@@ -94,5 +94,5 @@ def test_engine_failure_transcript_does_not_enter_graph_notes() -> None:
         detail=secret_transcript,
     )
 
-    assert secret_transcript not in audit._session_failure("codex")
+    assert secret_transcript not in audit._session_failure("codex", session)
     assert session.detail == secret_transcript

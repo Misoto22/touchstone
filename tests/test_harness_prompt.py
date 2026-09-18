@@ -25,7 +25,8 @@ def test_audit_author_receives_the_resolved_harness_header(monkeypatch) -> None:
     engine = SimpleNamespace(
         name="codex",
         author=lambda prompt, **_kwargs: (
-            prompts.append(prompt) or SimpleNamespace(blocked="", ok=False, cost=0.0)
+            prompts.append(prompt)
+            or SimpleNamespace(blocked="", ok=False, cost=0.0, limited=None, timed_out=False)
         ),
     )
     context = SimpleNamespace(
@@ -52,7 +53,7 @@ def test_reviewer_receives_the_same_resolved_harness_header(monkeypatch) -> None
     engine = SimpleNamespace(
         name="codex",
         review=lambda prompt, **_kwargs: (
-            prompts.append(prompt) or SimpleNamespace(ok=False, cost=0.0)
+            prompts.append(prompt) or SimpleNamespace(ok=False, cost=0.0, limited=None)
         ),
     )
     context = SimpleNamespace(

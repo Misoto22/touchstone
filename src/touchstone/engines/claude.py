@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import json
 
-from touchstone.engines.base import Session, blocked_reason, engine_environment, keep
+from touchstone.engines.base import (
+    Session,
+    blocked_reason,
+    engine_environment,
+    failed_limit,
+    keep,
+)
 from touchstone.execution import Executor
 
 
@@ -108,6 +114,7 @@ class ClaudeEngine:
             cost=cost,
             timed_out=result.timed_out,
             detail=blocked or result.tail(),
+            limited=failed_limit(result.ok, transcript),
         )
 
     def review(self, brief: str, *, worktree: str, schema: dict, model: str = "") -> Session:
@@ -144,6 +151,7 @@ class ClaudeEngine:
             cost=cost,
             timed_out=result.timed_out,
             detail=result.tail() if not result.ok else "",
+            limited=failed_limit(result.ok, result.stdout + result.stderr),
         )
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid

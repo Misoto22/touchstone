@@ -22,6 +22,7 @@ from pathlib import Path
 
 from langgraph.checkpoint.sqlite import SqliteSaver
 
+from touchstone import cooldown
 from touchstone.config import Config, LoopConfig
 from touchstone.events import EventLog, run_event
 from touchstone.graph import build
@@ -86,6 +87,8 @@ def _gates(config: Config, loop_name: str, *, dry_run: bool) -> None:
         raise Held(f"paused: {paused.read_text().strip()}")
 
     _partial_write_gate(config)
+    # Before the rehearsal return: a rehearsal buys an author session too.
+    _cooldown_gate(config, loop_name, now=dt.datetime.now(dt.UTC))
 
     if dry_run:
         # Everything below is about publishing, and a rehearsal publishes
@@ -126,6 +129,17 @@ def _partial_write_gate(config: Config) -> None:
         identity = unresolved[0].branch or unresolved[0].finding_id
         raise Held(
             f"partial remote publication requires reconciliation before new analysis: {identity}"
+        )
+
+
+def _cooldown_gate(config: Config, loop_name: str, *, now: dt.datetime) -> None:
+    """Refuse to buy a session the provider has said it will refuse."""
+    engine = config.engine_for(loop_name)
+    paused = cooldown.active(config.state_dir, engine, now=now)
+    if paused is not None:
+        raise Held(
+            f"{engine.name} paused until {paused.until.isoformat()}: {paused.reason}",
+            reason_code="engine-cooldown",
         )
 
 

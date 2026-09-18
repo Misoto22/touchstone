@@ -17,6 +17,7 @@ _STATE_ALLOWLIST = (
     "ledger.jsonl",
     "checkpoints.sqlite",
     "due.sqlite",
+    "engine-cooldown.json",
 )
 
 
