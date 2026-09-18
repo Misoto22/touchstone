@@ -123,7 +123,7 @@ def _audit_context(tmp_path: Path, engine) -> SimpleNamespace:  # type: ignore[n
         config=SimpleNamespace(state_dir=tmp_path, engine_for=lambda _l: CODEX),
         loop=lambda _name: loop,
         harness_prompt=lambda: "",
-        ledger=SimpleNamespace(handled_titles=lambda: []),
+        ledger=SimpleNamespace(handled_titles=lambda: [], open_changes=lambda: []),
         engine_for=lambda _name: engine,
     )
 
