@@ -189,6 +189,7 @@ jobs:
     permissions:
       contents: read
       actions: read
+      pull-requests: read
     outputs:
       run_id: ${{{{ steps.touchstone.outputs.run_id }}}}
       should_run: ${{{{ steps.touchstone.outputs.should_run }}}}

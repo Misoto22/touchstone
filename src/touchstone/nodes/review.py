@@ -13,6 +13,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from touchstone import cooldown
 from touchstone.nodes.context import current
 
 SCHEMA = {
@@ -24,6 +25,12 @@ SCHEMA = {
     "required": ["verdict", "reason"],
     "additionalProperties": False,
 }
+
+#: Why a candidate above `low` risk reached a person without a review. Only
+#: `low` is reviewed, so every other candidate carries this instead of an
+#: answer; without it the draft said `**skipped** —` and the ledger
+#: `medium / skipped: `, which reads as a review that ran and said nothing.
+OPERATOR_REVIEW_REASON = "risk requires operator review"
 
 #: Truncated in Python, never with `| head -c`. `head` closes the pipe once it
 #: has its bytes, git takes SIGPIPE, and under `pipefail` the whole run dies —
@@ -149,9 +156,13 @@ def run(state: dict[str, Any]) -> dict[str, Any]:
     engine = context.engine_for(loop.name)
     session = engine.review(prompt, worktree=worktree, schema=SCHEMA, model=loop.model)
     if not session.ok:
+        failure = f"the {engine.name} review session failed"
+        if session.limited is not None:
+            cooldown.pause(context.config, loop.name, session.limited)
+            failure += f": {session.limited.reason}"
         return {
             "verdict": "skipped",
-            "verdict_reason": f"the {engine.name} review session failed",
+            "verdict_reason": failure,
             "outcome": "inconclusive",
             "cost": [session.cost],
         }

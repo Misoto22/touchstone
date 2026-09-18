@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import sys
 import tempfile
 import urllib.error
 import urllib.parse
@@ -691,6 +692,16 @@ def _prepare_stage(
             if reason:
                 raise CandidateIntegrityError(f"resume candidate artifact is unavailable: {reason}")
 
+    # Asked here because this is the one stage holding a GitHub read token and
+    # no model credential; Analysis applies the answers before buying a session.
+    from touchstone.execution.local import LocalExecutor
+    from touchstone.forge import Forge
+    from touchstone.hosted import gates
+
+    gates.collect(config, Forge(config.forge.slug, LocalExecutor())).write(
+        directory / gates.GATES_FILE
+    )
+
     output = HostedOutputs(
         stage="prepare",
         run_id=run_id,
@@ -828,16 +839,21 @@ def _analysis_stage(
         return output
 
     try:
-        _ensure_engine(config, env)
-        result, candidate = _analyze_loop(
-            config,
-            loop=selected.slot.loop_id,
-            run_id=run_id,
-            key=key,
-            destination=directory / "candidate.bundle.json",
-            resume=resume,
-            env=env,
-        )
+        refused = _gate_refusal(config, root, selected.slot.loop_id, resume, now=current)
+        if refused is not None:
+            print(f"touchstone analysis: {refused.detail}", file=sys.stderr)
+            result, candidate = refused, None
+        else:
+            _ensure_engine(config, env)
+            result, candidate = _analyze_loop(
+                config,
+                loop=selected.slot.loop_id,
+                run_id=run_id,
+                key=key,
+                destination=directory / "candidate.bundle.json",
+                resume=resume,
+                env=env,
+            )
     except Exception as exc:
         result = RunResult(
             RunOutcome.FAILED,
@@ -874,6 +890,52 @@ def _analysis_stage(
     )
     output.write(directory / "result.json", env=env)
     return output
+
+
+def _gate_refusal(
+    config: Config,
+    root: Path,
+    loop: str,
+    resume: ResumeInput,
+    *,
+    now: Any,
+) -> RunResult | None:
+    """The local runner's pre-session gates, applied to the Loop this run claimed.
+
+    Blocked, not failed, for the same reason as locally: the Due Slot is
+    consumed and the next wake asks again, rather than retrying a question
+    whose answer only a person or the provider can change.
+    """
+
+    from touchstone import cooldown
+    from touchstone.hosted import gates
+    from touchstone.ledger import Ledger
+
+    engine = config.engine_for(loop)
+    paused = cooldown.active(config.state_dir, engine, now=now)
+    if paused is not None:
+        return RunResult(
+            RunOutcome.BLOCKED,
+            reason_code="engine-cooldown",
+            detail=f"{engine.name} paused until {paused.until.isoformat()}: {paused.reason}",
+        )
+    try:
+        facts = gates.read(root / "prepare" / gates.GATES_FILE)
+    except (OSError, ValueError):
+        return RunResult(
+            RunOutcome.BLOCKED,
+            reason_code="forge-gates-unavailable",
+            detail="the Preparation Stage recorded no usable forge gates",
+        )
+    excluding = None
+    if resume.candidate_id and resume.decision == "reanalyze":
+        projection = Ledger(Path(config.state_dir) / "ledger.jsonl").projection(resume.candidate_id)
+        excluding = projection.pr if projection is not None else None
+    refused = facts.refusal(loop, excluding=excluding)
+    if refused is None:
+        return None
+    reason_code, detail = refused
+    return RunResult(RunOutcome.BLOCKED, reason_code=reason_code, detail=detail)
 
 
 def _analyze_loop(
@@ -956,7 +1018,7 @@ def _analyze_loop(
                 ), None
         else:
             state.setdefault("verdict", "skipped")
-            state.setdefault("verdict_reason", "risk requires operator review")
+            state.setdefault("verdict_reason", review.OPERATOR_REVIEW_REASON)
         validation = validate_affected(
             config,
             loop_config.targets,

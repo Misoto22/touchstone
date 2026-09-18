@@ -5,7 +5,13 @@ from __future__ import annotations
 import json
 from pathlib import PurePosixPath
 
-from touchstone.engines.base import Session, blocked_reason, engine_environment, keep
+from touchstone.engines.base import (
+    Session,
+    blocked_reason,
+    engine_environment,
+    failed_limit,
+    keep,
+)
 from touchstone.execution import Executor
 
 
@@ -78,6 +84,7 @@ class CodexEngine:
             timed_out=result.timed_out,
             detail=blocked or result.tail(),
             blocked=blocked,
+            limited=failed_limit(result.ok, transcript),
         )
 
     def _model_environment(self) -> dict[str, str] | None:
@@ -151,6 +158,7 @@ class CodexEngine:
             timed_out=session.timed_out,
             detail=session.detail,
             blocked=session.blocked,
+            limited=session.limited,
         )
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
