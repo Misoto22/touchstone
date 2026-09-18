@@ -26,6 +26,12 @@ SCHEMA = {
     "additionalProperties": False,
 }
 
+#: Why a candidate above `low` risk reached a person without a review. Only
+#: `low` is reviewed, so every other candidate carries this instead of an
+#: answer; without it the draft said `**skipped** —` and the ledger
+#: `medium / skipped: `, which reads as a review that ran and said nothing.
+OPERATOR_REVIEW_REASON = "risk requires operator review"
+
 #: Truncated in Python, never with `| head -c`. `head` closes the pipe once it
 #: has its bytes, git takes SIGPIPE, and under `pipefail` the whole run dies —
 #: silently, twenty-two minutes and one correct finding in.

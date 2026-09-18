@@ -1018,7 +1018,7 @@ def _analyze_loop(
                 ), None
         else:
             state.setdefault("verdict", "skipped")
-            state.setdefault("verdict_reason", "risk requires operator review")
+            state.setdefault("verdict_reason", review.OPERATOR_REVIEW_REASON)
         validation = validate_affected(
             config,
             loop_config.targets,

@@ -18,6 +18,7 @@ from touchstone.lifecycle import (
     auto_merge_unsupported,
 )
 from touchstone.nodes.context import current
+from touchstone.nodes.review import OPERATOR_REVIEW_REASON
 from touchstone.scheduling.window import within_windows
 
 
@@ -40,6 +41,13 @@ def _within_file_limit(limit: int, changed: object) -> bool:
     if not isinstance(changed, int):
         return False
     return changed <= limit
+
+
+def _skipped_reason(state: dict[str, Any]) -> str:
+    """The reason a review never ran, when the graph routed around it."""
+    if state.get("verdict", "skipped") == "skipped" and state.get("risk", "high") != "low":
+        return OPERATOR_REVIEW_REASON
+    return ""
 
 
 def _request(state: dict[str, Any], context: Any) -> PublicationRequest:
@@ -70,7 +78,7 @@ def _request(state: dict[str, Any], context: Any) -> PublicationRequest:
         commit_subject=finding.get("commit_subject") or "chore: address Touchstone finding",
         summary=finding.get("summary", ""),
         rationale=finding.get("rationale", ""),
-        review_reason=state.get("verdict_reason", ""),
+        review_reason=state.get("verdict_reason") or _skipped_reason(state),
         escalation=state.get("escalation", ""),
         author_name=author[0] if author else None,
         author_email=author[1] if author else None,

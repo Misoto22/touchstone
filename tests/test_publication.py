@@ -361,3 +361,68 @@ def test_an_approved_publication_also_records_its_branch(tmp_path: Path) -> None
     assert result.outcome == "awaiting_checks"
     assert projection is not None
     assert projection.branch == result.branch != ""
+
+
+def _node_context() -> SimpleNamespace:
+    return SimpleNamespace(
+        config=SimpleNamespace(
+            forge=SimpleNamespace(
+                slug="acme/widgets",
+                default_branch="trunk",
+                escalation_label="ops:review",
+                required_workflows=("ci.yml",),
+            ),
+            timezone="UTC",
+            git=GitConfig(),
+        ),
+        loop=lambda name: SimpleNamespace(
+            name=name,
+            label="automation:audit",
+            auto_merge=False,
+            auto_merge_strategy="squash",
+            auto_merge_delete_branch=True,
+            auto_merge_window=(),
+            auto_merge_max_files=0,
+        ),
+    )
+
+
+def _parked_state(**overrides: object) -> dict[str, object]:
+    state: dict[str, object] = {
+        "loop": "code",
+        "branch": "audit/run-3",
+        "worktree": "/tmp/worktree",
+        "risk": "medium",
+        "finding": {"title": "Drift", "commit_subject": "fix: drift"},
+    }
+    state.update(overrides)
+    return state
+
+
+def test_a_candidate_routed_around_review_says_why() -> None:
+    """kioku's ledger recorded `medium / skipped: ` fifteen times in a day.
+
+    Only `low` is reviewed, so every other candidate reaches a person without
+    one, and the draft said `**skipped** —` as though a review ran and was
+    silent. The hosted backend already said why; the local one said nothing.
+    """
+    request = publish_node._request(_parked_state(), _node_context())  # type: ignore[arg-type]
+
+    assert request.verdict == "skipped"
+    assert request.review_reason == "risk requires operator review"
+
+
+def test_a_reason_the_review_gave_is_never_replaced() -> None:
+    state = _parked_state(risk="low", verdict="skipped", verdict_reason="diff too large")
+
+    request = publish_node._request(state, _node_context())  # type: ignore[arg-type]
+
+    assert request.review_reason == "diff too large"
+
+
+def test_a_low_risk_candidate_is_not_told_its_risk_required_a_person() -> None:
+    state = _parked_state(risk="low", verdict="reject", verdict_reason="")
+
+    request = publish_node._request(state, _node_context())  # type: ignore[arg-type]
+
+    assert request.review_reason == ""
