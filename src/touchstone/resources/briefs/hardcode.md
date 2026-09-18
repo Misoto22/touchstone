@@ -46,6 +46,12 @@ Name the mechanism this project already uses for configuration, and use that
 one. Introducing a second configuration mechanism to fix a hardcoded value is a
 larger defect than the one you started with.
 
+When the fix makes a value configurable, the test must supply a **non-default
+value through that mechanism** and exercise the **runtime consumer** that used
+the hardcoded value. Assert both the selected value and any observable setup it
+requires, such as creating its directory. A default-only assertion is not
+coverage: it still passes when the runtime ignores configuration entirely.
+
 ## Risk
 
 - `low` — the value moves to the project's existing configuration mechanism, its

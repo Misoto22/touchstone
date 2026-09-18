@@ -70,3 +70,12 @@ def test_a_concern_brief_reviews_through_the_shared_reviewer(tmp_path) -> None: 
     )
 
     assert "independent reviewer" in loop.review_prompt()
+
+
+def test_hardcode_brief_requires_proof_of_the_configured_value_path() -> None:
+    brief = " ".join(_text("hardcode").split())
+
+    assert "non-default value" in brief
+    assert "runtime consumer" in brief
+    assert "observable setup" in brief
+    assert "default-only assertion is not coverage" in brief
