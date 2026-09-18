@@ -41,7 +41,7 @@ touchstone = "touchstone.cli:main"
 action-build = [
     # The composite Action disables build isolation after installing its
     # hash-locked runtime, so the backend itself must be part of that lock.
-    "hatchling==1.28.0",
+    "hatchling==1.32.0",
 ]
 dev = [
     "build>=1.3",
