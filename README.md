@@ -411,7 +411,7 @@ uv run twine check dist/*
 ```
 
 The current published release is [v0.1.2](https://github.com/Misoto22/touchstone/releases/tag/v0.1.2) on [`touchstone-agent` on PyPI](https://pypi.org/project/touchstone-agent/);
-the release candidate is `v0.2.0`. <!-- x-release-please-version -->
+the release candidate is `v0.3.0`. <!-- x-release-please-version -->
 GitHub Releases publish through PyPI trusted publishing; the repository stores no PyPI API token.
 Versions are bumped by the `misoto22-release-bot` release pull request rather than by hand: merging it writes `pyproject.toml`, this paragraph and `touchstone.generated.example.toml`, tags `vX.Y.Z`, and publishes the GitHub Release that starts the PyPI job.
 

@@ -2,6 +2,18 @@
 
 All notable user-facing changes are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Entries above `0.1.3` are written by the `misoto22-release-bot` release pull request from the Conventional Commits merged into `main`; the entries below it were written by hand.
 
+## [0.3.0](https://github.com/Misoto22/touchstone/compare/v0.2.0...v0.3.0) (2026-09-18)
+
+
+### Features
+
+* **hosted:** land the probe branch's ledger, rotation and scoping fixes ([#53](https://github.com/Misoto22/touchstone/issues/53)) ([2f226a9](https://github.com/Misoto22/touchstone/commit/2f226a9da4372bb8761ca7dd5899c00517ecba21))
+
+
+### Bug Fixes
+
+* gate hosted analysis and pause spent engines ([#51](https://github.com/Misoto22/touchstone/issues/51)) ([24bf21f](https://github.com/Misoto22/touchstone/commit/24bf21f5c0b3de2baae6f43700f28a3cf5e04b6d))
+
 ## [0.2.0](https://github.com/Misoto22/touchstone/compare/v0.1.3...v0.2.0) (2026-09-17)
 
 

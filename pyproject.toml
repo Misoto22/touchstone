@@ -1,6 +1,6 @@
 [project]
 name = "touchstone-agent"
-version = "0.2.0"
+version = "0.3.0"
 description = "Scheduled agent loops that audit a repository and the harness that judges it"
 requires-python = ">=3.12"
 readme = "README.md"
