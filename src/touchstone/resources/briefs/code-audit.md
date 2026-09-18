@@ -157,6 +157,28 @@ across six files is one nobody can review at a glance and no bisect can
 usefully narrow. If the fix genuinely needs to be large, say so in `rationale`
 and let it be parked rather than shrinking it into something incorrect.
 
+**Name the instances you are leaving.** A forked value is rarely forked once.
+When the same fault sits in files your diff does not touch, list them in
+`rationale` by file and symbol — not "elsewhere", not "similar issues exist".
+Two runs of one loop split on exactly this. One wrote that the same fork lived
+in two other modules, said why widening the diff would have cost more review
+than it bought, and a reader knew precisely where they stood. The other fixed
+one of four copies of a status vocabulary, under a title that read like it had
+collected all four, and named none of the three it left. That title is what the
+next run is told has been handled, so the remaining three stop being findable:
+the loop suppresses them as done and rediscovers them only if some later
+session happens to trip over one.
+
+Naming them is not widening the diff. Keep fixing one.
+
+**A test that proves it must not leave anything behind.** Module-level
+registries, class attributes, caches, temporary files: state a test writes
+outlives the test unless the test takes it back. Nothing fails at the time —
+the run that discovers it is a later one, red in a test that never touched the
+thing that broke it, and the diff that caused it merged clean weeks earlier.
+Build what your assertion needs inside the test and return the process to the
+state you found it in.
+
 ## Write the verdict
 
 Write `.audit-finding.json` in the repository root. Nothing else you say is read.

@@ -48,6 +48,11 @@ class LoopState(TypedDict, total=False):
     finding: dict[str, Any]
     risk: Literal["low", "medium", "high"]
     escalation: str
+    #: The files classify measured in the worktree, which publish writes onto
+    #: the ledger row so a later audit knows what an open candidate holds. The
+    #: graph keeps only the keys declared here: left undeclared, classify's
+    #: return value is dropped before publish ever reads it.
+    changed_paths: list[str]
 
     verdict: Literal["approve", "reject", "skipped"]
     verdict_reason: str

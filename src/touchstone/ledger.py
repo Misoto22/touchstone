@@ -17,6 +17,9 @@ LifecycleState = ChangeState
 SUPPRESSED = frozenset(
     {ChangeState.AWAITING_CHECKS, ChangeState.AWAITING_HUMAN, ChangeState.MERGED}
 )
+#: Merged work is already in the base branch, so it cannot collide with a new
+#: diff. These two states are the ones still carrying a branch of their own.
+OPEN = frozenset({ChangeState.AWAITING_CHECKS, ChangeState.AWAITING_HUMAN})
 LEGACY_STATES: dict[str, ChangeState] = {
     "armed": ChangeState.AWAITING_CHECKS,
     "merging": ChangeState.AWAITING_CHECKS,
@@ -42,6 +45,7 @@ class LifecycleEvent:
     detail: str = ""
     branch: str = ""
     partial: bool = False
+    paths: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +61,7 @@ class FindingProjection:
     branch: str
     partial: bool
     ts: str
+    paths: tuple[str, ...] = ()
 
 
 def finding_id(loop: str, title: str) -> str:
@@ -128,6 +133,7 @@ class Ledger:
                 branch=str(row.get("branch") or ""),
                 partial=bool(row.get("partial", False)),
                 ts=str(row.get("ts") or ""),
+                paths=_paths(row.get("paths")),
             )
         return projected
 
@@ -141,6 +147,21 @@ class Ledger:
             if projection.state in SUPPRESSED
         ]
 
+    def open_changes(self) -> list[FindingProjection]:
+        """Still-open candidates that named the files they edit.
+
+        Two runs an hour apart pick different defects — the suppressed titles
+        above see to that — and then edit the same file anyway, because
+        nothing told the second one where the first one had been. Whichever
+        merges second conflicts, and neither pull request looks wrong until
+        it does.
+        """
+        return [
+            projection
+            for projection in self.projections().values()
+            if projection.state in OPEN and projection.paths
+        ]
+
     def handled_titles(self) -> list[str]:
         """Compatibility name for audit prompts."""
         return self.suppressed_titles()
@@ -148,6 +169,12 @@ class Ledger:
     def _write(self, row: dict[str, Any]) -> None:
         with self._path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def _paths(raw: Any) -> tuple[str, ...]:
+    if not isinstance(raw, (list, tuple)):
+        return ()
+    return tuple(str(item) for item in raw if isinstance(item, str) and item)
 
 
 def _state(row: dict[str, Any]) -> ChangeState | None:
@@ -166,6 +193,7 @@ def _now() -> str:
 
 
 __all__ = [
+    "OPEN",
     "SUPPRESSED",
     "FindingProjection",
     "Ledger",
