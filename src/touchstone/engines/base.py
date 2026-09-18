@@ -8,6 +8,7 @@ a vendor, and only two steps ever talk to a model.
 
 from __future__ import annotations
 
+import datetime as dt
 import os
 import tempfile
 from collections.abc import Mapping
@@ -16,6 +17,7 @@ from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 from touchstone.config import VENDOR_KEY_ENV as _VENDOR_KEY
+from touchstone.engines.limits import UsageLimit, usage_limit
 from touchstone.execution import Executor
 
 _RUNTIME_ENVIRONMENT = {
@@ -161,6 +163,13 @@ def blocked_reason(transcript: str) -> str | None:
     return None
 
 
+def failed_limit(ok: bool, transcript: str) -> UsageLimit | None:
+    """The usage limit behind a failed session, read only once it has failed."""
+    if ok:
+        return None
+    return usage_limit(transcript, now=dt.datetime.now(dt.UTC))
+
+
 def keep(state_dir: str, name: str, text: str) -> None:
     """Persist what a session said, for whoever has to explain it later.
 
@@ -193,6 +202,9 @@ class Session:
     #: Set when the engine ran, thought, and could not act — as distinct from
     #: running and finding nothing. The two look identical from outside.
     blocked: str | None = None
+    #: Set when the provider refused the session because the plan behind its
+    #: credential is spent, with the time it said it would accept work again.
+    limited: UsageLimit | None = None
 
 
 @runtime_checkable

@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.support.hosted_gates import open_gates, with_engine
 from touchstone.hosted.crypto import BundleManifest, encrypt_bundle
 from touchstone.hosted.runtime import CandidateMetadata, run_stage
 from touchstone.hosted.snapshot import config_digest
@@ -34,10 +35,9 @@ def _config(tmp_path: Path):  # type: ignore[no-untyped-def]
         loops={"code": loop},
         timezone="UTC",
         generated_metadata=SimpleNamespace(source_digest="profile-digest"),
-        engine=SimpleNamespace(name="codex"),
     )
     config.loop = lambda name: config.loops[name]
-    return config
+    return with_engine(config)
 
 
 def _candidate() -> CandidateMetadata:
@@ -95,6 +95,7 @@ def _analyzed(config, tmp_path: Path, monkeypatch, metadata: CandidateMetadata):
         "GITHUB_RUN_ID": "12345",
         "GITHUB_RUN_ATTEMPT": "1",
     }
+    open_gates(config)
     monkeypatch.setattr("touchstone.hosted.runtime._ensure_engine", lambda *_args: None)
     monkeypatch.setattr(
         "touchstone.hosted.runtime._analyze_loop",

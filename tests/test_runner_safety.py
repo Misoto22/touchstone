@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from touchstone import runner
-from touchstone.config import load_config
+from touchstone.config import EngineConfig, load_config
 from touchstone.events import EventLog
 from touchstone.execution.base import Result
 from touchstone.harnesses import HarnessResolutionError
@@ -97,7 +97,9 @@ def test_slot_gate_holds_when_open_pull_state_is_unavailable(monkeypatch, tmp_pa
     forge = SimpleNamespace(open_pulls=lambda *_args, **_kwargs: None)
     loop = SimpleNamespace(label="touchstone:audit", drafts_hold_slot=False)
     context = SimpleNamespace(forge=forge, loop=lambda _name: loop)
-    config = SimpleNamespace(state_dir=tmp_path, forge=SimpleNamespace())
+    config = SimpleNamespace(
+        state_dir=tmp_path, forge=SimpleNamespace(), engine_for=lambda _loop: EngineConfig()
+    )
     monkeypatch.setattr(runner, "current", lambda: context)
 
     with pytest.raises(runner.Held, match="could not verify the open pull request slot"):
@@ -143,7 +145,9 @@ def _slot_gate(monkeypatch, tmp_path, *, drafts_hold_slot: bool):  # type: ignor
     monkeypatch.setattr(runner, "_health_gate", lambda *_a, **_k: None)
     monkeypatch.setattr(runner, "_publication_gate", lambda *_a, **_k: None)
     (tmp_path / "ledger.jsonl").write_text("", encoding="utf-8")
-    config = SimpleNamespace(state_dir=tmp_path, forge=SimpleNamespace())
+    config = SimpleNamespace(
+        state_dir=tmp_path, forge=SimpleNamespace(), engine_for=lambda _loop: EngineConfig()
+    )
 
     runner._gates(config, "code", dry_run=False)
     return asked
@@ -195,7 +199,9 @@ def test_source_paths_do_not_decide_the_slot_policy(monkeypatch, tmp_path) -> No
     monkeypatch.setattr(runner, "_publication_gate", lambda *_a, **_k: None)
     (tmp_path / "ledger.jsonl").write_text("", encoding="utf-8")
 
-    config = SimpleNamespace(state_dir=tmp_path, forge=SimpleNamespace())
+    config = SimpleNamespace(
+        state_dir=tmp_path, forge=SimpleNamespace(), engine_for=lambda _loop: EngineConfig()
+    )
     runner._gates(config, "code", dry_run=False)
 
     assert asked["include_drafts"] is False

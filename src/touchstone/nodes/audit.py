@@ -6,6 +6,7 @@ import json
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
+from touchstone import cooldown
 from touchstone.engines.base import engine_environment
 from touchstone.nodes.context import current
 
@@ -81,8 +82,15 @@ def _fields(payload: dict[str, Any], *, required: set[str], allowed: set[str]) -
     return ""
 
 
-def _session_failure(engine_name: str) -> str:
+def _session_failure(engine_name: str, session: Any) -> str:
     """Return a persistable failure note without model output or repository data."""
+    if session.limited is not None:
+        return (
+            f"the {engine_name} {session.limited.reason}; "
+            f"paused until {session.limited.until.isoformat()}"
+        )
+    if session.timed_out:
+        return f"the {engine_name} session timed out"
     return f"the {engine_name} session failed"
 
 
@@ -196,11 +204,13 @@ def run(state: dict[str, Any]) -> dict[str, Any]:
         }
 
     if not session.ok:
+        if session.limited is not None:
+            cooldown.pause(context.config, loop.name, session.limited)
         return {
             "outcome": "held",
             # Engine output may contain model transcript or repository data;
             # graph notes are persisted to the structured event log.
-            "notes": [_session_failure(engine.name)],
+            "notes": [_session_failure(engine.name, session)],
             "cost": [session.cost],
         }
 
