@@ -19,4 +19,4 @@ permissions:
 
 jobs:
   pr-title:
-    uses: Misoto22/ci/.github/workflows/pr-title.yml@65443cf5cd7c65b978373aeb0a0e93127b0d6ede # v0.5.0
+    uses: Misoto22/ci/.github/workflows/pr-title.yml@0c6377612b2292be3cd954d4442f185bcf07395c # v0.7.2
