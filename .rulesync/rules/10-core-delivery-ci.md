@@ -10,6 +10,7 @@ scope: core
 
 - **[HAR-REL-001] MUST — Automated releases.** Cut every actively developed repository's releases through the fleet release bot: the reusable `Misoto22/ci` release workflow running release-please in manifest mode as the `misoto22-release-bot` GitHub App. Derive the version, `CHANGELOG.md`, and GitHub Release from Conventional Commits; never hand-edit a version field and never move a tag. Configure a multi-package npm workspace with the `node-workspace` plugin and linked versions so the repository still tags one `vMAJOR.MINOR.PATCH`.
 - **[HAR-REL-002] SHOULD — Changelog vocabulary.** List only `feat`, `fix`, `perf`, `revert`, `docs`, and `refactor` in `changelog-sections`. Never list `chore`, `ci`, `build`, `test`, or `style`, not even hidden, because release-please then considers those commits for a bump and cuts a patch release for a lone housekeeping commit.
+- **[HAR-REL-003] SHOULD — Verified releases.** After a release, confirm the tag, the published artifact, and the result people receive (live version, store or TestFlight build, package index) before calling it done; a green workflow alone is not evidence.
 
 # Continuous integration
 

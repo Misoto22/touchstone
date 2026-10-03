@@ -9,3 +9,5 @@ scope: stack
 # Python
 
 - **[HAR-PY-001] SHOULD — Native toolchain.** Use the repository's pinned Python manager and commands. When the repository uses `uv`, keep its lock file authoritative; use pytest for tests and Ruff for configured lint/format gates.
+- **[HAR-PY-002] SHOULD — PEP 8 names.** Follow PEP 8 naming: `snake_case` modules, functions, methods, and variables; `CapWords` classes, with an `Error` suffix for exceptions; `UPPER_SNAKE_CASE` module-level constants; and a single leading underscore for non-public names.
+- **[HAR-PY-003] SHOULD — Python intent names.** Name functions that act with verb phrases (`load_config`, `send_digest`), name Booleans as predicates with `is_`, `has_`, `can_`, or `should_`, and use single-letter names only for loop indices and comprehension variables.

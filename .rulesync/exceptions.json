@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "exceptions": [
+    {
+      "rule": "HAR-DEP-002",
+      "path": "tests/fixtures/acceptance/*/package-lock.json",
+      "owner": "Misoto22",
+      "reason": "Synthetic acceptance fixture lock files are pinned test data whose contents tests assert; Dependabot bumps would break them and must not track them.",
+      "approval": "pending owner review, recorded by the 2026-10-03 fleet sync",
+      "reviewBy": "2026-12-31"
+    },
+    {
+      "rule": "HAR-DEP-002",
+      "path": "tests/fixtures/acceptance/*/uv.lock",
+      "owner": "Misoto22",
+      "reason": "Synthetic acceptance fixture lock files are pinned test data whose contents tests assert; Dependabot bumps would break them and must not track them.",
+      "approval": "pending owner review, recorded by the 2026-10-03 fleet sync",
+      "reviewBy": "2026-12-31"
+    }
+  ]
+}

@@ -13,3 +13,4 @@ The uppercase words **MUST**, **MUST NOT**, **SHOULD**, **SHOULD NOT**, and **MA
 - **[HAR-GOV-001] MUST — Normative vocabulary.** Use uppercase BCP 14 requirement words only when a rule has normative force; do not create additional machine-enforced requirement levels.
 - **[HAR-GOV-002] MUST — Stable rule identifiers.** Treat rule IDs as immutable opaque identifiers; never reuse an ID after renaming, deprecation, retirement, splitting, or merging.
 - **[HAR-GOV-003] MUST — Time-bounded exceptions.** Record every exception with its owner, reason, exact scope, approval, and expiry or review date before relying on it.
+- **[HAR-GOV-004] MUST — Real checks.** Name the file behind every blocking `ci`, `lint`, or `test` enforcement of a project rule in its `path`; the project checker fails when that file is missing, unless a `pending` date no more than 14 days old marks a check still being built.

@@ -10,3 +10,4 @@ scope: core
 
 - **[HAR-TEST-001] MUST — Behavior tests.** New or changed business behavior requires a test that exercises the real boundary and covers the relevant success, edge, and failure paths.
 - **[HAR-TEST-002] MUST — Repository gate.** Before commit or review, run the repository's documented CI-equivalent checks. At minimum, compile or build changed production code when no stronger command exists.
+- **[HAR-PERF-001] SHOULD — Resource budgets.** Keep shipped surfaces inside recorded budgets and measure a change that could cross one: web pages LCP ≤ 2.5 s and INP ≤ 200 ms at p75, API endpoints p95 ≤ 300 ms, apps cold launch ≤ 1 s with no idle CPU wake-ups, and bundle or image size growth over 5 % per release explained in the pull request.
