@@ -28,7 +28,8 @@
       "enforcement": [
         {
           "kind": "test",
-          "check": "Repository-owned TOUCH-AGENT-001 test gate",
+          "check": "test_hosted_agent_runtimes_are_integrity_locked requires exact pinned versions and integrity-hashed lockfiles for both runtimes.",
+          "path": "tests/test_action_contract.py",
           "blocking": true
         }
       ]
@@ -56,7 +57,8 @@
       "enforcement": [
         {
           "kind": "test",
-          "check": "Repository-owned TOUCH-AGENT-002 test gate",
+          "check": "Stage environment tests fail when a model or publishing credential reaches a stage that must not hold it.",
+          "path": "tests/test_hosted_runtime.py",
           "blocking": true
         }
       ]

@@ -23,9 +23,9 @@
       ],
       "enforcement": [
         {
-          "kind": "lint",
-          "check": "Repository-owned TOUCH-FIX-001 lint gate",
-          "blocking": true
+          "kind": "review",
+          "check": "Reviewer confirms fixture tokens, states and outputs are synthetic and contain no live credentials or private values.",
+          "blocking": false
         }
       ]
     },
@@ -47,9 +47,9 @@
       ],
       "enforcement": [
         {
-          "kind": "test",
-          "check": "Repository-owned TOUCH-FIX-002 test gate",
-          "blocking": true
+          "kind": "review",
+          "check": "Reviewer confirms a fixture change names the test that exercises it and that the test passes.",
+          "blocking": false
         }
       ]
     }

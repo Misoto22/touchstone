@@ -11,3 +11,4 @@ scope: core
 - **[HAR-CORE-001] MUST — Reconnaissance.** Read the relevant code, configuration, instructions, and repository state before proposing or changing behavior. Match the repository's established patterns unless its source of truth requires a correction.
 - **[HAR-SCOPE-001] MUST — Scope.** Keep work inside the user's requested outcome. Read-only discovery may expand enough to establish truth; external writes and materially different changes require explicit authority.
 - **[HAR-VERIFY-001] MUST — Evidence.** Run the command that proves each claimed result and report complete, blocked, drifted, and not-installed states separately. A partial or inconclusive check is not a pass.
+- **[HAR-PROP-001] SHOULD — Propose first.** Before building a new feature or visual direction, record the problem, options with evidence (a mock or prototype for UI), and the choice in the repository's decision log; fixing drift from an existing rule needs no proposal.

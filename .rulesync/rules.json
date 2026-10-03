@@ -20,7 +20,8 @@
       "enforcement": [
         {
           "kind": "test",
-          "check": "Repository-owned TOUCH-ARCH-001 test gate",
+          "check": "Rendered workflow tests assert prepare, analysis, verify, publish and snapshot jobs are separate, and that credentials stay out of the wrong stage.",
+          "path": "tests/test_actions_workflow.py",
           "blocking": true
         }
       ]
@@ -44,7 +45,8 @@
       "enforcement": [
         {
           "kind": "test",
-          "check": "Repository-owned TOUCH-SEC-001 test gate",
+          "check": "test_stage_environment_keeps_model_and_publish_credentials_apart raises when a stage receives a credential it does not own.",
+          "path": "tests/test_hosted_runtime.py",
           "blocking": true
         }
       ]
@@ -68,7 +70,8 @@
       "enforcement": [
         {
           "kind": "test",
-          "check": "Repository-owned TOUCH-CONF-001 test gate",
+          "check": "Config tests reject unknown keys in project and generated files and check generated-then-project override order.",
+          "path": "tests/test_config_v2.py",
           "blocking": true
         }
       ]
@@ -92,7 +95,8 @@
       "enforcement": [
         {
           "kind": "test",
-          "check": "Repository-owned TOUCH-GATE-001 test gate",
+          "check": "Profile tests assert every gate that runs project code is a disabled candidate, and validation tests type disabled candidates as blocked.",
+          "path": "tests/test_profiles.py",
           "blocking": true
         }
       ]
@@ -120,7 +124,8 @@
       "enforcement": [
         {
           "kind": "test",
-          "check": "Repository-owned TOUCH-TEST-001 test gate",
+          "check": "The CI workflow runs pytest, Ruff lint and format, graph check, package build and twine check, and fails when any of them fails.",
+          "path": ".github/workflows/ci.yml",
           "blocking": true
         }
       ]

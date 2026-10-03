@@ -7,10 +7,37 @@ updates:
     groups:
       python-non-major:
         update-types: [minor, patch]
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      uv-non-major:
+        update-types: [minor, patch]
+  - package-ecosystem: npm
+    directory: /agent-runtime/claude
+    schedule:
+      interval: weekly
+    groups:
+      npm-non-major:
+        update-types: [minor, patch]
+  - package-ecosystem: npm
+    directory: /agent-runtime/codex
+    schedule:
+      interval: weekly
+    groups:
+      npm-non-major:
+        update-types: [minor, patch]
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    exclude-paths:
+      - ".github/workflows/misoto-harness.yml"
     groups:
       actions-non-major:
         update-types: [minor, patch]
