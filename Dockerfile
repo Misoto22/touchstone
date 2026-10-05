@@ -11,7 +11,7 @@
 # One repository per container. The container sees one checkout, one state
 # volume, and one credential set; that boundary is what keeps a fleet's
 # repositories from sharing a blast radius.
-FROM python:3.12-slim-bookworm
+FROM python:3.14-slim-bookworm
 
 # git is Touchstone's own dependency: it reads history, builds worktrees, and
 # stages the diff a session produced. gh is how publication reaches the forge.
