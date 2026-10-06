@@ -208,6 +208,9 @@ ECOSYSTEM_BY_FILE_NAME = {
     "pubspec.lock": "pub",
     ".terraform.lock.hcl": "terraform",
 }
+# Dependabot updates one lock file format through either ecosystem: `terraform` resolves against
+# the Terraform registry and `opentofu` against the OpenTofu one, so either entry covers the file.
+EQUIVALENT_ECOSYSTEMS = {"terraform": frozenset({"terraform", "opentofu"})}
 PYTHON_VERSION = re.compile(r"(?:python-|cpython-)?(\d+\.\d+)")
 NODE_VERSION = re.compile(r"v?(\d+)(?![\d])")
 REQUIRES_PYTHON = re.compile(r"^\s*requires-python\s*=\s*[\"']\s*>=\s*(\d+\.\d+)", re.MULTILINE)
@@ -3601,8 +3604,9 @@ def validate_updater_coverage(files: list[str], exceptions: list[CheckException]
         if is_excepted(exceptions, "HAR-DEP-002", relative):
             continue
         directory = manifest_directory(relative, ecosystem)
+        accepted = EQUIVALENT_ECOSYSTEMS.get(ecosystem, {ecosystem})
         if not any(
-            name == ecosystem and any(fnmatchcase(directory, pattern) for pattern in patterns)
+            name in accepted and any(fnmatchcase(directory, pattern) for pattern in patterns)
             for name, patterns in coverage
         ):
             missing.add(f"{ecosystem} in {directory} (for {relative})")
