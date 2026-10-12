@@ -3,15 +3,15 @@
   "files": [
     {
       "path": ".cursor/rules/misoto-harness-agent-runtime.mdc",
-      "sha256": "b76e62fd1784d0da202fd71482e0bf00641c325e832e43bd0324e1fa39bc624c"
+      "sha256": "9f51be2138320d493ee3bc6ce222ec3e4d28de8ba5cd309668a4133710b245f1"
     },
     {
       "path": ".cursor/rules/misoto-harness-tests-fixtures.mdc",
-      "sha256": "6b4d6d53feb352d136d5818b46deb520a07b4554e89ffa78dc9f2da150454e5f"
+      "sha256": "c0fdc487abf022df5fced9c32b33b1456f033715667468dec7e71e9824de7dbd"
     },
     {
       "path": ".cursor/rules/misoto-harness.mdc",
-      "sha256": "790f57bed815715691fc836fbe35901bbe32d58bcd4ddf74b6d6f4e413a87d60"
+      "sha256": "d63cc55980fd91549739e583c96fb095ec1ab7661190fe6b219e5d5d654112c6"
     },
     {
       "path": ".github/workflows/misoto-harness.yml",
@@ -27,7 +27,7 @@
     },
     {
       "path": ".rulesync/nested/agent-runtime/00-generated-metadata.md",
-      "sha256": "1f508c172b18d4d838f9a5f25efe5cdc8792b4e429146ed2bb6024a11b836428"
+      "sha256": "b27bf0bdea08f4e2fecfc96dd3fb814c512c6c78ff0f780879f347b0023e826c"
     },
     {
       "path": ".rulesync/nested/agent-runtime/20-stack-typescript.md",
@@ -35,7 +35,7 @@
     },
     {
       "path": ".rulesync/nested/tests/fixtures/00-generated-metadata.md",
-      "sha256": "8d06830e862590045b627e709482c9023b5324e25cfc6ba713317e333e809a56"
+      "sha256": "3cda96bb26da14f32ce9e7bd1a4ba0737e2b48768d3687dc68b9bb675bd4f5f9"
     },
     {
       "path": ".rulesync/nested/tests/fixtures/20-stack-docs.md",
@@ -55,7 +55,7 @@
     },
     {
       "path": ".rulesync/rules/00-generated-metadata.md",
-      "sha256": "519ac829557dd15dc74d78d601eb936269267b244560a08eacb41eee9f6bfb39"
+      "sha256": "8c4de046ac228c796783e978b4bc6b3d39c4913dc4f0e39bdcc48a0e4eaeac13"
     },
     {
       "path": ".rulesync/rules/10-core-architecture.md",
@@ -107,27 +107,27 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "16835bb5c3aa305ea69529642187550491c840b31f1df2fe3a337364088f9819"
+      "sha256": "35976cf8affae3dc71f5cc1b233497bb9212de4ee3435c8d60408ce558e6eca1"
     },
     {
       "path": "CLAUDE.md",
-      "sha256": "3a0ccf366d99f25b71374b85ada601fb1d59d1290731aba495562ac1ea046060"
+      "sha256": "9bb33a101f922eb4bdc286f7a91b05b3e393708ebae29e942c299a875d68ab3e"
     },
     {
       "path": "GEMINI.md",
-      "sha256": "4a67dc209e169fda5dae4aa55be7849f188bf2aeb736163ad382527688ffb04b"
+      "sha256": "b670c069b8c7ca1a30ee6398e3eb6b01e716f0613ad313c3e4b7f3decb86d32e"
     },
     {
       "path": "agent-runtime/AGENTS.md",
-      "sha256": "5da43c4a0e33c34e8bba9878643c84ddcd89f46f1f1c7d92c300212ab015faf2"
+      "sha256": "0695493cae3d15b5c0e62809bc8b65e49e469059ca86f33dff4d02e7e43e62b4"
     },
     {
       "path": "agent-runtime/CLAUDE.md",
-      "sha256": "9351029d5b5f158524924bad308f7d006fd12ba5b7a087d562e984e6907754aa"
+      "sha256": "00d872fc4d81575a74626024cb20867efd5234e779342e852db82233e09cc528"
     },
     {
       "path": "agent-runtime/GEMINI.md",
-      "sha256": "ad57d2503cc95365a83eb5b91bd27bb0749907b6677a6d25ec723889c29c45df"
+      "sha256": "959210c87cb46c4144ab407cf1b079a90a7c844c3e413f8948159c4642a50c1d"
     },
     {
       "path": "rulesync.jsonc",
@@ -135,19 +135,19 @@
     },
     {
       "path": "rulesync.lock.json",
-      "sha256": "5cfcd06cca0988074d2efd0bf120aa9b3045c5ce53f2885dcedee649aaf32a8c"
+      "sha256": "e583fb8d8d1362f4fc5d95f970b03e00e998a5cdd2d71dde6dbe44d82869743a"
     },
     {
       "path": "tests/fixtures/AGENTS.md",
-      "sha256": "a1549d27da86d17f87e84355f98ec8be3035dc596eac3067393ae209ac79b634"
+      "sha256": "35d2d29d36e853f65f85cdfdf77df0575803a14b82b14c88c0dd69b77062e037"
     },
     {
       "path": "tests/fixtures/CLAUDE.md",
-      "sha256": "052253cb4a82920b3dd9ad1394a3d3bfbbab39df2996e88ae3c6c00651018632"
+      "sha256": "b6358a431bb8f41cc175f12924ce949528ec1fa3779bef4bf8130dbbb511ed95"
     },
     {
       "path": "tests/fixtures/GEMINI.md",
-      "sha256": "9ed2ce6a047d87b27968e5a7421b90190385e4973519200c50cae47b59a3b9ee"
+      "sha256": "50a36ea88ca255b69f00e6a438bf6a184b8198ab4f7d100195831787bc40a38f"
     }
   ]
 }
