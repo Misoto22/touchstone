@@ -2,6 +2,13 @@
 
 All notable user-facing changes are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Entries above `0.1.3` are written by the `misoto22-release-bot` release pull request from the Conventional Commits merged into `main`; the entries below it were written by hand.
 
+## [0.3.1](https://github.com/Misoto22/touchstone/compare/v0.3.0...v0.3.1) (2026-10-28)
+
+
+### Bug Fixes
+
+* **briefs:** require runtime proof for configurable values ([#71](https://github.com/Misoto22/touchstone/issues/71)) ([884712a](https://github.com/Misoto22/touchstone/commit/884712a0734077a0bae34a67982ddba0757c31d5))
+
 ## [0.3.0](https://github.com/Misoto22/touchstone/compare/v0.2.0...v0.3.0) (2026-09-18)
 
 
