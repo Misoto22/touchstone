@@ -258,6 +258,7 @@ NON_PRODUCTION_DIRECTORIES = frozenset(
     {
         "test",
         "tests",
+        "testing",
         "__tests__",
         "spec",
         "specs",
