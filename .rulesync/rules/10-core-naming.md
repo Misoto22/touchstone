@@ -8,8 +8,8 @@ scope: core
 
 # Naming baseline
 
-- **[HAR-NAME-001] SHOULD — Portable repository names.** Use lowercase ASCII kebab-case for repository directories, documentation, and assets by default; preserve ecosystem-native source filenames and record an explicit repository exception when a tool requires another form.
-- **[HAR-NAME-003] MUST — Release identifiers.** Use SemVer `vMAJOR.MINOR.PATCH` release tags and never move a published release tag or change a historical identifier.
-- **[HAR-NAME-004] MUST — Environment variable names.** Use upper snake case environment variables with a product or domain prefix, and never put secret values in tracked configuration.
-- **[HAR-NAME-005] SHOULD — Native code identifiers.** Follow the language and framework formatter or linter already authoritative in the repository for code identifiers.
-- **[HAR-NAME-006] MUST — Scoped delivery names.** Use `<type>(<scope>)/<short-kebab-topic>` branches by default, where `<type>` is a Conventional Commits type (`feat`, `fix`, `chore`, `docs`, `refactor`, `perf`, `test`, `ci`, `build`, `revert`, or `style`) and `<scope>` is a short kebab-case area as in `feat(app)/device-auth` or `fix(api)/rate-limit`; keep Conventional Commit subjects in imperative English and imperative English pull-request titles.
+- **[HAR-NAME-001] SHOULD — Portable repository names.** Use lowercase ASCII kebab-case for repository directories, documentation, and assets by default; preserve ecosystem-native source filenames and record an explicit repository exception when a tool requires another form. (advisory)
+- **[HAR-NAME-003] MUST — Release identifiers.** Use SemVer `vMAJOR.MINOR.PATCH` release tags and never move a published release tag or change a historical identifier. (gated)
+- **[HAR-NAME-007] SHOULD — Environment variable names.** Name environment variables in upper snake case with a product or domain prefix, except names a platform or tool defines, such as `PORT`, `DATABASE_URL`, or `NODE_ENV`. (advisory)
+- **[HAR-NAME-005] SHOULD — Native code identifiers.** Follow the language and framework formatter or linter already authoritative in the repository for code identifiers. (advisory)
+- **[HAR-NAME-006] MUST — Scoped delivery names.** Use `<type>(<scope>)/<short-kebab-topic>` branches by default, where `<type>` is a Conventional Commits type (`feat`, `fix`, `chore`, `docs`, `refactor`, `perf`, `test`, `ci`, `build`, `revert`, or `style`) and `<scope>` is a short kebab-case area as in `feat(app)/device-auth` or `fix(api)/rate-limit`; keep Conventional Commit subjects in imperative English and imperative English pull-request titles. (gated)

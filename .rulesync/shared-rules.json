@@ -25,16 +25,15 @@
       "HAR-REV-001"
     ],
     ".rulesync/rules/10-core-delivery-ci.md": [
-      "HAR-CI-001",
       "HAR-CI-002",
       "HAR-CI-003",
       "HAR-CI-004",
-      "HAR-REL-001",
+      "HAR-CI-005",
       "HAR-REL-002",
-      "HAR-REL-003"
+      "HAR-REL-003",
+      "HAR-REL-004"
     ],
     ".rulesync/rules/10-core-dependencies.md": [
-      "HAR-DEP-001",
       "HAR-DEP-002"
     ],
     ".rulesync/rules/10-core-git.md": [
@@ -50,16 +49,15 @@
     ".rulesync/rules/10-core-naming.md": [
       "HAR-NAME-001",
       "HAR-NAME-003",
-      "HAR-NAME-004",
       "HAR-NAME-005",
-      "HAR-NAME-006"
+      "HAR-NAME-006",
+      "HAR-NAME-007"
     ],
     ".rulesync/rules/10-core-security.md": [
       "HAR-SEC-001",
       "HAR-SEC-002"
     ],
     ".rulesync/rules/10-core-testing.md": [
-      "HAR-PERF-001",
       "HAR-TEST-001",
       "HAR-TEST-002"
     ],
@@ -237,7 +235,12 @@
       "enforcement": [
         {
           "kind": "lint",
-          "check": "Secret scanner",
+          "check": "gitleaks secret scan in Harness's own verify.yml",
+          "blocking": true
+        },
+        {
+          "kind": "review",
+          "check": "Secret scanner where the repository runs one; review otherwise",
           "blocking": true
         }
       ]
@@ -284,8 +287,8 @@
       ],
       "enforcement": [
         {
-          "kind": "test",
-          "check": "Repository test suite",
+          "kind": "review",
+          "check": "The repository's own test suite, where the repository has one; review otherwise",
           "blocking": true
         }
       ]
@@ -308,8 +311,8 @@
       ],
       "enforcement": [
         {
-          "kind": "test",
-          "check": "Repository CI-equivalent gate",
+          "kind": "review",
+          "check": "The repository's own CI-equivalent gate, where the repository has one; review otherwise",
           "blocking": true
         }
       ]
@@ -320,7 +323,7 @@
       "level": "SHOULD",
       "scope": "core",
       "owner": "harness",
-      "status": "active",
+      "status": "deprecated",
       "since": "0.8.0",
       "statement": "Keep shipped surfaces inside recorded budgets and measure a change that could cross one: web pages LCP \u2264 2.5 s and INP \u2264 200 ms at p75, API endpoints p95 \u2264 300 ms, apps cold launch \u2264 1 s with no idle CPU wake-ups, and bundle or image size growth over 5 % per release explained in the pull request.",
       "rationale": "Performance regressions ship silently unless each surface has a number to stay under and changes near it are measured.",
@@ -337,10 +340,11 @@
       "enforcement": [
         {
           "kind": "review",
-          "check": "Budget review with a recorded measurement",
+          "check": "Dropped: one budget for every surface did not fit (owner decision 2026-11-08)",
           "blocking": false
         }
-      ]
+      ],
+      "replacement": null
     },
     {
       "id": "HAR-GOV-001",
@@ -407,6 +411,11 @@
         }
       ],
       "enforcement": [
+        {
+          "kind": "ci",
+          "check": "Misoto Harness / rules: exception expiry in .rulesync/harness-check.py",
+          "blocking": true
+        },
         {
           "kind": "review",
           "check": "Exception review",
@@ -534,7 +543,7 @@
       "level": "MUST",
       "scope": "core",
       "owner": "harness",
-      "status": "active",
+      "status": "deprecated",
       "since": "0.2.0",
       "statement": "Use upper snake case environment variables with a product or domain prefix, and never put secret values in tracked configuration.",
       "rationale": "Portable variable names and secret separation prevent configuration leaks.",
@@ -546,9 +555,34 @@
       ],
       "enforcement": [
         {
-          "kind": "lint",
-          "check": "Secret scanner",
-          "blocking": true
+          "kind": "review",
+          "check": "Superseded by HAR-NAME-007",
+          "blocking": false
+        }
+      ],
+      "replacement": "HAR-NAME-007"
+    },
+    {
+      "id": "HAR-NAME-007",
+      "name": "Environment variable names",
+      "level": "SHOULD",
+      "scope": "core",
+      "owner": "harness",
+      "status": "active",
+      "since": "0.19.0",
+      "statement": "Name environment variables in upper snake case with a product or domain prefix, except names a platform or tool defines, such as `PORT`, `DATABASE_URL`, or `NODE_ENV`.",
+      "rationale": "A prefix shows which product owns a variable; names a platform reads must keep the platform's spelling. Secret values are covered by HAR-SEC-001.",
+      "sources": [
+        {
+          "type": "policy",
+          "ref": "owner-decision-2026-11-08"
+        }
+      ],
+      "enforcement": [
+        {
+          "kind": "review",
+          "check": "Naming review",
+          "blocking": false
         }
       ]
     },
@@ -605,6 +639,11 @@
           "kind": "review",
           "check": "Delivery metadata review",
           "blocking": true
+        },
+        {
+          "kind": "ci",
+          "check": "pr-title / pr-title (Misoto22/ci) checks the pull-request title where the repository requires it",
+          "blocking": false
         }
       ]
     },
@@ -638,7 +677,7 @@
       "level": "MUST",
       "scope": "core",
       "owner": "harness",
-      "status": "active",
+      "status": "deprecated",
       "since": "0.4.0",
       "statement": "Cut every actively developed repository's releases through the fleet release bot: the reusable `Misoto22/ci` release workflow running release-please in manifest mode as the `misoto22-release-bot` GitHub App. Derive the version, `CHANGELOG.md`, and GitHub Release from Conventional Commits; never hand-edit a version field and never move a tag. Configure a multi-package npm workspace with the `node-workspace` plugin and linked versions so the repository still tags one `vMAJOR.MINOR.PATCH`.",
       "rationale": "One automated release path keeps versions, changelogs, and tags derived from the same reviewed history instead of from hand edits.",
@@ -658,8 +697,38 @@
       ],
       "enforcement": [
         {
+          "kind": "review",
+          "check": "Superseded by HAR-REL-004",
+          "blocking": false
+        }
+      ],
+      "replacement": "HAR-REL-004"
+    },
+    {
+      "id": "HAR-REL-004",
+      "name": "Automated releases",
+      "level": "MUST",
+      "scope": "core",
+      "owner": "harness",
+      "status": "active",
+      "since": "0.19.0",
+      "statement": "Cut every actively developed repository's releases through the fleet release bot: the reusable `Misoto22/ci` release workflow running release-please in manifest mode as the `misoto22-release-bot` GitHub App. Derive the version, `CHANGELOG.md`, and GitHub Release from Conventional Commits and never hand-edit a version field. Configure a multi-package npm workspace with the `node-workspace` plugin and linked versions so the repository still tags one `vMAJOR.MINOR.PATCH`.",
+      "rationale": "One release path keeps versions, changelogs, and tags derived rather than hand-written; tag immutability is owned by HAR-NAME-003.",
+      "sources": [
+        {
+          "type": "policy",
+          "ref": "owner-decision-2026-11-08"
+        }
+      ],
+      "enforcement": [
+        {
           "kind": "ci",
-          "check": "Misoto22/ci release.yml release-please job",
+          "check": "Misoto22/ci release.yml runs release-please where the repository calls it",
+          "blocking": false
+        },
+        {
+          "kind": "review",
+          "check": "Release configuration review",
           "blocking": true
         }
       ]
@@ -722,7 +791,7 @@
       "level": "MUST",
       "scope": "core",
       "owner": "harness",
-      "status": "active",
+      "status": "deprecated",
       "since": "0.4.0",
       "statement": "Run pull-request checks on Linux runners, declare a `concurrency` group keyed on the ref with `cancel-in-progress` for pull requests, and apply path filters wherever a change cannot alter a check's result.",
       "rationale": "Linux is the cheapest hosted tier, and superseding stale runs stops a pull-request gate from spending the account's quota on results nobody reads.",
@@ -734,6 +803,31 @@
         {
           "type": "url",
           "ref": "https://docs.github.com/en/billing/concepts/product-billing/github-actions"
+        }
+      ],
+      "enforcement": [
+        {
+          "kind": "review",
+          "check": "Superseded by HAR-CI-005",
+          "blocking": false
+        }
+      ],
+      "replacement": "HAR-CI-005"
+    },
+    {
+      "id": "HAR-CI-005",
+      "name": "Linux pull-request gate",
+      "level": "MUST",
+      "scope": "core",
+      "owner": "harness",
+      "status": "active",
+      "since": "0.19.0",
+      "statement": "Run pull-request checks on Linux runners and declare a `concurrency` group keyed on the ref with `cancel-in-progress` for pull requests. Skip work a change cannot affect inside a job that always runs, never with workflow-level `paths` filters on a required check.",
+      "rationale": "A required check that a workflow-level `paths` filter skips never reports, so the pull request waits on it forever; skipping inside an always-running job saves the same minutes and still reports.",
+      "sources": [
+        {
+          "type": "policy",
+          "ref": "owner-decision-2026-11-08"
         }
       ],
       "enforcement": [
@@ -913,6 +1007,31 @@
       ]
     },
     {
+      "id": "HAR-DJ-001",
+      "name": "Layering",
+      "level": "SHOULD",
+      "scope": "stack",
+      "owner": "harness",
+      "status": "deprecated",
+      "since": "0.1.0",
+      "statement": "Keep views/controllers thin, validation and serialization in serializers or schemas, business rules in owned services/domain modules, and reusable query behavior in managers or repositories. Use ORM eager loading deliberately and parameterize unavoidable raw SQL.",
+      "rationale": "Clear layers and safe queries reduce coupling and security risks.",
+      "sources": [
+        {
+          "type": "url",
+          "ref": "https://www.django-rest-framework.org/api-guide/serializers/"
+        }
+      ],
+      "enforcement": [
+        {
+          "kind": "review",
+          "check": "Superseded by HAR-DJ-004",
+          "blocking": false
+        }
+      ],
+      "replacement": "HAR-DJ-004"
+    },
+    {
       "id": "HAR-TS-001",
       "name": "Repository contract",
       "level": "MUST",
@@ -930,8 +1049,8 @@
       ],
       "enforcement": [
         {
-          "kind": "test",
-          "check": "Typecheck and affected test or build",
+          "kind": "review",
+          "check": "Typecheck and the affected test or build, where the repository has one; review otherwise",
           "blocking": true
         }
       ]
@@ -1042,8 +1161,8 @@
       ],
       "enforcement": [
         {
-          "kind": "test",
-          "check": "Documentation verification",
+          "kind": "review",
+          "check": "Documentation verification, where the repository has one; review otherwise",
           "blocking": true
         }
       ]
@@ -1135,7 +1254,7 @@
       "level": "MUST",
       "scope": "core",
       "owner": "harness",
-      "status": "active",
+      "status": "deprecated",
       "since": "0.8.0",
       "statement": "Adopt and keep the newest stable release of every dependency, tool, runtime, base image, and action, never a pre-release or a scaffold default; hold one back only with a README note naming the blocker and a review date.",
       "rationale": "Old versions accumulate security fixes and migration cost; a written blocker keeps every held-back version deliberate.",
@@ -1152,10 +1271,11 @@
       "enforcement": [
         {
           "kind": "review",
-          "check": "Dependency review against the README exceptions",
-          "blocking": true
+          "check": "Dropped: Dependabot under HAR-DEP-002 keeps versions current (owner decision 2026-11-08)",
+          "blocking": false
         }
-      ]
+      ],
+      "replacement": null
     },
     {
       "id": "HAR-DEP-002",
@@ -1188,6 +1308,64 @@
           "blocking": true
         }
       ]
+    },
+    {
+      "id": "HAR-UI-001",
+      "name": "Layered interfaces",
+      "level": "MUST",
+      "scope": "stack",
+      "owner": "harness",
+      "status": "deprecated",
+      "since": "0.8.0",
+      "statement": "Build UI in layers: design tokens, then primitives that take only tokens, then sections made of primitives, then screens or pages made of sections. Each layer uses only the one below, and every platform reads the same token source rather than a hand copy.",
+      "rationale": "Screens that reach past their layer re-create styles and drift across platforms; a strict layer order keeps one change in one place.",
+      "sources": [
+        {
+          "type": "policy",
+          "ref": "owner-decision-2026-09-28"
+        },
+        {
+          "type": "policy",
+          "ref": "jade-audit-2026-09-27"
+        }
+      ],
+      "enforcement": [
+        {
+          "kind": "review",
+          "check": "Dropped as too rigid (owner decision 2026-11-08)",
+          "blocking": false
+        }
+      ],
+      "replacement": null
+    },
+    {
+      "id": "HAR-UI-002",
+      "name": "No raw style values",
+      "level": "MUST",
+      "scope": "stack",
+      "owner": "harness",
+      "status": "deprecated",
+      "since": "0.8.0",
+      "statement": "Outside the token layer, never write a raw colour, radius, spacing, type size, font, duration, or opacity; add or map a token instead, and keep any literal check at or below its recorded baseline.",
+      "rationale": "A raw value in a view silently forks the design system; tokens keep every surface on the same scale.",
+      "sources": [
+        {
+          "type": "policy",
+          "ref": "owner-decision-2026-09-28"
+        },
+        {
+          "type": "policy",
+          "ref": "jade-audit-2026-09-27"
+        }
+      ],
+      "enforcement": [
+        {
+          "kind": "review",
+          "check": "Superseded by HAR-UI-003",
+          "blocking": false
+        }
+      ],
+      "replacement": "HAR-UI-003"
     }
   ]
 }

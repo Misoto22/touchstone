@@ -8,5 +8,5 @@ scope: core
 
 # Architecture
 
-- **[HAR-SSOT-001] MUST — One owner per fact.** Give every product fact (URL, identifier, limit, version, user-facing string, style value) one owning module or repository; everything else imports it, generates it, or vendors it with recorded provenance, and a copy that cannot be generated has a check that fails when it differs.
-- **[HAR-ARCH-002] MUST — Cohesive files.** Keep one concept per file; split a file when it holds more than one concept, not when it passes a line count.
+- **[HAR-SSOT-001] MUST — One owner per fact.** Give every product fact (URL, identifier, limit, version, user-facing string, style value) one owning module or repository; everything else imports it, generates it, or vendors it with recorded provenance, and a copy that cannot be generated has a check that fails when it differs. (gated)
+- **[HAR-ARCH-002] MUST — Cohesive files.** Keep one concept per file; split a file when it holds more than one concept, not when it passes a line count. (gated)
