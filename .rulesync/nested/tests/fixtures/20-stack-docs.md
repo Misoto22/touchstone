@@ -8,4 +8,4 @@ scope: stack
 
 # Documentation
 
-- **[HAR-DOC-001] MUST — Executable truth.** Keep commands, paths, version claims, architecture diagrams, and public examples aligned with the current implementation. Verify links and generated documentation before review.
+- **[HAR-DOC-001] MUST — Executable truth.** Keep commands, paths, version claims, architecture diagrams, and public examples aligned with the current implementation. Verify links and generated documentation before review. (gated)

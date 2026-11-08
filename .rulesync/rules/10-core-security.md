@@ -8,5 +8,5 @@ scope: core
 
 # Security baseline
 
-- **[HAR-SEC-001] MUST — Secret safety.** Keep credential values out of source, prompts, logs, fixtures, generated artifacts, and terminal output. Store only references or documented environment-variable names.
-- **[HAR-SEC-002] MUST — Boundaries.** Validate untrusted input at the system boundary, parameterize database queries, redact sensitive data, and expose stable public errors instead of internal details.
+- **[HAR-SEC-001] MUST — Secret safety.** Keep credential values out of source, prompts, logs, fixtures, generated artifacts, and terminal output. Store only references or documented environment-variable names. (gated)
+- **[HAR-SEC-002] MUST — Boundaries.** Validate untrusted input at the system boundary, parameterize database queries, redact sensitive data, and expose stable public errors instead of internal details. (gated)

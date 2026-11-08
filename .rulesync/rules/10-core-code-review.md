@@ -8,4 +8,4 @@ scope: core
 
 ## Code Review Rules
 
-- **[HAR-REV-001] MUST — Evidence-backed findings.** Report only evidence-backed P0 or P1 findings with tight file and line references and the applicable stable rule ID when one exists; suppress style-only or speculative comments.
+- **[HAR-REV-001] MUST — Evidence-backed findings.** Report only evidence-backed P0 or P1 findings with tight file and line references and the applicable stable rule ID when one exists; suppress style-only or speculative comments. (gated)
