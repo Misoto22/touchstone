@@ -12,7 +12,7 @@
       "HAR-DOC-001"
     ],
     ".rulesync/rules/10-core-architecture.md": [
-      "HAR-ARCH-001",
+      "HAR-ARCH-002",
       "HAR-SSOT-001"
     ],
     ".rulesync/rules/10-core-behavior.md": [
@@ -1082,7 +1082,7 @@
       "level": "MUST",
       "scope": "core",
       "owner": "harness",
-      "status": "active",
+      "status": "deprecated",
       "since": "0.8.0",
       "statement": "Keep one concept per file. A production source file over 400 lines may not grow: `.rulesync/file-size-baseline.json` records the ones that already are, and its counts only fall.",
       "rationale": "Large files mix concepts and grow by default; a lower-only baseline stops the growth without blocking work on existing files.",
@@ -1098,8 +1098,33 @@
       ],
       "enforcement": [
         {
-          "kind": "ci",
-          "check": "Misoto Harness / rules: file-size ratchet in .rulesync/harness-check.py",
+          "kind": "review",
+          "check": "Retired: the file-size ratchet was removed from .rulesync/harness-check.py",
+          "blocking": false
+        }
+      ],
+      "replacement": "HAR-ARCH-002"
+    },
+    {
+      "id": "HAR-ARCH-002",
+      "name": "Cohesive files",
+      "level": "MUST",
+      "scope": "core",
+      "owner": "harness",
+      "status": "active",
+      "since": "0.18.0",
+      "statement": "Keep one concept per file; split a file when it holds more than one concept, not when it passes a line count.",
+      "rationale": "Cohesion is what keeps a file easy to change; a line count is a weak proxy for it that blocks cohesive files and passes mixed ones, so code review judges it instead.",
+      "sources": [
+        {
+          "type": "policy",
+          "ref": "owner-decision-2026-11-08"
+        }
+      ],
+      "enforcement": [
+        {
+          "kind": "review",
+          "check": "Code review for one concept per file",
           "blocking": true
         }
       ]
