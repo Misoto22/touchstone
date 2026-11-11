@@ -13,6 +13,9 @@
     ],
     ".rulesync/rules/10-core-architecture.md": [
       "HAR-ARCH-002",
+      "HAR-ARCH-003",
+      "HAR-ARCH-004",
+      "HAR-ARCH-005",
       "HAR-SSOT-001"
     ],
     ".rulesync/rules/10-core-behavior.md": [
@@ -34,7 +37,8 @@
       "HAR-REL-004"
     ],
     ".rulesync/rules/10-core-dependencies.md": [
-      "HAR-DEP-002"
+      "HAR-DEP-002",
+      "HAR-DEP-003"
     ],
     ".rulesync/rules/10-core-git.md": [
       "HAR-GIT-001",
@@ -1249,6 +1253,78 @@
       ]
     },
     {
+      "id": "HAR-ARCH-003",
+      "name": "Layered models",
+      "level": "MUST",
+      "scope": "core",
+      "owner": "harness",
+      "status": "active",
+      "since": "0.20.0",
+      "statement": "Keep protocol, domain, persistence, and view models separate; validate and convert data where it crosses a layer, and share no mutable state across layers.",
+      "rationale": "A model reused across layers couples a wire format, a table, and a screen, so one change ripples through all three; conversion at the boundary keeps each free to change.",
+      "sources": [
+        {
+          "type": "policy",
+          "ref": "owner-decision-2026-11-11"
+        }
+      ],
+      "enforcement": [
+        {
+          "kind": "review",
+          "check": "Code review",
+          "blocking": true
+        }
+      ]
+    },
+    {
+      "id": "HAR-ARCH-004",
+      "name": "Failure-aware backends",
+      "level": "MUST",
+      "scope": "core",
+      "owner": "harness",
+      "status": "active",
+      "since": "0.20.0",
+      "statement": "Design backend work for idempotency, races, transaction boundaries, timeouts, cancellation, bounded retries, backpressure, and resource release; never hide a fault behind an unbounded retry, a swallowed error, or implicit shared state.",
+      "rationale": "Faults that are retried forever, swallowed, or masked by shared state surface later as data corruption or outages that no log explains.",
+      "sources": [
+        {
+          "type": "policy",
+          "ref": "owner-decision-2026-11-11"
+        }
+      ],
+      "enforcement": [
+        {
+          "kind": "review",
+          "check": "Code review",
+          "blocking": true
+        }
+      ]
+    },
+    {
+      "id": "HAR-ARCH-005",
+      "name": "No stale paths",
+      "level": "MUST",
+      "scope": "core",
+      "owner": "harness",
+      "status": "active",
+      "since": "0.20.0",
+      "statement": "When restructuring an internal path, delete the old implementation instead of adding a compatibility layer, deprecated shim, or dual write; judge compatibility only for external contracts such as public APIs and database migrations. Every workaround or `TODO` states its reason, impact, and removal condition and links a tracked issue.",
+      "rationale": "Shims and unexplained TODOs outlive the context that justified them; deleting internal leftovers and recording the rest keeps the code honest for the next maintainer.",
+      "sources": [
+        {
+          "type": "policy",
+          "ref": "owner-decision-2026-11-11"
+        }
+      ],
+      "enforcement": [
+        {
+          "kind": "review",
+          "check": "Code review",
+          "blocking": true
+        }
+      ]
+    },
+    {
       "id": "HAR-DEP-001",
       "name": "Latest stable",
       "level": "MUST",
@@ -1305,6 +1381,30 @@
         {
           "kind": "ci",
           "check": "Misoto Harness / rules: updater coverage and runtime agreement in .rulesync/harness-check.py",
+          "blocking": true
+        }
+      ]
+    },
+    {
+      "id": "HAR-DEP-003",
+      "name": "Reuse before adding",
+      "level": "MUST",
+      "scope": "core",
+      "owner": "harness",
+      "status": "active",
+      "since": "0.20.0",
+      "statement": "Before writing or adding something, reuse the repository's existing modules and dependencies, checking their documentation and type definitions rather than assuming a gap; add a mature, maintained library only when none fits. Abstract on the second real use, not on similar-looking code, and comment why a deliberate duplicate stays separate.",
+      "rationale": "Assumed gaps produce duplicate dependencies and hand-rolled copies of library features, and premature abstractions bind code that evolves differently.",
+      "sources": [
+        {
+          "type": "policy",
+          "ref": "owner-decision-2026-11-11"
+        }
+      ],
+      "enforcement": [
+        {
+          "kind": "review",
+          "check": "Code review",
           "blocking": true
         }
       ]
