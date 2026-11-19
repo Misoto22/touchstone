@@ -10,3 +10,4 @@ scope: core
 
 - **[HAR-GIT-001] MUST — Isolation.** Implement feature work on a feature branch in an isolated worktree when the current checkout contains unrelated work or the task spans repositories. (gated)
 - **[HAR-GIT-002] MUST — Preservation.** Preserve unrelated dirty changes. Never reset, discard, or force-push the default branch. Resolve exact targets before destructive actions and prefer recoverable operations. (gated)
+- **[HAR-GIT-003] MUST — Commit hygiene.** Commit only on a non-default branch, keep one logical change per commit, and keep the commit subject under 72 characters. (gated)
