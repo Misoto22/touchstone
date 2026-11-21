@@ -3,15 +3,15 @@
   "files": [
     {
       "path": ".cursor/rules/misoto-harness-agent-runtime.mdc",
-      "sha256": "5b194d931ca08e5c31aaf44ddae70fd15491c253a263894d7faf39b5c1e93bb6"
+      "sha256": "2c03f640b1651b8ff2f5c8801eb9ec88aa5dcf21977b573df26630a3ede56901"
     },
     {
       "path": ".cursor/rules/misoto-harness-tests-fixtures.mdc",
-      "sha256": "6cb828782c2a7bbc7cff15f5d246dcee5c598e6380fe734b986641f17c882cff"
+      "sha256": "e507e431c84903e4b55a30ec94d7a14ebcf8faf729e14c3e8c8a98c151ba23d7"
     },
     {
       "path": ".cursor/rules/misoto-harness.mdc",
-      "sha256": "e73471cd25e11661bd6d5c61f9a8cde470d8c72a54565f07809a437ef0d662d2"
+      "sha256": "a4e4c3842f54adaa60940604ce7d6b0c5c7a45646e47f5fa93d201f46372a8ae"
     },
     {
       "path": ".github/workflows/misoto-harness.yml",
@@ -23,11 +23,11 @@
     },
     {
       "path": ".rulesync/checker.json",
-      "sha256": "10a4d84ccc98fedfedfa29f21c27dd97c0ea92bd69ff1f94a4fdcea29f125b9a"
+      "sha256": "047852089dbe576060fee0a555425acf68cc34c3d1003157d39599417baf5226"
     },
     {
       "path": ".rulesync/nested/agent-runtime/00-generated-metadata.md",
-      "sha256": "1e586731e1fb0bc8e0dbee49630fe888540e6f3ba4148ab3b2c70eda2cb3d8c8"
+      "sha256": "dc310be9d2fe9a85bcfd8b1f8a6c9518876273b659cb8f2764536520225931de"
     },
     {
       "path": ".rulesync/nested/agent-runtime/20-stack-typescript.md",
@@ -35,7 +35,7 @@
     },
     {
       "path": ".rulesync/nested/tests/fixtures/00-generated-metadata.md",
-      "sha256": "b4d62119511e5d0071d19bf6a877815b51a63c4c1c15e46910ed06037ff2ba91"
+      "sha256": "5fe7ef443bef4661da324a7e909a170088272519e026738c99bab8b16774935e"
     },
     {
       "path": ".rulesync/nested/tests/fixtures/20-stack-docs.md",
@@ -55,7 +55,7 @@
     },
     {
       "path": ".rulesync/rules/00-generated-metadata.md",
-      "sha256": "f9b0c32b0c45014902119f85bbe2084e1539856d3c4231e3fdb0574e77ca8fc4"
+      "sha256": "fb7a072d3376943a4ccecdcbe15b5a384c10aab79d55f49d8d60e16f883122b6"
     },
     {
       "path": ".rulesync/rules/10-core-architecture.md",
@@ -107,27 +107,27 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "8710203bef396cb6f8ce22f7d2b092daf90eda92628504c8adb6a3ecacd3b0cb"
+      "sha256": "8a02fdb13aba6de63c5a0f641d68c9a2e10ad07f7946e7d180c96c81b97f3f32"
     },
     {
       "path": "CLAUDE.md",
-      "sha256": "6c5f314e3db05fd6e6a990219e134d687bf830ac3ae99b4916b3d679cbb9551f"
+      "sha256": "60c29620391a06375fd886810fd87904eea325b983965a26448df83930a4ac78"
     },
     {
       "path": "GEMINI.md",
-      "sha256": "11a395868f8ecdd3162915e55ac84c9d02a5110fbe04e240560bab3f3ec28adb"
+      "sha256": "4777ae84ef3b685fa1c858bc4962090bd222713d7732e9cffc9ed758a688adb8"
     },
     {
       "path": "agent-runtime/AGENTS.md",
-      "sha256": "6edacab131721d54d4832e0f55697ea31731f876210bdd655223363439218b4e"
+      "sha256": "736a7667aa4524e5a49124b3fb77ee90fbac5e242095de9bc593a6519e56b7f9"
     },
     {
       "path": "agent-runtime/CLAUDE.md",
-      "sha256": "710febab02867c40d5279c8a8a390119ebc4ee1414271cc56f760d319eeb59e1"
+      "sha256": "7010a8e7ad2da62af7af818fa8f9c942e354b0410e372dda14fc2145c4a902de"
     },
     {
       "path": "agent-runtime/GEMINI.md",
-      "sha256": "8e5656df6e9925f86e20156afc623c6b5595b35885f2c2307ff191f36829d392"
+      "sha256": "8949a71fbad6e9f15fb579ac89f2b433bd8a4d1843696e7a86e3906f831b5120"
     },
     {
       "path": "rulesync.jsonc",
@@ -135,19 +135,19 @@
     },
     {
       "path": "rulesync.lock.json",
-      "sha256": "253aa896b054f80f4c9f24510f992f44673dd9788d3a20c2cb191aae7a77cddf"
+      "sha256": "88ad7bad2bac498e2d3e20eba1e98f4a23be10c3872dc7199edca4f73c5cec16"
     },
     {
       "path": "tests/fixtures/AGENTS.md",
-      "sha256": "fa0a43f86e91fcbf119c9841e4a40826dc9ccb94e1f5054797be945bf0afc269"
+      "sha256": "caaa0f329361e2c8581fff6868587110d5329ca7c0808414423a739e8018f0b3"
     },
     {
       "path": "tests/fixtures/CLAUDE.md",
-      "sha256": "7863fbe14e881c18990cfda3ce9c6f5dc60e324f0f7e102b74bac901135c4bf7"
+      "sha256": "8985f58477d3d3c90fd9ee19e3e56d6058582af01933de2f0d321d8d8ada1b72"
     },
     {
       "path": "tests/fixtures/GEMINI.md",
-      "sha256": "b5893826ab786f9f8ef64ac6f4f45507b9a0b29aca287d822535005680a497ca"
+      "sha256": "3357d56da84e8beb2c713bf75d508ec711ee6298eddc955768901c2584983e67"
     }
   ]
 }
